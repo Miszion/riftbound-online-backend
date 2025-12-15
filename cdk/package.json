@@ -1,0 +1,34 @@
+{
+  "name": "riftbound-online-cdk",
+  "version": "1.0.0",
+  "description": "AWS CDK infrastructure for Riftbound Online backend",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "cdk deploy",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "destroy": "cdk destroy",
+    "list": "cdk list"
+  },
+  "keywords": [
+    "cdk",
+    "aws",
+    "game-backend",
+    "riftbound"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@aws-cdk/core": "^1.204.0",
+    "@types/node": "20.x",
+    "typescript": "~5.2.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.100.0",
+    "constructs": "^10.0.0",
+    "dotenv": "^16.3.1"
+  }
+}

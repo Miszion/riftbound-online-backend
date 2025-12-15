@@ -1,0 +1,9 @@
+# Old JavaScript files - use TypeScript versions instead
+*.js
+!src/**/*.ts
+
+# Node modules and dependencies
+node_modules/
+
+# Logs
+*.log

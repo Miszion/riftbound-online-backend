@@ -1,0 +1,18 @@
+{
+  "name": "riftbound-refresh-token-lambda",
+  "version": "1.0.0",
+  "description": "Token refresh Lambda function for Riftbound Online",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "bundle": "npm run build && zip -r ../refresh_token.zip dist node_modules package.json"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1400.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.2.2"
+  }
+}
