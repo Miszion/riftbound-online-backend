@@ -3,6 +3,13 @@ import express, { Express, Request, Response } from 'express';
 import AWS from 'aws-sdk';
 import logger from './logger';
 import { RiftboundGameEngine, Card } from './game-engine';
+import { ApolloServer } from '@apollo/server';
+import { expressMiddleware } from '@apollo/server/express4';
+import { WebSocketServer } from 'ws';
+import { useServer } from 'graphql-ws/lib/use/ws';
+import { typeDefs } from './graphql/schema';
+import { queryResolvers, mutationResolvers, subscriptionResolvers } from './graphql/resolvers';
+import cors from 'cors';
 
 // ============================================================================
 // CONFIGURATION
@@ -45,11 +52,31 @@ interface MatchConfig {
 const app: Express = express();
 
 // Middleware
+app.use(cors());
 app.use(express.json());
 app.use((_req, _res, next) => {
   logger.info(`[MATCH-SERVICE] ${_req.method} ${_req.path}`);
   next();
 });
+
+// ============================================================================
+// APOLLO SERVER SETUP
+// ============================================================================
+
+async function startApolloServer() {
+  const server = new ApolloServer({
+    typeDefs,
+    resolvers: {
+      Query: queryResolvers,
+      Mutation: mutationResolvers,
+      Subscription: subscriptionResolvers,
+    },
+  });
+
+  await server.start();
+  app.use('/graphql', expressMiddleware(server));
+  return server;
+}
 
 // ============================================================================
 // ENDPOINTS
@@ -462,27 +489,55 @@ app.get('/matches/:matchId/history', (req: Request, res: Response): void => {
 // SERVER STARTUP
 // ============================================================================
 
-const server = app.listen(PORT, () => {
-  logger.info(`[MATCH-SERVICE] Started on port ${PORT}`);
-  logger.info(`[MATCH-SERVICE] Ready to handle matches`);
-});
+async function startServer() {
+  try {
+    const apolloServer = await startApolloServer();
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('[SHUTDOWN] SIGTERM received, shutting down gracefully...');
-  server.close(() => {
-    logger.info('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
-});
+    // Create HTTP server
+    const server = app.listen(PORT, () => {
+      logger.info(`[MATCH-SERVICE] Started on port ${PORT}`);
+      logger.info(`[MATCH-SERVICE] GraphQL endpoint available at ws://localhost:${PORT}/graphql`);
+      logger.info(`[MATCH-SERVICE] Ready to handle matches`);
+    });
 
-process.on('SIGINT', () => {
-  logger.info('[SHUTDOWN] SIGINT received, shutting down gracefully...');
-  server.close(() => {
-    logger.info('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
-});
+    // Create WebSocket server for subscriptions
+    const wsServer = new WebSocketServer({ server, path: '/graphql' });
+
+    const wsCleanup = useServer(
+      {
+        schema: require('./graphql/schema').typeDefs,
+        roots: {
+          Query: queryResolvers,
+          Mutation: mutationResolvers,
+          Subscription: subscriptionResolvers,
+        } as any,
+      },
+      wsServer
+    );
+
+    const handleShutdown = (signal: NodeJS.Signals) => {
+      logger.info(`[SHUTDOWN] ${signal} received, shutting down gracefully...`);
+      Promise.allSettled([
+        apolloServer.stop(),
+        wsCleanup.dispose(),
+      ]).finally(() => {
+        wsServer.close();
+        server.close(() => {
+          logger.info('[SHUTDOWN] Server closed');
+          process.exit(0);
+        });
+      });
+    };
+
+    process.on('SIGTERM', handleShutdown);
+    process.on('SIGINT', handleShutdown);
+  } catch (error) {
+    logger.error('[STARTUP] Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 // ============================================================================
 // HELPERS

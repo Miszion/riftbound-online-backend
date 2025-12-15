@@ -1,0 +1,4340 @@
+[
+  {
+    "id": "OGN-179",
+    "name": "Acceptable Losses",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-179.webp",
+    "localPath": "assets/card-images/ogn-179-acceptable-losses.webp"
+  },
+  {
+    "id": "OGN-056",
+    "name": "Adaptatron",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-056.webp",
+    "localPath": "assets/card-images/ogn-056-adaptatron.webp"
+  },
+  {
+    "id": "SFD-001",
+    "name": "Against the Odds",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-001.webp",
+    "localPath": "assets/card-images/sfd-001-against-the-odds.webp"
+  },
+  {
+    "id": "OGN-066",
+    "name": "Ahri - Alluring",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-066.webp",
+    "localPath": "assets/card-images/ogn-066-ahri-alluring.webp"
+  },
+  {
+    "id": "OGN-066-p",
+    "name": "Ahri - Alluring",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-066-p.webp",
+    "localPath": "assets/card-images/ogn-066-p-ahri-alluring.webp"
+  },
+  {
+    "id": "OGN-066a",
+    "name": "Ahri - Alluring",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-066a.webp",
+    "localPath": "assets/card-images/ogn-066a-ahri-alluring.webp"
+  },
+  {
+    "id": "OGN-119",
+    "name": "Ahri - Inquisitive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-119.webp",
+    "localPath": "assets/card-images/ogn-119-ahri-inquisitive.webp"
+  },
+  {
+    "id": "OGN-119a",
+    "name": "Ahri - Inquisitive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-119a.webp",
+    "localPath": "assets/card-images/ogn-119a-ahri-inquisitive.webp"
+  },
+  {
+    "id": "SFD-227",
+    "name": "Ahri - Inquisitive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-227.webp",
+    "localPath": "assets/card-images/sfd-227-ahri-inquisitive.webp"
+  },
+  {
+    "id": "SFD-227-STAR",
+    "name": "Ahri - Inquisitive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-227-STAR.webp",
+    "localPath": "assets/card-images/sfd-227-star-ahri-inquisitive.webp"
+  },
+  {
+    "id": "OGN-255",
+    "name": "Ahri - Nine-Tailed Fox",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-255.webp",
+    "localPath": "assets/card-images/ogn-255-ahri-nine-tailed-fox.webp"
+  },
+  {
+    "id": "OGN-255-P",
+    "name": "Ahri - Nine-Tailed Fox",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-255-P.webp",
+    "localPath": "assets/card-images/ogn-255-p-ahri-nine-tailed-fox.webp"
+  },
+  {
+    "id": "OGN-303",
+    "name": "Ahri - Nine-Tailed Fox",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-303.webp",
+    "localPath": "assets/card-images/ogn-303-ahri-nine-tailed-fox.webp"
+  },
+  {
+    "id": "OGN-303-STAR",
+    "name": "Ahri - Nine-Tailed Fox",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-303-STAR.webp",
+    "localPath": "assets/card-images/ogn-303-star-nine-tailed-fox.webp"
+  },
+  {
+    "id": "SFD-109",
+    "name": "Akshan - Mischievous",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-109.webp",
+    "localPath": "assets/card-images/sfd-109-akshan-mischievous.webp"
+  },
+  {
+    "id": "OGN-230",
+    "name": "Albus Ferros",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-230.webp",
+    "localPath": "assets/card-images/ogn-230-albus-ferros.webp"
+  },
+  {
+    "id": "SFD-169",
+    "name": "Altar of Memories",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-169.webp",
+    "localPath": "assets/card-images/sfd-169-altar-of-memories.webp"
+  },
+  {
+    "id": "OGN-275",
+    "name": "Altar to Unity",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-275.webp",
+    "localPath": "assets/card-images/ogn-275-altar-to-unity.webp"
+  },
+  {
+    "id": "SFD-117",
+    "name": "Ancient Henge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-117.webp",
+    "localPath": "assets/card-images/sfd-117-ancient-henge.webp"
+  },
+  {
+    "id": "SFD-131",
+    "name": "Ancient Warmonger",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-131.webp",
+    "localPath": "assets/card-images/sfd-131-ancient-warmonger.webp"
+  },
+  {
+    "id": "SFD-011",
+    "name": "Angle Shot",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-011.webp",
+    "localPath": "assets/card-images/sfd-011-angle-shot.webp"
+  },
+  {
+    "id": "OGN-148",
+    "name": "Anivia - Primal",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-148.webp",
+    "localPath": "assets/card-images/ogn-148-anivia-primal.webp"
+  },
+  {
+    "id": "OGS-017",
+    "name": "Annie - Dark Child - Starter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-017.webp",
+    "localPath": "assets/card-images/ogs-017-annie-dark-child.webp"
+  },
+  {
+    "id": "OGS-001",
+    "name": "Annie - Fiery",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-001.webp",
+    "localPath": "assets/card-images/ogs-001-annie-fiery.webp"
+  },
+  {
+    "id": "OGS-010",
+    "name": "Annie - Stubborn",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-010.webp",
+    "localPath": "assets/card-images/ogs-010-annie-stubborn.webp"
+  },
+  {
+    "id": "SFD-049",
+    "name": "Aphelios - Exalted",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-049.webp",
+    "localPath": "assets/card-images/sfd-049-aphelios-exalted.webp"
+  },
+  {
+    "id": "SFD-224",
+    "name": "Aphelios - Exalted",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-224.webp",
+    "localPath": "assets/card-images/sfd-224-aphelios-exalted.webp"
+  },
+  {
+    "id": "SFD-224-STAR",
+    "name": "Aphelios - Exalted",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-224-STAR.webp",
+    "localPath": "assets/card-images/sfd-224-star-aphelios-exalted.webp"
+  },
+  {
+    "id": "SFD-041",
+    "name": "Apprentice Smith",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-041.webp",
+    "localPath": "assets/card-images/sfd-041-apprentice-smith.webp"
+  },
+  {
+    "id": "SFD-200",
+    "name": "Arcane Shift",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-200.webp",
+    "localPath": "assets/card-images/sfd-200-arcane-shift.webp"
+  },
+  {
+    "id": "OGN-124",
+    "name": "Arena Bar",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-124.webp",
+    "localPath": "assets/card-images/ogn-124-arena-bar.webp"
+  },
+  {
+    "id": "SFD-198",
+    "name": "Arise!",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-198.webp",
+    "localPath": "assets/card-images/sfd-198-arise.webp"
+  },
+  {
+    "id": "SFD-002",
+    "name": "Armed Assailant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-002.webp",
+    "localPath": "assets/card-images/sfd-002-armed-assailant.webp"
+  },
+  {
+    "id": "OGN-276",
+    "name": "Aspirant's Climb",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-276.webp",
+    "localPath": "assets/card-images/ogn-276-aspirants-climb.webp"
+  },
+  {
+    "id": "SFD-061",
+    "name": "Aspiring Engineer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-061.webp",
+    "localPath": "assets/card-images/sfd-061-aspiring-engineer.webp"
+  },
+  {
+    "id": "SFD-019",
+    "name": "Assembly Rig",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-019.webp",
+    "localPath": "assets/card-images/sfd-019-assembly-rig.webp"
+  },
+  {
+    "id": "OGN-107",
+    "name": "Ava Achiever",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-107.webp",
+    "localPath": "assets/card-images/ogn-107-ava-achiever.webp"
+  },
+  {
+    "id": "SFD-050",
+    "name": "Azir - Ascendant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-050.webp",
+    "localPath": "assets/card-images/sfd-050-azir-ascendant.webp"
+  },
+  {
+    "id": "SFD-050A",
+    "name": "Azir - Ascendant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-050A.webp",
+    "localPath": "assets/card-images/sfd-050a-azir-ascendant.webp"
+  },
+  {
+    "id": "SFD-197",
+    "name": "Azir - Emperor of the Sands",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-197.webp",
+    "localPath": "assets/card-images/sfd-197-azir-emperor-of-the-sands.webp"
+  },
+  {
+    "id": "SFD-247",
+    "name": "Azir - Emperor of the Sands",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-247.webp",
+    "localPath": "assets/card-images/sfd-247-azir-emperor-of-the-sands.webp"
+  },
+  {
+    "id": "SFD-177",
+    "name": "Azir - Sovereign",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-177.webp",
+    "localPath": "assets/card-images/sfd-177-azir-sovereign.webp"
+  },
+  {
+    "id": "SFD-177A",
+    "name": "Azir - Sovereign",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-177A.webp",
+    "localPath": "assets/card-images/sfd-177a-azir-sovereign.webp"
+  },
+  {
+    "id": "SFD-161",
+    "name": "B.F. Sword",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-161.webp",
+    "localPath": "assets/card-images/sfd-161-bf-sword.webp"
+  },
+  {
+    "id": "OGN-206",
+    "name": "Back to Back",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-206.webp",
+    "localPath": "assets/card-images/ogn-206-back-to-back.webp"
+  },
+  {
+    "id": "OGN-277",
+    "name": "Back-Alley Bar",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-277.webp",
+    "localPath": "assets/card-images/ogn-277-back-alley-bar.webp"
+  },
+  {
+    "id": "OGN-242",
+    "name": "Baited Hook",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-242.webp",
+    "localPath": "assets/card-images/ogn-242-baited-hook.webp"
+  },
+  {
+    "id": "OGN-278",
+    "name": "Bandle Tree",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-278.webp",
+    "localPath": "assets/card-images/ogn-278-bandle-tree.webp"
+  },
+  {
+    "id": "SFD-079",
+    "name": "Bard - Mercurial",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-079.webp",
+    "localPath": "assets/card-images/sfd-079-bard-mercurial.webp"
+  },
+  {
+    "id": "SFD-228",
+    "name": "Bard - Mercurial",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-228.webp",
+    "localPath": "assets/card-images/sfd-228-bard-mercurial.webp"
+  },
+  {
+    "id": "SFD-228-STAR",
+    "name": "Bard - Mercurial",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-228-STAR.webp",
+    "localPath": "assets/card-images/sfd-228-star-bard-mercurial.webp"
+  },
+  {
+    "id": "SFD-012",
+    "name": "Battering Ram",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-012.webp",
+    "localPath": "assets/card-images/sfd-012-battering-ram.webp"
+  },
+  {
+    "id": "SFD-132",
+    "name": "Beast Below",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-132.webp",
+    "localPath": "assets/card-images/sfd-132-beast-below.webp"
+  },
+  {
+    "id": "SFD-080",
+    "name": "Bellows Breath",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-080.webp",
+    "localPath": "assets/card-images/sfd-080-bellows-breath.webp"
+  },
+  {
+    "id": "OGN-125",
+    "name": "Bilgewater Bully",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-125.webp",
+    "localPath": "assets/card-images/ogn-125-bilgewater-bully.webp"
+  },
+  {
+    "id": "SFD-121",
+    "name": "Black Market Broker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-121.webp",
+    "localPath": "assets/card-images/sfd-121-black-market-broker.webp"
+  },
+  {
+    "id": "SFD-178",
+    "name": "Blade of the Ruined King",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-178.webp",
+    "localPath": "assets/card-images/sfd-178-blade-of-the-ruined-king.webp"
+  },
+  {
+    "id": "SFD-013",
+    "name": "Blast Corps Cadet",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-013.webp",
+    "localPath": "assets/card-images/sfd-013-blast-corps-cadet.webp"
+  },
+  {
+    "id": "OGS-012",
+    "name": "Blast of Power",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-012.webp",
+    "localPath": "assets/card-images/ogs-012-blast-of-power.webp"
+  },
+  {
+    "id": "OGN-097",
+    "name": "Blastcone Fae",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-097.webp",
+    "localPath": "assets/card-images/ogn-097-blastcone-fae.webp"
+  },
+  {
+    "id": "OGN-001",
+    "name": "Blazing Scorcher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-001.webp",
+    "localPath": "assets/card-images/ogn-001-blazing-scorcher.webp"
+  },
+  {
+    "id": "OGN-001-P",
+    "name": "Blazing Scorcher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-001-P.webp",
+    "localPath": "assets/card-images/ogn-001-p-blazing-scorcher.webp"
+  },
+  {
+    "id": "OGN-025",
+    "name": "Blind Fury",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-025.webp",
+    "localPath": "assets/card-images/ogn-025-blind-fury.webp"
+  },
+  {
+    "id": "OGN-067",
+    "name": "Blitzcrank - Impassive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-067.webp",
+    "localPath": "assets/card-images/ogn-067-blitzcrank-impassive.webp"
+  },
+  {
+    "id": "OGN-067-p",
+    "name": "Blitzcrank, Impassive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-067-p.webp",
+    "localPath": "assets/card-images/ogn-067-p-blitzcrank-impassive.webp"
+  },
+  {
+    "id": "OGN-057",
+    "name": "Block",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-057.webp",
+    "localPath": "assets/card-images/ogn-057-block.webp"
+  },
+  {
+    "id": "SFD-162",
+    "name": "Blood Money",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-162.webp",
+    "localPath": "assets/card-images/sfd-162-blood-money.webp"
+  },
+  {
+    "id": "SFD-003",
+    "name": "Blood Rush",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-003.webp",
+    "localPath": "assets/card-images/sfd-003-blood-rush.webp"
+  },
+  {
+    "id": "OGN-126",
+    "name": "Body Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-126.webp",
+    "localPath": "assets/card-images/ogn-126-body-rune.webp"
+  },
+  {
+    "id": "OGN-126a",
+    "name": "Body Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-126a.webp",
+    "localPath": "assets/card-images/ogn-126a-body-rune.webp"
+  },
+  {
+    "id": "OGN-126b",
+    "name": "Body Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-126b.webp",
+    "localPath": "assets/card-images/ogn-126b-body-rune.webp"
+  },
+  {
+    "id": "SFD-151",
+    "name": "Bonds of Strength",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-151.webp",
+    "localPath": "assets/card-images/sfd-151-bonds-of-strength.webp"
+  },
+  {
+    "id": "SFD-118",
+    "name": "Boneshiver",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-118.webp",
+    "localPath": "assets/card-images/sfd-118-boneshiver.webp"
+  },
+  {
+    "id": "SFD-133",
+    "name": "Boots of Swiftness",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-133.webp",
+    "localPath": "assets/card-images/sfd-133-boots-of-swiftness.webp"
+  },
+  {
+    "id": "OGN-002",
+    "name": "Brazen Buccaneer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-002.webp",
+    "localPath": "assets/card-images/ogn-002-brazen-buccaneer.webp"
+  },
+  {
+    "id": "SFD-071",
+    "name": "Breakneck Mech",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-071.webp",
+    "localPath": "assets/card-images/sfd-071-breakneck-mech.webp"
+  },
+  {
+    "id": "SFD-042",
+    "name": "Brutalizer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-042.webp",
+    "localPath": "assets/card-images/sfd-042-brutalizer.webp"
+  },
+  {
+    "id": "OGN-026",
+    "name": "Brynhir Thundersong",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-026.webp",
+    "localPath": "assets/card-images/ogn-026-brynhir-thundersong.webp"
+  },
+  {
+    "id": "SFD-062",
+    "name": "Bubble Bot",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-062.webp",
+    "localPath": "assets/card-images/sfd-062-bubble-bot.webp"
+  },
+  {
+    "id": "OGN-P",
+    "name": "Buff",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-P.webp",
+    "localPath": "assets/card-images/ogn-p-buff.webp"
+  },
+  {
+    "id": "OGN-XXX",
+    "name": "Buff",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-XXX.webp",
+    "localPath": "assets/card-images/ogn-xxx-buff.webp"
+  },
+  {
+    "id": "SFD-091",
+    "name": "Buhru Captain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-091.webp",
+    "localPath": "assets/card-images/sfd-091-buhru-captain.webp"
+  },
+  {
+    "id": "OGN-268",
+    "name": "Bullet Time",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-268.webp",
+    "localPath": "assets/card-images/ogn-268-bullet-time.webp"
+  },
+  {
+    "id": "SFD-004",
+    "name": "Bushwhack",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-004.webp",
+    "localPath": "assets/card-images/sfd-004-bushwhack.webp"
+  },
+  {
+    "id": "ARC-002",
+    "name": "Caitlyn - Patrolling",
+    "remote": "https://static.dotgg.gg/riftbound/cards/ARC-002.webp",
+    "localPath": "assets/card-images/arc-002-caitlyn-patrolling.webp"
+  },
+  {
+    "id": "OGN-068",
+    "name": "Caitlyn - Patrolling",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-068.webp",
+    "localPath": "assets/card-images/ogn-068-caitlyn-patrolling.webp"
+  },
+  {
+    "id": "OGN-207",
+    "name": "Call to Glory",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-207.webp",
+    "localPath": "assets/card-images/ogn-207-call-to-glory.webp"
+  },
+  {
+    "id": "SFD-122",
+    "name": "Called Shot",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-122.webp",
+    "localPath": "assets/card-images/sfd-122-called-shot.webp"
+  },
+  {
+    "id": "OGN-042",
+    "name": "Calm Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-042.webp",
+    "localPath": "assets/card-images/ogn-042-calm-rune.webp"
+  },
+  {
+    "id": "OGN-042a",
+    "name": "Calm Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-042a.webp",
+    "localPath": "assets/card-images/ogn-042a-calm-rune.webp"
+  },
+  {
+    "id": "OGN-042b",
+    "name": "Calm Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-042b.webp",
+    "localPath": "assets/card-images/ogn-042b-calm-rune.webp"
+  },
+  {
+    "id": "OGN-127",
+    "name": "Cannon Barrage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-127.webp",
+    "localPath": "assets/card-images/ogn-127-cannon-barrage.webp"
+  },
+  {
+    "id": "OGN-015",
+    "name": "Captain Farron",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-015.webp",
+    "localPath": "assets/card-images/ogn-015-captain-farron.webp"
+  },
+  {
+    "id": "SFD-081",
+    "name": "Card Sharp",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-081.webp",
+    "localPath": "assets/card-images/sfd-081-card-sharp.webp"
+  },
+  {
+    "id": "OGN-149",
+    "name": "Carnivorous Snapvine",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-149.webp",
+    "localPath": "assets/card-images/ogn-149-carnivorous-snapvine.webp"
+  },
+  {
+    "id": "OGN-138",
+    "name": "Catalyst of Aeons",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-138.webp",
+    "localPath": "assets/card-images/ogn-138-catalyst-of-aeons.webp"
+  },
+  {
+    "id": "OGN-165",
+    "name": "Cemetery Attendant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-165.webp",
+    "localPath": "assets/card-images/ogn-165-cemetery-attendant.webp"
+  },
+  {
+    "id": "OGN-128",
+    "name": "Challenge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-128.webp",
+    "localPath": "assets/card-images/ogn-128-challenge.webp"
+  },
+  {
+    "id": "OGN-128-P",
+    "name": "Challenge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-128-P.webp",
+    "localPath": "assets/card-images/ogn-128-p-challenge.webp"
+  },
+  {
+    "id": "OGN-166",
+    "name": "Chaos Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-166.webp",
+    "localPath": "assets/card-images/ogn-166-chaos-rune.webp"
+  },
+  {
+    "id": "OGN-166a",
+    "name": "Chaos Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-166a.webp",
+    "localPath": "assets/card-images/ogn-166a-chaos-rune.webp"
+  },
+  {
+    "id": "OGN-166b",
+    "name": "Chaos Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-166b.webp",
+    "localPath": "assets/card-images/ogn-166b-chaos-rune.webp"
+  },
+  {
+    "id": "OGN-043",
+    "name": "Charm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-043.webp",
+    "localPath": "assets/card-images/ogn-043-charm.webp"
+  },
+  {
+    "id": "SFD-063",
+    "name": "Chemtech Cask",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-063.webp",
+    "localPath": "assets/card-images/sfd-063-chemtech-cask.webp"
+  },
+  {
+    "id": "OGN-003",
+    "name": "Chemtech Enforcer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-003.webp",
+    "localPath": "assets/card-images/ogn-003-chemtech-enforcer.webp"
+  },
+  {
+    "id": "OGN-139",
+    "name": "Cithria of Cloudfield",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-139.webp",
+    "localPath": "assets/card-images/ogn-139-cithria-of-cloudfield.webp"
+  },
+  {
+    "id": "OGN-004",
+    "name": "Cleave",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-004.webp",
+    "localPath": "assets/card-images/ogn-004-cleave.webp"
+  },
+  {
+    "id": "OGN-044",
+    "name": "Clockwork Keeper",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-044.webp",
+    "localPath": "assets/card-images/ogn-044-clockwork-keeper.webp"
+  },
+  {
+    "id": "SFD-064",
+    "name": "Cloth Armor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-064.webp",
+    "localPath": "assets/card-images/sfd-064-cloth-armor.webp"
+  },
+  {
+    "id": "SFD-092",
+    "name": "Combat Chef",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-092.webp",
+    "localPath": "assets/card-images/sfd-092-combat-chef.webp"
+  },
+  {
+    "id": "OGN-231",
+    "name": "Commander Ledros",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-231.webp",
+    "localPath": "assets/card-images/ogn-231-commander-ledros.webp"
+  },
+  {
+    "id": "OGN-129",
+    "name": "Confront",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-129.webp",
+    "localPath": "assets/card-images/ogn-129-confront.webp"
+  },
+  {
+    "id": "OGN-083",
+    "name": "Consult the Past",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-083.webp",
+    "localPath": "assets/card-images/ogn-083-consult-the-past.webp"
+  },
+  {
+    "id": "OGN-083-P",
+    "name": "Consult the Past",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-083-P.webp",
+    "localPath": "assets/card-images/ogn-083-p-consult-the-past.webp"
+  },
+  {
+    "id": "OGN-108",
+    "name": "Convergent Mutation",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-108.webp",
+    "localPath": "assets/card-images/ogn-108-convergent-mutation.webp"
+  },
+  {
+    "id": "SFD-179",
+    "name": "Corina Veraza",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-179.webp",
+    "localPath": "assets/card-images/sfd-179-corina-veraza.webp"
+  },
+  {
+    "id": "SFD-123",
+    "name": "Corrupt Enforcer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-123.webp",
+    "localPath": "assets/card-images/sfd-123-corrupt-enforcer.webp"
+  },
+  {
+    "id": "SFD-194",
+    "name": "Counter Strike",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-194.webp",
+    "localPath": "assets/card-images/sfd-194-counter-strike.webp"
+  },
+  {
+    "id": "OGN-130",
+    "name": "Crackshot Corsair",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-130.webp",
+    "localPath": "assets/card-images/ogn-130-crackshot-corsair.webp"
+  },
+  {
+    "id": "OGN-208",
+    "name": "Cruel Patron",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-208.webp",
+    "localPath": "assets/card-images/ogn-208-cruel-patron.webp"
+  },
+  {
+    "id": "SFD-134",
+    "name": "Cull",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-134.webp",
+    "localPath": "assets/card-images/sfd-134-cull.webp"
+  },
+  {
+    "id": "OGN-209",
+    "name": "Cull the Weak",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-209.webp",
+    "localPath": "assets/card-images/ogn-209-cull-the-weak.webp"
+  },
+  {
+    "id": "SFD-182",
+    "name": "Danger Zone",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-182.webp",
+    "localPath": "assets/card-images/sfd-182-danger-zone.webp"
+  },
+  {
+    "id": "OGN-016",
+    "name": "Dangerous Duo",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-016.webp",
+    "localPath": "assets/card-images/ogn-016-dangerous-duo.webp"
+  },
+  {
+    "id": "OGN-210",
+    "name": "Daring Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-210.webp",
+    "localPath": "assets/card-images/ogn-210-daring-poro.webp"
+  },
+  {
+    "id": "OGN-210-P",
+    "name": "Daring Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-210-P.webp",
+    "localPath": "assets/card-images/ogn-210-p-daring-poro.webp"
+  },
+  {
+    "id": "OGN-243",
+    "name": "Darius - Executioner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-243.webp",
+    "localPath": "assets/card-images/ogn-243-darius-executioner.webp"
+  },
+  {
+    "id": "OGN-243a",
+    "name": "Darius - Executioner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-243a.webp",
+    "localPath": "assets/card-images/ogn-243a-darius-executioner.webp"
+  },
+  {
+    "id": "SFD-236",
+    "name": "Darius - Executioner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-236.webp",
+    "localPath": "assets/card-images/sfd-236-darius-executioner.webp"
+  },
+  {
+    "id": "SFD-236-STAR",
+    "name": "Darius - Executioner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-236-STAR.webp",
+    "localPath": "assets/card-images/sfd-236-star-darius-executioner.webp"
+  },
+  {
+    "id": "OGN-253",
+    "name": "Darius - Hand of Noxus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-253.webp",
+    "localPath": "assets/card-images/ogn-253-darius-hand-of-noxus.webp"
+  },
+  {
+    "id": "OGN-302",
+    "name": "Darius - Hand of Noxus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-302.webp",
+    "localPath": "assets/card-images/ogn-302-darius-hand-of-noxus.webp"
+  },
+  {
+    "id": "OGN-302-STAR",
+    "name": "Darius - Hand of Noxus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-302-STAR.webp",
+    "localPath": "assets/card-images/ogn-302-star-hand-of-noxus.webp"
+  },
+  {
+    "id": "OGN-027",
+    "name": "Darius - Trifarian",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-027.webp",
+    "localPath": "assets/card-images/ogn-027-darius-trifarian.webp"
+  },
+  {
+    "id": "OGN-027a",
+    "name": "Darius - Trifarian",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-027a.webp",
+    "localPath": "assets/card-images/ogn-027a-darius-trifarian.webp"
+  },
+  {
+    "id": "OGN-253-P",
+    "name": "Darius, Hand of Noxus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-253-P.webp",
+    "localPath": "assets/card-images/ogn-253-p-darius-hand-of-noxus.webp"
+  },
+  {
+    "id": "SFD-093",
+    "name": "Dauntless Vanguard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-093.webp",
+    "localPath": "assets/card-images/sfd-093-dauntless-vanguard.webp"
+  },
+  {
+    "id": "OGN-160",
+    "name": "Dazzling Aurora",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-160.webp",
+    "localPath": "assets/card-images/ogn-160-dazzling-aurora.webp"
+  },
+  {
+    "id": "OGN-161",
+    "name": "Deadbloom Predator",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-161.webp",
+    "localPath": "assets/card-images/ogn-161-deadbloom-predator.webp"
+  },
+  {
+    "id": "SFD-163",
+    "name": "Deathgrip",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-163.webp",
+    "localPath": "assets/card-images/sfd-163-deathgrip.webp"
+  },
+  {
+    "id": "OGS-024",
+    "name": "Decisive Strike",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-024.webp",
+    "localPath": "assets/card-images/ogs-024-decisive-strike.webp"
+  },
+  {
+    "id": "SFD-196",
+    "name": "Defiant Dance",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-196.webp",
+    "localPath": "assets/card-images/sfd-196-defiant-dance.webp"
+  },
+  {
+    "id": "OGN-045",
+    "name": "Defy",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-045.webp",
+    "localPath": "assets/card-images/ogn-045-defy.webp"
+  },
+  {
+    "id": "SFD-031",
+    "name": "Desert's Call",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-031.webp",
+    "localPath": "assets/card-images/sfd-031-deserts-call.webp"
+  },
+  {
+    "id": "SFD-005",
+    "name": "Detonate",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-005.webp",
+    "localPath": "assets/card-images/sfd-005-detonate.webp"
+  },
+  {
+    "id": "SFD-094",
+    "name": "Direwing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-094.webp",
+    "localPath": "assets/card-images/sfd-094-direwing.webp"
+  },
+  {
+    "id": "SFD-032",
+    "name": "Disarming Rake",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-032.webp",
+    "localPath": "assets/card-images/sfd-032-disarming-rake.webp"
+  },
+  {
+    "id": "OGN-058",
+    "name": "Discipline",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-058.webp",
+    "localPath": "assets/card-images/ogn-058-discipline.webp"
+  },
+  {
+    "id": "OGN-058-P",
+    "name": "Discipline",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-058-P.webp",
+    "localPath": "assets/card-images/ogn-058-p-discipline.webp"
+  },
+  {
+    "id": "OGN-005",
+    "name": "Disintegrate",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-005.webp",
+    "localPath": "assets/card-images/ogn-005-disintegrate.webp"
+  },
+  {
+    "id": "OGN-244",
+    "name": "Divine Judgment",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-244.webp",
+    "localPath": "assets/card-images/ogn-244-divine-judgment.webp"
+  },
+  {
+    "id": "SFD-095",
+    "name": "Doran's Blade",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-095.webp",
+    "localPath": "assets/card-images/sfd-095-dorans-blade.webp"
+  },
+  {
+    "id": "SFD-124",
+    "name": "Doran's Ring",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-124.webp",
+    "localPath": "assets/card-images/sfd-124-dorans-ring.webp"
+  },
+  {
+    "id": "SFD-033",
+    "name": "Doran's Shield",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-033.webp",
+    "localPath": "assets/card-images/sfd-033-dorans-shield.webp"
+  },
+  {
+    "id": "SFD-147",
+    "name": "Downwell",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-147.webp",
+    "localPath": "assets/card-images/sfd-147-downwell.webp"
+  },
+  {
+    "id": "OGN-109",
+    "name": "Dr. Mundo - Expert",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-109.webp",
+    "localPath": "assets/card-images/ogn-109-dr-mundo-expert.webp"
+  },
+  {
+    "id": "SFD-164",
+    "name": "Drag Under",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-164.webp",
+    "localPath": "assets/card-images/sfd-164-drag-under.webp"
+  },
+  {
+    "id": "OGN-258",
+    "name": "Dragon's Rage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-258.webp",
+    "localPath": "assets/card-images/ogn-258-dragons-rage.webp"
+  },
+  {
+    "id": "SFD-148",
+    "name": "Draven - Audacious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-148.webp",
+    "localPath": "assets/card-images/sfd-148-draven-audacious.webp"
+  },
+  {
+    "id": "SFD-148A",
+    "name": "Draven - Audacious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-148A.webp",
+    "localPath": "assets/card-images/sfd-148a-draven-audacious.webp"
+  },
+  {
+    "id": "SFD-185",
+    "name": "Draven - Glorious Executioner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-185.webp",
+    "localPath": "assets/card-images/sfd-185-draven-glorious-executioner.webp"
+  },
+  {
+    "id": "SFD-242",
+    "name": "Draven - Glorious Executioner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-242.webp",
+    "localPath": "assets/card-images/sfd-242-draven-glorious-executioner.webp"
+  },
+  {
+    "id": "OGN-028",
+    "name": "Draven - Showboat",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-028.webp",
+    "localPath": "assets/card-images/ogn-028-draven-showboat.webp"
+  },
+  {
+    "id": "SFD-020",
+    "name": "Draven - Vanquisher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-020.webp",
+    "localPath": "assets/card-images/sfd-020-draven-vanquisher.webp"
+  },
+  {
+    "id": "SFD-020A",
+    "name": "Draven - Vanquisher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-020A.webp",
+    "localPath": "assets/card-images/sfd-020a-draven-vanquisher.webp"
+  },
+  {
+    "id": "SFD-072",
+    "name": "Dropboarder",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-072.webp",
+    "localPath": "assets/card-images/sfd-072-dropboarder.webp"
+  },
+  {
+    "id": "OGN-131",
+    "name": "Dune Drake",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-131.webp",
+    "localPath": "assets/card-images/ogn-131-dune-drake.webp"
+  },
+  {
+    "id": "SFD-027",
+    "name": "Dunebreaker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-027.webp",
+    "localPath": "assets/card-images/sfd-027-dunebreaker.webp"
+  },
+  {
+    "id": "OGN-084",
+    "name": "Eager Apprentice",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-084.webp",
+    "localPath": "assets/card-images/ogn-084-eager-apprentice.webp"
+  },
+  {
+    "id": "SFD-006",
+    "name": "Eager Drakehound",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-006.webp",
+    "localPath": "assets/card-images/sfd-006-eager-drakehound.webp"
+  },
+  {
+    "id": "OGN-059",
+    "name": "Eclipse Herald",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-059.webp",
+    "localPath": "assets/card-images/ogn-059-eclipse-herald.webp"
+  },
+  {
+    "id": "SFD-139",
+    "name": "Edge of Night",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-139.webp",
+    "localPath": "assets/card-images/sfd-139-edge-of-night.webp"
+  },
+  {
+    "id": "OGN-110",
+    "name": "Ekko - Recurrent",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-110.webp",
+    "localPath": "assets/card-images/ogn-110-ekko-recurrent.webp"
+  },
+  {
+    "id": "OGN-167",
+    "name": "Ember Monk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-167.webp",
+    "localPath": "assets/card-images/ogn-167-ember-monk.webp"
+  },
+  {
+    "id": "SFD-152",
+    "name": "Eminent Benefactor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-152.webp",
+    "localPath": "assets/card-images/sfd-152-eminent-benefactor.webp"
+  },
+  {
+    "id": "SFD-207",
+    "name": "Emperor's Dais",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-207.webp",
+    "localPath": "assets/card-images/sfd-207-emperors-dais.webp"
+  },
+  {
+    "id": "SFD-043",
+    "name": "Emperor's Divide",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-043.webp",
+    "localPath": "assets/card-images/sfd-043-emperors-divide.webp"
+  },
+  {
+    "id": "OGN-046",
+    "name": "En Garde",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-046.webp",
+    "localPath": "assets/card-images/ogn-046-en-garde.webp"
+  },
+  {
+    "id": "OGN-098",
+    "name": "Energy Conduit",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-098.webp",
+    "localPath": "assets/card-images/ogn-098-energy-conduit.webp"
+  },
+  {
+    "id": "SFD-073",
+    "name": "Experimental Hexplate",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-073.webp",
+    "localPath": "assets/card-images/sfd-073-experimental-hexplate.webp"
+  },
+  {
+    "id": "SFD-153",
+    "name": "Eye of the Herald",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-153.webp",
+    "localPath": "assets/card-images/sfd-153-eye-of-the-herald.webp"
+  },
+  {
+    "id": "SFD-082",
+    "name": "Ezreal - Dashing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-082.webp",
+    "localPath": "assets/card-images/sfd-082-ezreal-dashing.webp"
+  },
+  {
+    "id": "SFD-082A",
+    "name": "Ezreal - Dashing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-082A.webp",
+    "localPath": "assets/card-images/sfd-082a-ezreal-dashing.webp"
+  },
+  {
+    "id": "SFD-199",
+    "name": "Ezreal - Prodigal Explorer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-199.webp",
+    "localPath": "assets/card-images/sfd-199-ezreal-prodigal-explorer.webp"
+  },
+  {
+    "id": "SFD-248",
+    "name": "Ezreal - Prodigal Explorer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-248.webp",
+    "localPath": "assets/card-images/sfd-248-ezreal-prodigal-explorer.webp"
+  },
+  {
+    "id": "SFD-149",
+    "name": "Ezreal - Prodigy",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-149.webp",
+    "localPath": "assets/card-images/sfd-149-ezreal-prodigy.webp"
+  },
+  {
+    "id": "SFD-149A",
+    "name": "Ezreal - Prodigy",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-149A.webp",
+    "localPath": "assets/card-images/sfd-149a-ezreal-prodigy.webp"
+  },
+  {
+    "id": "OGN-220",
+    "name": "Facebreaker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-220.webp",
+    "localPath": "assets/card-images/ogn-220-facebreaker.webp"
+  },
+  {
+    "id": "SFD-135",
+    "name": "Factory Recall",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-135.webp",
+    "localPath": "assets/card-images/sfd-135-factory-recall.webp"
+  },
+  {
+    "id": "OGN-180",
+    "name": "Fading Memories",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-180.webp",
+    "localPath": "assets/card-images/ogn-180-fading-memories.webp"
+  },
+  {
+    "id": "SFD-101",
+    "name": "Fae Dragon",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-101.webp",
+    "localPath": "assets/card-images/sfd-101-fae-dragon.webp"
+  },
+  {
+    "id": "SFD-125",
+    "name": "Fae Porter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-125.webp",
+    "localPath": "assets/card-images/sfd-125-fae-porter.webp"
+  },
+  {
+    "id": "OGN-211",
+    "name": "Faithful Manufactor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-211.webp",
+    "localPath": "assets/card-images/ogn-211-faithful-manufactor.webp"
+  },
+  {
+    "id": "OGN-085",
+    "name": "Falling Comet",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-085.webp",
+    "localPath": "assets/card-images/ogn-085-falling-comet.webp"
+  },
+  {
+    "id": "OGN-029",
+    "name": "Falling Star",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-029.webp",
+    "localPath": "assets/card-images/ogn-029-falling-star.webp"
+  },
+  {
+    "id": "SFD-034",
+    "name": "Feral Strength",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-034.webp",
+    "localPath": "assets/card-images/sfd-034-feral-strength.webp"
+  },
+  {
+    "id": "SFD-021",
+    "name": "Ferrous Forerunner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-021.webp",
+    "localPath": "assets/card-images/sfd-021-ferrous-forerunner.webp"
+  },
+  {
+    "id": "OGN-168",
+    "name": "Fight or Flight",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-168.webp",
+    "localPath": "assets/card-images/ogn-168-fight-or-flight.webp"
+  },
+  {
+    "id": "OGS-022",
+    "name": "Final Spark",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-022.webp",
+    "localPath": "assets/card-images/ogs-022-final-spark.webp"
+  },
+  {
+    "id": "OGN-047",
+    "name": "Find Your Center",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-047.webp",
+    "localPath": "assets/card-images/ogn-047-find-your-center.webp"
+  },
+  {
+    "id": "SFD-205",
+    "name": "Fiora - Grand Duelist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-205.webp",
+    "localPath": "assets/card-images/sfd-205-fiora-grand-duelist.webp"
+  },
+  {
+    "id": "SFD-251",
+    "name": "Fiora - Grand Duelist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-251.webp",
+    "localPath": "assets/card-images/sfd-251-fiora-grand-duelist.webp"
+  },
+  {
+    "id": "SFD-110",
+    "name": "Fiora - Peerless",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-110.webp",
+    "localPath": "assets/card-images/sfd-110-fiora-peerless.webp"
+  },
+  {
+    "id": "SFD-110A",
+    "name": "Fiora - Peerless",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-110A.webp",
+    "localPath": "assets/card-images/sfd-110a-fiora-peerless.webp"
+  },
+  {
+    "id": "OGN-232",
+    "name": "Fiora - Victorious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-232.webp",
+    "localPath": "assets/card-images/ogn-232-fiora-victorious.webp"
+  },
+  {
+    "id": "SFD-180",
+    "name": "Fiora - Worthy",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-180.webp",
+    "localPath": "assets/card-images/sfd-180-fiora-worthy.webp"
+  },
+  {
+    "id": "SFD-180A",
+    "name": "Fiora - Worthy",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-180A.webp",
+    "localPath": "assets/card-images/sfd-180a-fiora-worthy.webp"
+  },
+  {
+    "id": "OGS-002",
+    "name": "Firestorm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-002.webp",
+    "localPath": "assets/card-images/ogs-002-firestorm.webp"
+  },
+  {
+    "id": "OGN-132",
+    "name": "First Mate",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-132.webp",
+    "localPath": "assets/card-images/ogn-132-first-mate.webp"
+  },
+  {
+    "id": "SFD-140",
+    "name": "Fizz - Trickster",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-140.webp",
+    "localPath": "assets/card-images/sfd-140-fizz-trickster.webp"
+  },
+  {
+    "id": "OGN-006",
+    "name": "Flame Chompers",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-006.webp",
+    "localPath": "assets/card-images/ogn-006-flame-chompers.webp"
+  },
+  {
+    "id": "OGS-011",
+    "name": "Flash",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-011.webp",
+    "localPath": "assets/card-images/ogs-011-flash.webp"
+  },
+  {
+    "id": "OGN-133",
+    "name": "Flurry of Blades",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-133.webp",
+    "localPath": "assets/card-images/ogn-133-flurry-of-blades.webp"
+  },
+  {
+    "id": "SFD-065",
+    "name": "Forecaster",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-065.webp",
+    "localPath": "assets/card-images/sfd-065-forecaster.webp"
+  },
+  {
+    "id": "SFD-208",
+    "name": "Forge of the Fluft",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-208.webp",
+    "localPath": "assets/card-images/sfd-208-forge-of-the-fluft.webp"
+  },
+  {
+    "id": "OGN-212",
+    "name": "Forge of the Future",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-212.webp",
+    "localPath": "assets/card-images/ogn-212-forge-of-the-future.webp"
+  },
+  {
+    "id": "SFD-190",
+    "name": "Forgefire Cape",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-190.webp",
+    "localPath": "assets/card-images/sfd-190-forgefire-cape.webp"
+  },
+  {
+    "id": "SFD-209",
+    "name": "Forgotten Monument",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-209.webp",
+    "localPath": "assets/card-images/sfd-209-forgotten-monument.webp"
+  },
+  {
+    "id": "OGN-279",
+    "name": "Fortified Position",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-279.webp",
+    "localPath": "assets/card-images/ogn-279-fortified-position.webp"
+  },
+  {
+    "id": "OGN-279/298",
+    "name": "Fortified Position (Oversized)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-279/298.webp",
+    "localPath": "assets/card-images/ogn-279298-fortified-position-oversized.webp"
+  },
+  {
+    "id": "OGN-256",
+    "name": "Fox-Fire",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-256.webp",
+    "localPath": "assets/card-images/ogn-256-fox-fire.webp"
+  },
+  {
+    "id": "SFD-066",
+    "name": "Frigid Touch",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-066.webp",
+    "localPath": "assets/card-images/sfd-066-frigid-touch.webp"
+  },
+  {
+    "id": "SFD-067",
+    "name": "Frostcoat Cub",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-067.webp",
+    "localPath": "assets/card-images/sfd-067-frostcoat-cub.webp"
+  },
+  {
+    "id": "OGN-007",
+    "name": "Fury Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-007.webp",
+    "localPath": "assets/card-images/ogn-007-fury-rune.webp"
+  },
+  {
+    "id": "OGN-007a",
+    "name": "Fury Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-007a.webp",
+    "localPath": "assets/card-images/ogn-007a-fury-rune.webp"
+  },
+  {
+    "id": "OGN-007b",
+    "name": "Fury Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-007b.webp",
+    "localPath": "assets/card-images/ogn-007b-fury-rune.webp"
+  },
+  {
+    "id": "OGN-099",
+    "name": "Garbage Grabber",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-099.webp",
+    "localPath": "assets/card-images/ogn-099-garbage-grabber.webp"
+  },
+  {
+    "id": "OGS-013",
+    "name": "Garen - Commander",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-013.webp",
+    "localPath": "assets/card-images/ogs-013-garen-commander.webp"
+  },
+  {
+    "id": "OGS-023",
+    "name": "Garen - Might of Demacia - Starter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-023.webp",
+    "localPath": "assets/card-images/ogs-023-garen-might-of-demacia.webp"
+  },
+  {
+    "id": "OGS-007",
+    "name": "Garen - Rugged",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-007.webp",
+    "localPath": "assets/card-images/ogs-007-garen-rugged.webp"
+  },
+  {
+    "id": "SFD-068",
+    "name": "Gearhead",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-068.webp",
+    "localPath": "assets/card-images/sfd-068-gearhead.webp"
+  },
+  {
+    "id": "SFD-007",
+    "name": "Gem Jammer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-007.webp",
+    "localPath": "assets/card-images/sfd-007-gem-jammer.webp"
+  },
+  {
+    "id": "OGN-100",
+    "name": "Gemcraft Seer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-100.webp",
+    "localPath": "assets/card-images/ogn-100-gemcraft-seer.webp"
+  },
+  {
+    "id": "OGS-008",
+    "name": "Gentlemen's Duel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-008.webp",
+    "localPath": "assets/card-images/ogs-008-gentlemens-duel.webp"
+  },
+  {
+    "id": "OGN-008",
+    "name": "Get Excited!",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-008.webp",
+    "localPath": "assets/card-images/ogn-008-get-excited.webp"
+  },
+  {
+    "id": "SFD-165",
+    "name": "Glasc Mixologist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-165.webp",
+    "localPath": "assets/card-images/sfd-165-glasc-mixologist.webp"
+  },
+  {
+    "id": "SFD",
+    "name": "Gold",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD.webp",
+    "localPath": "assets/card-images/sfd-gold.webp"
+  },
+  {
+    "id": "SFD-T03",
+    "name": "Gold",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-T03.webp",
+    "localPath": "assets/card-images/sfd-t03-gold.webp"
+  },
+  {
+    "id": "OGN-233",
+    "name": "Grand Strategem",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-233.webp",
+    "localPath": "assets/card-images/ogn-233-grand-strategem.webp"
+  },
+  {
+    "id": "OGN-280",
+    "name": "Grove of the God-Willow",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-280.webp",
+    "localPath": "assets/card-images/ogn-280-grove-of-the-god-willow.webp"
+  },
+  {
+    "id": "SFD-051",
+    "name": "Guardian Angel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-051.webp",
+    "localPath": "assets/card-images/sfd-051-guardian-angel.webp"
+  },
+  {
+    "id": "SFD-035",
+    "name": "Guardian of the Passage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-035.webp",
+    "localPath": "assets/card-images/sfd-035-guardian-of-the-passage.webp"
+  },
+  {
+    "id": "SFD-154",
+    "name": "Guards!",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-154.webp",
+    "localPath": "assets/card-images/sfd-154-guards.webp"
+  },
+  {
+    "id": "OGN-264",
+    "name": "Guerilla Warfare",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-264.webp",
+    "localPath": "assets/card-images/ogn-264-guerilla-warfare.webp"
+  },
+  {
+    "id": "OGN-169",
+    "name": "Gust",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-169.webp",
+    "localPath": "assets/card-images/ogn-169-gust.webp"
+  },
+  {
+    "id": "SFD-210",
+    "name": "Hall of Legends",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-210.webp",
+    "localPath": "assets/card-images/sfd-210-hall-of-legends.webp"
+  },
+  {
+    "id": "OGN-281",
+    "name": "Hallowed Tomb",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-281.webp",
+    "localPath": "assets/card-images/ogn-281-hallowed-tomb.webp"
+  },
+  {
+    "id": "SFD-136",
+    "name": "Hard Bargain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-136.webp",
+    "localPath": "assets/card-images/sfd-136-hard-bargain.webp"
+  },
+  {
+    "id": "OGN-234",
+    "name": "Harnessed Dragon",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-234.webp",
+    "localPath": "assets/card-images/ogn-234-harnessed-dragon.webp"
+  },
+  {
+    "id": "SFD-137",
+    "name": "Harpoon Squad",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-137.webp",
+    "localPath": "assets/card-images/sfd-137-harpoon-squad.webp"
+  },
+  {
+    "id": "SFD-052",
+    "name": "Heart of Dark Ice",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-052.webp",
+    "localPath": "assets/card-images/sfd-052-heart-of-dark-ice.webp"
+  },
+  {
+    "id": "ARC-003",
+    "name": "Heimerdinger - Inventor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/ARC-003.webp",
+    "localPath": "assets/card-images/arc-003-heimerdinger-inventor.webp"
+  },
+  {
+    "id": "OGN-111",
+    "name": "Heimerdinger - Inventor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-111.webp",
+    "localPath": "assets/card-images/ogn-111-heimerdinger-inventor.webp"
+  },
+  {
+    "id": "OGN-111-P",
+    "name": "Heimerdinger - Inventor Judge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-111-P.webp",
+    "localPath": "assets/card-images/ogn-111-p-heimerdinger-inventor-judge.webp"
+  },
+  {
+    "id": "OGN-140",
+    "name": "Herald of Scales",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-140.webp",
+    "localPath": "assets/card-images/ogn-140-herald-of-scales.webp"
+  },
+  {
+    "id": "SFD-111",
+    "name": "Here to Help",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-111.webp",
+    "localPath": "assets/card-images/sfd-111-here-to-help.webp"
+  },
+  {
+    "id": "SFD-102",
+    "name": "Hexdrinker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-102.webp",
+    "localPath": "assets/card-images/sfd-102-hexdrinker.webp"
+  },
+  {
+    "id": "SFD-083",
+    "name": "Hextech Anomaly",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-083.webp",
+    "localPath": "assets/card-images/sfd-083-hextech-anomaly.webp"
+  },
+  {
+    "id": "OGN-009",
+    "name": "Hextech Ray",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-009.webp",
+    "localPath": "assets/card-images/ogn-009-hextech-ray.webp"
+  },
+  {
+    "id": "OGN-213",
+    "name": "Hidden Blade",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-213.webp",
+    "localPath": "assets/card-images/ogn-213-hidden-blade.webp"
+  },
+  {
+    "id": "OGS-020",
+    "name": "Highlander",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-020.webp",
+    "localPath": "assets/card-images/ogs-020-highlander.webp"
+  },
+  {
+    "id": "SFD-155",
+    "name": "Honest Broker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-155.webp",
+    "localPath": "assets/card-images/sfd-155-honest-broker.webp"
+  },
+  {
+    "id": "SFD-202",
+    "name": "Hostile Takeover",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-202.webp",
+    "localPath": "assets/card-images/sfd-202-hostile-takeover.webp"
+  },
+  {
+    "id": "OGN-248",
+    "name": "Icathian Rain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-248.webp",
+    "localPath": "assets/card-images/ogn-248-icathian-rain.webp"
+  },
+  {
+    "id": "OGN-037",
+    "name": "Immortal Phoenix",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-037.webp",
+    "localPath": "assets/card-images/ogn-037-immortal-phoenix.webp"
+  },
+  {
+    "id": "OGN-221",
+    "name": "Imperial Decree",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-221.webp",
+    "localPath": "assets/card-images/ogn-221-imperial-decree.webp"
+  },
+  {
+    "id": "OGS-003",
+    "name": "Incinerate",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-003.webp",
+    "localPath": "assets/card-images/ogs-003-incinerate.webp"
+  },
+  {
+    "id": "OGN-201",
+    "name": "Invert Timelines",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-201.webp",
+    "localPath": "assets/card-images/ogn-201-invert-timelines.webp"
+  },
+  {
+    "id": "SFD-195",
+    "name": "Irelia - Blade Dancer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-195.webp",
+    "localPath": "assets/card-images/sfd-195-irelia-blade-dancer.webp"
+  },
+  {
+    "id": "SFD-246",
+    "name": "Irelia - Blade Dancer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-246.webp",
+    "localPath": "assets/card-images/sfd-246-irelia-blade-dancer.webp"
+  },
+  {
+    "id": "SFD-057",
+    "name": "Irelia - Fervent",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-057.webp",
+    "localPath": "assets/card-images/sfd-057-irelia-fervent.webp"
+  },
+  {
+    "id": "SFD-057A",
+    "name": "Irelia - Fervent",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-057A.webp",
+    "localPath": "assets/card-images/sfd-057a-irelia-fervent.webp"
+  },
+  {
+    "id": "SFD-225",
+    "name": "Irelia - Fervent",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-225.webp",
+    "localPath": "assets/card-images/sfd-225-irelia-fervent.webp"
+  },
+  {
+    "id": "SFD-225-STAR",
+    "name": "Irelia - Fervent",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-225-STAR.webp",
+    "localPath": "assets/card-images/sfd-225-star-irelia-fervent.webp"
+  },
+  {
+    "id": "SFD-141",
+    "name": "Irelia - Graceful",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-141.webp",
+    "localPath": "assets/card-images/sfd-141-irelia-graceful.webp"
+  },
+  {
+    "id": "SFD-141A",
+    "name": "Irelia - Graceful",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-141A.webp",
+    "localPath": "assets/card-images/sfd-141a-irelia-graceful.webp"
+  },
+  {
+    "id": "OGN-017",
+    "name": "Iron Ballista",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-017.webp",
+    "localPath": "assets/card-images/ogn-017-iron-ballista.webp"
+  },
+  {
+    "id": "SFD-142",
+    "name": "Jae Medarda",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-142.webp",
+    "localPath": "assets/card-images/sfd-142-jae-medarda.webp"
+  },
+  {
+    "id": "SFD-053",
+    "name": "Janna - Savior",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-053.webp",
+    "localPath": "assets/card-images/sfd-053-janna-savior.webp"
+  },
+  {
+    "id": "SFD-103",
+    "name": "Jaull-Fish",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-103.webp",
+    "localPath": "assets/card-images/sfd-103-jaull-fish.webp"
+  },
+  {
+    "id": "SFD-193",
+    "name": "Jax - Grandmaster at Arms",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-193.webp",
+    "localPath": "assets/card-images/sfd-193-jax-grandmaster-at-arms.webp"
+  },
+  {
+    "id": "SFD-245",
+    "name": "Jax - Grandmaster at Arms",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-245.webp",
+    "localPath": "assets/card-images/sfd-245-jax-grandmaster-at-arms.webp"
+  },
+  {
+    "id": "SFD-054",
+    "name": "Jax - Unmatched",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-054.webp",
+    "localPath": "assets/card-images/sfd-054-jax-unmatched.webp"
+  },
+  {
+    "id": "SFD-054A",
+    "name": "Jax - Unmatched",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-054A.webp",
+    "localPath": "assets/card-images/sfd-054a-jax-unmatched.webp"
+  },
+  {
+    "id": "SFD-119",
+    "name": "Jax - Unrelenting",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-119.webp",
+    "localPath": "assets/card-images/sfd-119-jax-unrelenting.webp"
+  },
+  {
+    "id": "SFD-119A",
+    "name": "Jax - Unrelenting",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-119A.webp",
+    "localPath": "assets/card-images/sfd-119a-jax-unrelenting.webp"
+  },
+  {
+    "id": "SFD-084",
+    "name": "Jayce - Man of Progress",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-084.webp",
+    "localPath": "assets/card-images/sfd-084-jayce-man-of-progress.webp"
+  },
+  {
+    "id": "OGN-086",
+    "name": "Jeweled Colossus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-086.webp",
+    "localPath": "assets/card-images/ogn-086-jeweled-colossus.webp"
+  },
+  {
+    "id": "OGN-030",
+    "name": "Jinx - Demolitionist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-030.webp",
+    "localPath": "assets/card-images/ogn-030-jinx-demolitionist.webp"
+  },
+  {
+    "id": "OGN-030a",
+    "name": "Jinx - Demolitionist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-030a.webp",
+    "localPath": "assets/card-images/ogn-030a-jinx-demolitionist.webp"
+  },
+  {
+    "id": "OGN-251",
+    "name": "Jinx - Loose Cannon",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-251.webp",
+    "localPath": "assets/card-images/ogn-251-jinx-loose-cannon.webp"
+  },
+  {
+    "id": "OGN-251-P",
+    "name": "Jinx - Loose Cannon",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-251-P.webp",
+    "localPath": "assets/card-images/ogn-251-p-jinx-loose-cannon.webp"
+  },
+  {
+    "id": "OGN-301",
+    "name": "Jinx - Loose Cannon",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-301.webp",
+    "localPath": "assets/card-images/ogn-301-jinx-loose-cannon.webp"
+  },
+  {
+    "id": "OGN-301-STAR",
+    "name": "Jinx - Loose Cannon",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-301-STAR.webp",
+    "localPath": "assets/card-images/ogn-301-star-loose-cannon.webp"
+  },
+  {
+    "id": "ARC-005",
+    "name": "Jinx - Rebel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/ARC-005.webp",
+    "localPath": "assets/card-images/arc-005-jinx-rebel.webp"
+  },
+  {
+    "id": "OGN-202",
+    "name": "Jinx - Rebel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-202.webp",
+    "localPath": "assets/card-images/ogn-202-jinx-rebel.webp"
+  },
+  {
+    "id": "OGN-202-P",
+    "name": "Jinx - Rebel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-202-P.webp",
+    "localPath": "assets/card-images/ogn-202-p-jinx-rebel.webp"
+  },
+  {
+    "id": "OGN-202a",
+    "name": "Jinx - Rebel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-202a.webp",
+    "localPath": "assets/card-images/ogn-202a-jinx-rebel.webp"
+  },
+  {
+    "id": "OGN-038",
+    "name": "Kadregrin the Infernal",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-038.webp",
+    "localPath": "assets/card-images/ogn-038-kadregrin-the-infernal.webp"
+  },
+  {
+    "id": "OGN-247",
+    "name": "Kai'Sa - Daughter of the Void",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-247.webp",
+    "localPath": "assets/card-images/ogn-247-kaisa-daughter-of-the-void.webp"
+  },
+  {
+    "id": "OGN-299",
+    "name": "Kai'Sa - Daughter of the Void",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-299.webp",
+    "localPath": "assets/card-images/ogn-299-kaisa-daughter-of-the-void.webp"
+  },
+  {
+    "id": "OGN-299-STAR",
+    "name": "Kai'Sa - Daughter of the Void",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-299-STAR.webp",
+    "localPath": "assets/card-images/ogn-299-star-daughter-of-the-void.webp"
+  },
+  {
+    "id": "OGN-112",
+    "name": "Kai'Sa - Evolutionary",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-112.webp",
+    "localPath": "assets/card-images/ogn-112-kaisa-evolutionary.webp"
+  },
+  {
+    "id": "OGN-112a",
+    "name": "Kai'Sa - Evolutionary",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-112a.webp",
+    "localPath": "assets/card-images/ogn-112a-kaisa-evolutionary.webp"
+  },
+  {
+    "id": "OGN-039",
+    "name": "Kai'Sa - Survivor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-039.webp",
+    "localPath": "assets/card-images/ogn-039-kaisa-survivor.webp"
+  },
+  {
+    "id": "OGN-039a",
+    "name": "Kai'Sa - Survivor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-039a.webp",
+    "localPath": "assets/card-images/ogn-039a-kaisa-survivor.webp"
+  },
+  {
+    "id": "OGN-247-P",
+    "name": "Kai'Sa, Daughter of the Void",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-247-P.webp",
+    "localPath": "assets/card-images/ogn-247-p-kaisa-daughter-of-the-void.webp"
+  },
+  {
+    "id": "OGN-235",
+    "name": "Karma - Channeler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-235.webp",
+    "localPath": "assets/card-images/ogn-235-karma-channeler.webp"
+  },
+  {
+    "id": "SFD-237",
+    "name": "Karma - Channeler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-237.webp",
+    "localPath": "assets/card-images/sfd-237-karma-channeler.webp"
+  },
+  {
+    "id": "SFD-237-STAR",
+    "name": "Karma - Channeler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-237-STAR.webp",
+    "localPath": "assets/card-images/sfd-237-star-karma-channeler.webp"
+  },
+  {
+    "id": "OGN-236",
+    "name": "Karthus - Eternal",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-236.webp",
+    "localPath": "assets/card-images/ogn-236-karthus-eternal.webp"
+  },
+  {
+    "id": "SFD-112",
+    "name": "Kato the Arm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-112.webp",
+    "localPath": "assets/card-images/sfd-112-kato-the-arm.webp"
+  },
+  {
+    "id": "OGN-189",
+    "name": "Kayn - Unleashed",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-189.webp",
+    "localPath": "assets/card-images/ogn-189-kayn-unleashed.webp"
+  },
+  {
+    "id": "OGN-237",
+    "name": "King's Edict",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-237.webp",
+    "localPath": "assets/card-images/ogn-237-kings-edict.webp"
+  },
+  {
+    "id": "OGN-141",
+    "name": "Kinkou Monk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-141.webp",
+    "localPath": "assets/card-images/ogn-141-kinkou-monk.webp"
+  },
+  {
+    "id": "OGN-190",
+    "name": "Kog'Maw - Caustic",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-190.webp",
+    "localPath": "assets/card-images/ogn-190-kogmaw-caustic.webp"
+  },
+  {
+    "id": "OGN-150",
+    "name": "Kraken Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-150.webp",
+    "localPath": "assets/card-images/ogn-150-kraken-hunter.webp"
+  },
+  {
+    "id": "OGN-260",
+    "name": "Last Breath",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-260.webp",
+    "localPath": "assets/card-images/ogn-260-last-breath.webp"
+  },
+  {
+    "id": "SFD-150",
+    "name": "Last Rites",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-150.webp",
+    "localPath": "assets/card-images/sfd-150-last-rites.webp"
+  },
+  {
+    "id": "OGN-069",
+    "name": "Last Stand",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-069.webp",
+    "localPath": "assets/card-images/ogn-069-last-stand.webp"
+  },
+  {
+    "id": "SFD-096",
+    "name": "Laurent Bladekeeper",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-096.webp",
+    "localPath": "assets/card-images/sfd-096-laurent-bladekeeper.webp"
+  },
+  {
+    "id": "SFD-156",
+    "name": "Laurent Duelist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-156.webp",
+    "localPath": "assets/card-images/sfd-156-laurent-duelist.webp"
+  },
+  {
+    "id": "OGN-087",
+    "name": "Lecturing Yordle",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-087.webp",
+    "localPath": "assets/card-images/ogn-087-lecturing-yordle.webp"
+  },
+  {
+    "id": "OGN-078",
+    "name": "Lee Sin - Ascetic",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-078.webp",
+    "localPath": "assets/card-images/ogn-078-lee-sin-ascetic.webp"
+  },
+  {
+    "id": "OGN-078-P",
+    "name": "Lee Sin - Ascetic",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-078-P.webp",
+    "localPath": "assets/card-images/ogn-078-p-lee-sin-ascetic.webp"
+  },
+  {
+    "id": "OGN-078a",
+    "name": "Lee Sin - Ascetic",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-078a.webp",
+    "localPath": "assets/card-images/ogn-078a-lee-sin-ascetic.webp"
+  },
+  {
+    "id": "OGN-257",
+    "name": "Lee Sin - Blind Monk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-257.webp",
+    "localPath": "assets/card-images/ogn-257-lee-sin-blind-monk.webp"
+  },
+  {
+    "id": "OGN-257-P",
+    "name": "Lee Sin - Blind Monk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-257-P.webp",
+    "localPath": "assets/card-images/ogn-257-p-lee-sin-blind-monk.webp"
+  },
+  {
+    "id": "OGN-304",
+    "name": "Lee Sin - Blind Monk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-304.webp",
+    "localPath": "assets/card-images/ogn-304-lee-sin-blind-monk.webp"
+  },
+  {
+    "id": "OGN-304-STAR",
+    "name": "Lee Sin - Blind Monk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-304-STAR.webp",
+    "localPath": "assets/card-images/ogn-304-star-blind-monk.webp"
+  },
+  {
+    "id": "OGN-151",
+    "name": "Lee Sin - Centered",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-151.webp",
+    "localPath": "assets/card-images/ogn-151-lee-sin-centered.webp"
+  },
+  {
+    "id": "OGN-151a",
+    "name": "Lee Sin - Centered",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-151a.webp",
+    "localPath": "assets/card-images/ogn-151a-lee-sin-centered.webp"
+  },
+  {
+    "id": "SFD-044",
+    "name": "Legion Quartermaster",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-044.webp",
+    "localPath": "assets/card-images/sfd-044-legion-quartermaster.webp"
+  },
+  {
+    "id": "OGN-010",
+    "name": "Legion Rearguard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-010.webp",
+    "localPath": "assets/card-images/ogn-010-legion-rearguard.webp"
+  },
+  {
+    "id": "OGN-238",
+    "name": "Leona - Determined",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-238.webp",
+    "localPath": "assets/card-images/ogn-238-leona-determined.webp"
+  },
+  {
+    "id": "OGN-238a",
+    "name": "Leona - Determined",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-238a.webp",
+    "localPath": "assets/card-images/ogn-238a-leona-determined.webp"
+  },
+  {
+    "id": "OGN-261",
+    "name": "Leona - Radiant Dawn",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-261.webp",
+    "localPath": "assets/card-images/ogn-261-leona-radiant-dawn.webp"
+  },
+  {
+    "id": "OGN-261-P",
+    "name": "Leona - Radiant Dawn",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-261-P.webp",
+    "localPath": "assets/card-images/ogn-261-p-leona-radiant-dawn.webp"
+  },
+  {
+    "id": "OGN-306",
+    "name": "Leona - Radiant Dawn",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-306.webp",
+    "localPath": "assets/card-images/ogn-306-leona-radiant-dawn.webp"
+  },
+  {
+    "id": "OGN-306-STAR",
+    "name": "Leona - Radiant Dawn",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-306-STAR.webp",
+    "localPath": "assets/card-images/ogn-306-star-radiant-dawn.webp"
+  },
+  {
+    "id": "OGN-079",
+    "name": "Leona - Zealot",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-079.webp",
+    "localPath": "assets/card-images/ogn-079-leona-zealot.webp"
+  },
+  {
+    "id": "OGN-079a",
+    "name": "Leona - Zealot",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-079a.webp",
+    "localPath": "assets/card-images/ogn-079a-leona-zealot.webp"
+  },
+  {
+    "id": "SFD-036",
+    "name": "Lonely Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-036.webp",
+    "localPath": "assets/card-images/sfd-036-lonely-poro.webp"
+  },
+  {
+    "id": "SFD-022",
+    "name": "Long Sword",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-022.webp",
+    "localPath": "assets/card-images/sfd-022-long-sword.webp"
+  },
+  {
+    "id": "SFD-126",
+    "name": "Loyal Pup",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-126.webp",
+    "localPath": "assets/card-images/sfd-126-loyal-pup.webp"
+  },
+  {
+    "id": "SFD-028",
+    "name": "Lucian - Gunslinger",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-028.webp",
+    "localPath": "assets/card-images/sfd-028-lucian-gunslinger.webp"
+  },
+  {
+    "id": "SFD-028A",
+    "name": "Lucian - Gunslinger",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-028A.webp",
+    "localPath": "assets/card-images/sfd-028a-lucian-gunslinger.webp"
+  },
+  {
+    "id": "SFD-113",
+    "name": "Lucian - Merciless",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-113.webp",
+    "localPath": "assets/card-images/sfd-113-lucian-merciless.webp"
+  },
+  {
+    "id": "SFD-113A",
+    "name": "Lucian - Merciless",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-113A.webp",
+    "localPath": "assets/card-images/sfd-113a-lucian-merciless.webp"
+  },
+  {
+    "id": "SFD-183",
+    "name": "Lucian - Purifier",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-183.webp",
+    "localPath": "assets/card-images/sfd-183-lucian-purifier.webp"
+  },
+  {
+    "id": "SFD-241",
+    "name": "Lucian - Purifier",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-241.webp",
+    "localPath": "assets/card-images/sfd-241-lucian-purifier.webp"
+  },
+  {
+    "id": "OGS-014",
+    "name": "Lux - Crownguard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-014.webp",
+    "localPath": "assets/card-images/ogs-014-lux-crownguard.webp"
+  },
+  {
+    "id": "OGS-006",
+    "name": "Lux - Illuminated",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-006.webp",
+    "localPath": "assets/card-images/ogs-006-lux-illuminated.webp"
+  },
+  {
+    "id": "OGS-021",
+    "name": "Lux - Lady of Luminosity - Starter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-021.webp",
+    "localPath": "assets/card-images/ogs-021-lux-lady-of-luminosity.webp"
+  },
+  {
+    "id": "OGN-239",
+    "name": "Machine Evangel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-239.webp",
+    "localPath": "assets/card-images/ogn-239-machine-evangel.webp"
+  },
+  {
+    "id": "OGN-191",
+    "name": "Maddened Marauder",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-191.webp",
+    "localPath": "assets/card-images/ogn-191-maddened-marauder.webp"
+  },
+  {
+    "id": "OGN-070",
+    "name": "Mageseeker Warden",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-070.webp",
+    "localPath": "assets/card-images/ogn-070-mageseeker-warden.webp"
+  },
+  {
+    "id": "OGN-011",
+    "name": "Magma Wurm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-011.webp",
+    "localPath": "assets/card-images/ogn-011-magma-wurm.webp"
+  },
+  {
+    "id": "OGN-113",
+    "name": "Malzahar - Fanatic",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-113.webp",
+    "localPath": "assets/card-images/ogn-113-malzahar-fanatic.webp"
+  },
+  {
+    "id": "SFD-211",
+    "name": "Marai Spire",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-211.webp",
+    "localPath": "assets/card-images/sfd-211-marai-spire.webp"
+  },
+  {
+    "id": "SFD-114",
+    "name": "Marching Orders",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-114.webp",
+    "localPath": "assets/card-images/sfd-114-marching-orders.webp"
+  },
+  {
+    "id": "OGN-060",
+    "name": "Mask of Foresight",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-060.webp",
+    "localPath": "assets/card-images/ogn-060-mask-of-foresight.webp"
+  },
+  {
+    "id": "SFD-127",
+    "name": "Master Bingwen",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-127.webp",
+    "localPath": "assets/card-images/sfd-127-master-bingwen.webp"
+  },
+  {
+    "id": "OGS-009",
+    "name": "Master Yi - Honed",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-009.webp",
+    "localPath": "assets/card-images/ogs-009-master-yi-honed.webp"
+  },
+  {
+    "id": "OGS-004",
+    "name": "Master Yi - Meditative",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-004.webp",
+    "localPath": "assets/card-images/ogs-004-master-yi-meditative.webp"
+  },
+  {
+    "id": "OGN-048",
+    "name": "Meditation",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-048.webp",
+    "localPath": "assets/card-images/ogn-048-meditation.webp"
+  },
+  {
+    "id": "OGN-088",
+    "name": "Mega-Mech",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-088.webp",
+    "localPath": "assets/card-images/ogn-088-mega-mech.webp"
+  },
+  {
+    "id": "OGN-089",
+    "name": "Mind Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-089.webp",
+    "localPath": "assets/card-images/ogn-089-mind-rune.webp"
+  },
+  {
+    "id": "OGN-089a",
+    "name": "Mind Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-089a.webp",
+    "localPath": "assets/card-images/ogn-089a-mind-rune.webp"
+  },
+  {
+    "id": "OGN-089b",
+    "name": "Mind Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-089b.webp",
+    "localPath": "assets/card-images/ogn-089b-mind-rune.webp"
+  },
+  {
+    "id": "OGN-192",
+    "name": "Mindsplitter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-192.webp",
+    "localPath": "assets/card-images/ogn-192-mindsplitter.webp"
+  },
+  {
+    "id": "SFD-212",
+    "name": "Minefield",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-212.webp",
+    "localPath": "assets/card-images/sfd-212-minefield.webp"
+  },
+  {
+    "id": "SFD-014",
+    "name": "Minotaur Reckoner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-014.webp",
+    "localPath": "assets/card-images/sfd-014-minotaur-reckoner.webp"
+  },
+  {
+    "id": "OGN-267",
+    "name": "Miss Fortune - Bounty Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-267.webp",
+    "localPath": "assets/card-images/ogn-267-miss-fortune-bounty-hunter.webp"
+  },
+  {
+    "id": "OGN-309",
+    "name": "Miss Fortune - Bounty Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-309.webp",
+    "localPath": "assets/card-images/ogn-309-miss-fortune-bounty-hunter.webp"
+  },
+  {
+    "id": "OGN-309-STAR",
+    "name": "Miss Fortune - Bounty Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-309-STAR.webp",
+    "localPath": "assets/card-images/ogn-309-star-bounty-hunter.webp"
+  },
+  {
+    "id": "OGN-193",
+    "name": "Miss Fortune - Buccaneer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-193.webp",
+    "localPath": "assets/card-images/ogn-193-miss-fortune-buccaneer.webp"
+  },
+  {
+    "id": "OGN-193a",
+    "name": "Miss Fortune - Buccaneer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-193a.webp",
+    "localPath": "assets/card-images/ogn-193a-miss-fortune-buccaneer.webp"
+  },
+  {
+    "id": "OGN-162",
+    "name": "Miss Fortune - Captain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-162.webp",
+    "localPath": "assets/card-images/ogn-162-miss-fortune-captain.webp"
+  },
+  {
+    "id": "OGN-162a",
+    "name": "Miss Fortune - Captain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-162a.webp",
+    "localPath": "assets/card-images/ogn-162a-miss-fortune-captain.webp"
+  },
+  {
+    "id": "OGN-267-P",
+    "name": "Miss Fortune, Bounty Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-267-P.webp",
+    "localPath": "assets/card-images/ogn-267-p-miss-fortune-bounty-hunter.webp"
+  },
+  {
+    "id": "OGN-152",
+    "name": "Mistfall",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-152.webp",
+    "localPath": "assets/card-images/ogn-152-mistfall.webp"
+  },
+  {
+    "id": "OGN-134",
+    "name": "Mobilize",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-134.webp",
+    "localPath": "assets/card-images/ogn-134-mobilize.webp"
+  },
+  {
+    "id": "OGN-282",
+    "name": "Monastery of Hirana",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-282.webp",
+    "localPath": "assets/card-images/ogn-282-monastery-of-hirana.webp"
+  },
+  {
+    "id": "OGN-170",
+    "name": "Morbid Return",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-170.webp",
+    "localPath": "assets/card-images/ogn-170-morbid-return.webp"
+  },
+  {
+    "id": "OGN-142",
+    "name": "Mountain Drake",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-142.webp",
+    "localPath": "assets/card-images/ogn-142-mountain-drake.webp"
+  },
+  {
+    "id": "OGN-101",
+    "name": "Mushroom Pouch",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-101.webp",
+    "localPath": "assets/card-images/ogn-101-mushroom-pouch.webp"
+  },
+  {
+    "id": "OGN-171",
+    "name": "Mystic Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-171.webp",
+    "localPath": "assets/card-images/ogn-171-mystic-poro.webp"
+  },
+  {
+    "id": "OGN-171-P",
+    "name": "Mystic Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-171-P.webp",
+    "localPath": "assets/card-images/ogn-171-p-mystic-poro.webp"
+  },
+  {
+    "id": "OGN-080",
+    "name": "Mystic Reversal",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-080.webp",
+    "localPath": "assets/card-images/ogn-080-mystic-reversal.webp"
+  },
+  {
+    "id": "OGN-283",
+    "name": "Navori Fighting Pit",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-283.webp",
+    "localPath": "assets/card-images/ogn-283-navori-fighting-pit.webp"
+  },
+  {
+    "id": "SFD-037",
+    "name": "Navori Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-037.webp",
+    "localPath": "assets/card-images/sfd-037-navori-scout.webp"
+  },
+  {
+    "id": "SFD-055",
+    "name": "Needlessly Large Yordle",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-055.webp",
+    "localPath": "assets/card-images/sfd-055-needlessly-large-yordle.webp"
+  },
+  {
+    "id": "OGN-194",
+    "name": "Nocturne - Horrifying",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-194.webp",
+    "localPath": "assets/card-images/ogn-194-nocturne-horrifying.webp"
+  },
+  {
+    "id": "SFD-045",
+    "name": "Not So Fast",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-045.webp",
+    "localPath": "assets/card-images/sfd-045-not-so-fast.webp"
+  },
+  {
+    "id": "OGN-222",
+    "name": "Noxian Drummer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-222.webp",
+    "localPath": "assets/card-images/ogn-222-noxian-drummer.webp"
+  },
+  {
+    "id": "OGN-254",
+    "name": "Noxian Guillotine",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-254.webp",
+    "localPath": "assets/card-images/ogn-254-noxian-guillotine.webp"
+  },
+  {
+    "id": "OGN-012",
+    "name": "Noxus Hopeful",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-012.webp",
+    "localPath": "assets/card-images/ogn-012-noxus-hopeful.webp"
+  },
+  {
+    "id": "OGN-018",
+    "name": "Noxus Saboteur",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-018.webp",
+    "localPath": "assets/card-images/ogn-018-noxus-saboteur.webp"
+  },
+  {
+    "id": "OGN-284",
+    "name": "Obelisk of Power",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-284.webp",
+    "localPath": "assets/card-images/ogn-284-obelisk-of-power.webp"
+  },
+  {
+    "id": "SFD-204",
+    "name": "On the Hunt",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-204.webp",
+    "localPath": "assets/card-images/sfd-204-on-the-hunt.webp"
+  },
+  {
+    "id": "OGN-090",
+    "name": "Orb of Regret",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-090.webp",
+    "localPath": "assets/card-images/ogn-090-orb-of-regret.webp"
+  },
+  {
+    "id": "OGN-214",
+    "name": "Order Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-214.webp",
+    "localPath": "assets/card-images/ogn-214-order-rune.webp"
+  },
+  {
+    "id": "OGN-214a",
+    "name": "Order Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-214a.webp",
+    "localPath": "assets/card-images/ogn-214a-order-rune.webp"
+  },
+  {
+    "id": "OGN-214b",
+    "name": "Order Rune",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-214b.webp",
+    "localPath": "assets/card-images/ogn-214b-order-rune.webp"
+  },
+  {
+    "id": "SFD-058",
+    "name": "Ornn - Blacksmith",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-058.webp",
+    "localPath": "assets/card-images/sfd-058-ornn-blacksmith.webp"
+  },
+  {
+    "id": "SFD-058A",
+    "name": "Ornn - Blacksmith",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-058A.webp",
+    "localPath": "assets/card-images/sfd-058a-ornn-blacksmith.webp"
+  },
+  {
+    "id": "SFD-189",
+    "name": "Ornn - Fire Below the Mountain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-189.webp",
+    "localPath": "assets/card-images/sfd-189-ornn-fire-below-the-mountain.webp"
+  },
+  {
+    "id": "SFD-244",
+    "name": "Ornn - Fire Below the Mountain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-244.webp",
+    "localPath": "assets/card-images/sfd-244-ornn-fire-below-the-mountain.webp"
+  },
+  {
+    "id": "SFD-085",
+    "name": "Ornn - Forge God",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-085.webp",
+    "localPath": "assets/card-images/sfd-085-ornn-forge-god.webp"
+  },
+  {
+    "id": "SFD-085A",
+    "name": "Ornn - Forge God",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-085A.webp",
+    "localPath": "assets/card-images/sfd-085a-ornn-forge-god.webp"
+  },
+  {
+    "id": "SFD-213",
+    "name": "Ornn's Forge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-213.webp",
+    "localPath": "assets/card-images/sfd-213-ornns-forge.webp"
+  },
+  {
+    "id": "OGN-153",
+    "name": "Overt Operation",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-153.webp",
+    "localPath": "assets/card-images/ogn-153-overt-operation.webp"
+  },
+  {
+    "id": "SFD-128",
+    "name": "Overzealous Fan",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-128.webp",
+    "localPath": "assets/card-images/sfd-128-overzealous-fan.webp"
+  },
+  {
+    "id": "OGN-181",
+    "name": "Pack of Wonders",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-181.webp",
+    "localPath": "assets/card-images/ogn-181-pack-of-wonders.webp"
+  },
+  {
+    "id": "OGN-135",
+    "name": "Pakaa Cub",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-135.webp",
+    "localPath": "assets/card-images/ogn-135-pakaa-cub.webp"
+  },
+  {
+    "id": "OGN-135-P",
+    "name": "Pakaa Cub",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-135-P.webp",
+    "localPath": "assets/card-images/ogn-135-p-pakaa-cub.webp"
+  },
+  {
+    "id": "OGN-071",
+    "name": "Party Favors",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-071.webp",
+    "localPath": "assets/card-images/ogn-071-party-favors.webp"
+  },
+  {
+    "id": "OGN-223",
+    "name": "Peak Guardian",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-223.webp",
+    "localPath": "assets/card-images/ogn-223-peak-guardian.webp"
+  },
+  {
+    "id": "SFD-015",
+    "name": "Perched Grimwyrm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-015.webp",
+    "localPath": "assets/card-images/sfd-015-perched-grimwyrm.webp"
+  },
+  {
+    "id": "SFD-104",
+    "name": "Petricite Monument",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-104.webp",
+    "localPath": "assets/card-images/sfd-104-petricite-monument.webp"
+  },
+  {
+    "id": "OGN-215",
+    "name": "Petty Officer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-215.webp",
+    "localPath": "assets/card-images/ogn-215-petty-officer.webp"
+  },
+  {
+    "id": "SFD-074",
+    "name": "Pickpocket",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-074.webp",
+    "localPath": "assets/card-images/sfd-074-pickpocket.webp"
+  },
+  {
+    "id": "SFD-023",
+    "name": "Piercing Light",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-023.webp",
+    "localPath": "assets/card-images/sfd-023-piercing-light.webp"
+  },
+  {
+    "id": "OGN-143",
+    "name": "Pirate's Haven",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-143.webp",
+    "localPath": "assets/card-images/ogn-143-pirates-haven.webp"
+  },
+  {
+    "id": "OGN-091",
+    "name": "Pit Crew",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-091.webp",
+    "localPath": "assets/card-images/ogn-091-pit-crew.webp"
+  },
+  {
+    "id": "OGN-136",
+    "name": "Pit Rookie",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-136.webp",
+    "localPath": "assets/card-images/ogn-136-pit-rookie.webp"
+  },
+  {
+    "id": "OGN-049",
+    "name": "Playful Phantom",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-049.webp",
+    "localPath": "assets/card-images/ogn-049-playful-phantom.webp"
+  },
+  {
+    "id": "SFD-069",
+    "name": "Plundering Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-069.webp",
+    "localPath": "assets/card-images/sfd-069-plundering-poro.webp"
+  },
+  {
+    "id": "OGN-061",
+    "name": "Poro Herder",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-061.webp",
+    "localPath": "assets/card-images/ogn-061-poro-herder.webp"
+  },
+  {
+    "id": "SFD-046",
+    "name": "Poro Snax",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-046.webp",
+    "localPath": "assets/card-images/sfd-046-poro-snax.webp"
+  },
+  {
+    "id": "OGN-102",
+    "name": "Portal Rescue",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-102.webp",
+    "localPath": "assets/card-images/ogn-102-portal-rescue.webp"
+  },
+  {
+    "id": "OGN-203",
+    "name": "Possession",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-203.webp",
+    "localPath": "assets/card-images/ogn-203-possession.webp"
+  },
+  {
+    "id": "OGN-013",
+    "name": "Pouty Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-013.webp",
+    "localPath": "assets/card-images/ogn-013-pouty-poro.webp"
+  },
+  {
+    "id": "OGN-013-P",
+    "name": "Pouty Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-013-P.webp",
+    "localPath": "assets/card-images/ogn-013-p-pouty-poro.webp"
+  },
+  {
+    "id": "SFD-214",
+    "name": "Power Nexus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-214.webp",
+    "localPath": "assets/card-images/sfd-214-power-nexus.webp"
+  },
+  {
+    "id": "SFD-087",
+    "name": "Premonition",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-087.webp",
+    "localPath": "assets/card-images/sfd-087-premonition.webp"
+  },
+  {
+    "id": "OGN-154",
+    "name": "Primal Strength",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-154.webp",
+    "localPath": "assets/card-images/ogn-154-primal-strength.webp"
+  },
+  {
+    "id": "SFD-075",
+    "name": "Prize of Progress",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-075.webp",
+    "localPath": "assets/card-images/sfd-075-prize-of-progress.webp"
+  },
+  {
+    "id": "SFD-076",
+    "name": "Production Surge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-076.webp",
+    "localPath": "assets/card-images/sfd-076-production-surge.webp"
+  },
+  {
+    "id": "OGN-114",
+    "name": "Progress Day",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-114.webp",
+    "localPath": "assets/card-images/ogn-114-progress-day.webp"
+  },
+  {
+    "id": "OGN-115",
+    "name": "Promising Future",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-115.webp",
+    "localPath": "assets/card-images/ogn-115-promising-future.webp"
+  },
+  {
+    "id": "SFD-097",
+    "name": "Punch First",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-097.webp",
+    "localPath": "assets/card-images/sfd-097-punch-first.webp"
+  },
+  {
+    "id": "OGN-155",
+    "name": "Qiyana - Victorious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-155.webp",
+    "localPath": "assets/card-images/ogn-155-qiyana-victorious.webp"
+  },
+  {
+    "id": "SFD-191",
+    "name": "Rabadon's Deathcrown",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-191.webp",
+    "localPath": "assets/card-images/sfd-191-rabadons-deathcrown.webp"
+  },
+  {
+    "id": "OGN-031",
+    "name": "Raging Firebrand",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-031.webp",
+    "localPath": "assets/card-images/ogn-031-raging-firebrand.webp"
+  },
+  {
+    "id": "OGN-019",
+    "name": "Raging Soul",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-019.webp",
+    "localPath": "assets/card-images/ogn-019-raging-soul.webp"
+  },
+  {
+    "id": "SFD-166",
+    "name": "Rally the Troops",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-166.webp",
+    "localPath": "assets/card-images/sfd-166-rally-the-troops.webp"
+  },
+  {
+    "id": "SFD-215",
+    "name": "Ravenbloom Conservatory",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-215.webp",
+    "localPath": "assets/card-images/sfd-215-ravenbloom-conservatory.webp"
+  },
+  {
+    "id": "OGN-103",
+    "name": "Ravenbloom Student",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-103.webp",
+    "localPath": "assets/card-images/ogn-103-ravenbloom-student.webp"
+  },
+  {
+    "id": "OGN-103-P",
+    "name": "Ravenbloom Student",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-103-P.webp",
+    "localPath": "assets/card-images/ogn-103-p-ravenbloom-student.webp"
+  },
+  {
+    "id": "OGN-032",
+    "name": "Ravenborn Tome",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-032.webp",
+    "localPath": "assets/card-images/ogn-032-ravenborn-tome.webp"
+  },
+  {
+    "id": "OGN-285",
+    "name": "Reaver's Row",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-285.webp",
+    "localPath": "assets/card-images/ogn-285-reavers-row.webp"
+  },
+  {
+    "id": "OGN-172",
+    "name": "Rebuke",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-172.webp",
+    "localPath": "assets/card-images/ogn-172-rebuke.webp"
+  },
+  {
+    "id": "OGN-286",
+    "name": "Reckoner's Arena",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-286.webp",
+    "localPath": "assets/card-images/ogn-286-reckoners-arena.webp"
+  },
+  {
+    "id": "OGN-271",
+    "name": "Recruit (DE)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-271.webp",
+    "localPath": "assets/card-images/ogn-271-recruit.webp"
+  },
+  {
+    "id": "OGN-272",
+    "name": "Recruit (NX)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-272.webp",
+    "localPath": "assets/card-images/ogn-272-recruit.webp"
+  },
+  {
+    "id": "OGN-273",
+    "name": "Recruit (ZN)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-273.webp",
+    "localPath": "assets/card-images/ogn-273-recruit.webp"
+  },
+  {
+    "id": "OGS-015",
+    "name": "Recruit the Vanguard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-015.webp",
+    "localPath": "assets/card-images/ogs-015-recruit-the-vanguard.webp"
+  },
+  {
+    "id": "SFD-016",
+    "name": "Recurve Bow",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-016.webp",
+    "localPath": "assets/card-images/sfd-016-recurve-bow.webp"
+  },
+  {
+    "id": "OGN-062",
+    "name": "Reinforce",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-062.webp",
+    "localPath": "assets/card-images/ogn-062-reinforce.webp"
+  },
+  {
+    "id": "SFD-029",
+    "name": "Rek'Sai - Breacher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-029.webp",
+    "localPath": "assets/card-images/sfd-029-reksai-breacher.webp"
+  },
+  {
+    "id": "SFD-029A",
+    "name": "Rek'Sai - Breacher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-029A.webp",
+    "localPath": "assets/card-images/sfd-029a-reksai-breacher.webp"
+  },
+  {
+    "id": "SFD-170",
+    "name": "Rek'Sai - Swarm Queen",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-170.webp",
+    "localPath": "assets/card-images/sfd-170-reksai-swarm-queen.webp"
+  },
+  {
+    "id": "SFD-170A",
+    "name": "Rek'Sai - Swarm Queen",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-170A.webp",
+    "localPath": "assets/card-images/sfd-170a-reksai-swarm-queen.webp"
+  },
+  {
+    "id": "SFD-187",
+    "name": "Rek'Sai - Void Burrower",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-187.webp",
+    "localPath": "assets/card-images/sfd-187-reksai-void-burrower.webp"
+  },
+  {
+    "id": "SFD-243",
+    "name": "Rek'Sai - Void Burrower",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-243.webp",
+    "localPath": "assets/card-images/sfd-243-reksai-void-burrower.webp"
+  },
+  {
+    "id": "SFD-184",
+    "name": "Relentless Pursuit",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-184.webp",
+    "localPath": "assets/card-images/sfd-184-relentless-pursuit.webp"
+  },
+  {
+    "id": "SFD-024",
+    "name": "Rell - Magnetic",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-024.webp",
+    "localPath": "assets/card-images/sfd-024-rell-magnetic.webp"
+  },
+  {
+    "id": "SFD-201",
+    "name": "Renata Glasc - Chem-Baroness",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-201.webp",
+    "localPath": "assets/card-images/sfd-201-renata-glasc-chem-baroness.webp"
+  },
+  {
+    "id": "SFD-249",
+    "name": "Renata Glasc - Chem-Baroness",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-249.webp",
+    "localPath": "assets/card-images/sfd-249-renata-glasc-chem-baroness.webp"
+  },
+  {
+    "id": "SFD-171",
+    "name": "Renata Glasc - Industrialist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-171.webp",
+    "localPath": "assets/card-images/sfd-171-renata-glasc-industrialist.webp"
+  },
+  {
+    "id": "SFD-171A",
+    "name": "Renata Glasc - Industrialist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-171A.webp",
+    "localPath": "assets/card-images/sfd-171a-renata-glasc-industrialist.webp"
+  },
+  {
+    "id": "SFD-088",
+    "name": "Renata Glasc - Mastermind",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-088.webp",
+    "localPath": "assets/card-images/sfd-088-renata-glasc-mastermind.webp"
+  },
+  {
+    "id": "SFD-088A",
+    "name": "Renata Glasc - Mastermind",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-088A.webp",
+    "localPath": "assets/card-images/sfd-088a-renata-glasc-mastermind.webp"
+  },
+  {
+    "id": "SFD-025",
+    "name": "Rengar - Pouncing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-025.webp",
+    "localPath": "assets/card-images/sfd-025-rengar-pouncing.webp"
+  },
+  {
+    "id": "OGN-104",
+    "name": "Retreat",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-104.webp",
+    "localPath": "assets/card-images/ogn-104-retreat.webp"
+  },
+  {
+    "id": "OGN-195",
+    "name": "Rhasa the Sunderer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-195.webp",
+    "localPath": "assets/card-images/ogn-195-rhasa-the-sunderer.webp"
+  },
+  {
+    "id": "SFD-038",
+    "name": "Ribbon Dancer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-038.webp",
+    "localPath": "assets/card-images/sfd-038-ribbon-dancer.webp"
+  },
+  {
+    "id": "OGN-173",
+    "name": "Ride the Wind",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-173.webp",
+    "localPath": "assets/card-images/ogn-173-ride-the-wind.webp"
+  },
+  {
+    "id": "SFD-206",
+    "name": "Riposte",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-206.webp",
+    "localPath": "assets/card-images/sfd-206-riposte.webp"
+  },
+  {
+    "id": "OGN-092",
+    "name": "Riptide Rex",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-092.webp",
+    "localPath": "assets/card-images/ogn-092-riptide-rex.webp"
+  },
+  {
+    "id": "OGN-092-P",
+    "name": "Riptide Rex",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-092-P.webp",
+    "localPath": "assets/card-images/ogn-092-p-riptide-rex.webp"
+  },
+  {
+    "id": "SFD-077",
+    "name": "Rocket Barrage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-077.webp",
+    "localPath": "assets/card-images/sfd-077-rocket-barrage.webp"
+  },
+  {
+    "id": "SFD-216",
+    "name": "Rockfall Path",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-216.webp",
+    "localPath": "assets/card-images/sfd-216-rockfall-path.webp"
+  },
+  {
+    "id": "SFD-039",
+    "name": "Royal Entourage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-039.webp",
+    "localPath": "assets/card-images/sfd-039-royal-entourage.webp"
+  },
+  {
+    "id": "SFD-157",
+    "name": "Royal Guard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-157.webp",
+    "localPath": "assets/card-images/sfd-157-royal-guard.webp"
+  },
+  {
+    "id": "SFD-105",
+    "name": "Ruin Runner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-105.webp",
+    "localPath": "assets/card-images/sfd-105-ruin-runner.webp"
+  },
+  {
+    "id": "SFD-026",
+    "name": "Rumble - Hotheaded",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-026.webp",
+    "localPath": "assets/card-images/sfd-026-rumble-hotheaded.webp"
+  },
+  {
+    "id": "SFD-026A",
+    "name": "Rumble - Hotheaded",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-026A.webp",
+    "localPath": "assets/card-images/sfd-026a-rumble-hotheaded.webp"
+  },
+  {
+    "id": "SFD-181",
+    "name": "Rumble - Mechanized Menace",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-181.webp",
+    "localPath": "assets/card-images/sfd-181-rumble-mechanized-menace.webp"
+  },
+  {
+    "id": "SFD-240",
+    "name": "Rumble - Mechanized Menace",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-240.webp",
+    "localPath": "assets/card-images/sfd-240-rumble-mechanized-menace.webp"
+  },
+  {
+    "id": "SFD-089",
+    "name": "Rumble - Scrapper",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-089.webp",
+    "localPath": "assets/card-images/sfd-089-rumble-scrapper.webp"
+  },
+  {
+    "id": "SFD-089A",
+    "name": "Rumble - Scrapper",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-089A.webp",
+    "localPath": "assets/card-images/sfd-089a-rumble-scrapper.webp"
+  },
+  {
+    "id": "OGN-050",
+    "name": "Rune Prison",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-050.webp",
+    "localPath": "assets/card-images/ogn-050-rune-prison.webp"
+  },
+  {
+    "id": "OGN-156",
+    "name": "Sabotage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-156.webp",
+    "localPath": "assets/card-images/ogn-156-sabotage.webp"
+  },
+  {
+    "id": "SFD-172",
+    "name": "Sacred Shears",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-172.webp",
+    "localPath": "assets/card-images/sfd-172-sacred-shears.webp"
+  },
+  {
+    "id": "OGN-174",
+    "name": "Sai Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-174.webp",
+    "localPath": "assets/card-images/ogn-174-sai-scout.webp"
+  },
+  {
+    "id": "OGN-224",
+    "name": "Salvage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-224.webp",
+    "localPath": "assets/card-images/ogn-224-salvage.webp"
+  },
+  {
+    "id": "SFD-158",
+    "name": "Sandshifter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-158.webp",
+    "localPath": "assets/card-images/sfd-158-sandshifter.webp"
+  },
+  {
+    "id": "OGN-182",
+    "name": "Scrapheap",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-182.webp",
+    "localPath": "assets/card-images/ogn-182-scrapheap.webp"
+  },
+  {
+    "id": "OGN-020",
+    "name": "Scrapyard Champion",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-020.webp",
+    "localPath": "assets/card-images/ogn-020-scrapyard-champion.webp"
+  },
+  {
+    "id": "SFD-098",
+    "name": "Sea Monkey",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-098.webp",
+    "localPath": "assets/card-images/sfd-098-sea-monkey.webp"
+  },
+  {
+    "id": "OGN-204",
+    "name": "Seal of Discord",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-204.webp",
+    "localPath": "assets/card-images/ogn-204-seal-of-discord.webp"
+  },
+  {
+    "id": "SFD-234",
+    "name": "Seal of Discord",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-234.webp",
+    "localPath": "assets/card-images/sfd-234-seal-of-discord.webp"
+  },
+  {
+    "id": "OGN-081",
+    "name": "Seal of Focus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-081.webp",
+    "localPath": "assets/card-images/ogn-081-seal-of-focus.webp"
+  },
+  {
+    "id": "SFD-226",
+    "name": "Seal of Focus",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-226.webp",
+    "localPath": "assets/card-images/sfd-226-seal-of-focus.webp"
+  },
+  {
+    "id": "OGN-120",
+    "name": "Seal of Insight",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-120.webp",
+    "localPath": "assets/card-images/ogn-120-seal-of-insight.webp"
+  },
+  {
+    "id": "SFD-229",
+    "name": "Seal of Insight",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-229.webp",
+    "localPath": "assets/card-images/sfd-229-seal-of-insight.webp"
+  },
+  {
+    "id": "OGN-040",
+    "name": "Seal of Rage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-040.webp",
+    "localPath": "assets/card-images/ogn-040-seal-of-rage.webp"
+  },
+  {
+    "id": "SFD-222",
+    "name": "Seal of Rage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-222.webp",
+    "localPath": "assets/card-images/sfd-222-seal-of-rage.webp"
+  },
+  {
+    "id": "OGN-163",
+    "name": "Seal of Strength",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-163.webp",
+    "localPath": "assets/card-images/ogn-163-seal-of-strength.webp"
+  },
+  {
+    "id": "SFD-231",
+    "name": "Seal of Strength",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-231.webp",
+    "localPath": "assets/card-images/sfd-231-seal-of-strength.webp"
+  },
+  {
+    "id": "OGN-245",
+    "name": "Seal of Unity",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-245.webp",
+    "localPath": "assets/card-images/ogn-245-seal-of-unity.webp"
+  },
+  {
+    "id": "SFD-238",
+    "name": "Seal of Unity",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-238.webp",
+    "localPath": "assets/card-images/sfd-238-seal-of-unity.webp"
+  },
+  {
+    "id": "SFD-217",
+    "name": "Seat of Power",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-217.webp",
+    "localPath": "assets/card-images/sfd-217-seat-of-power.webp"
+  },
+  {
+    "id": "SFD-008",
+    "name": "Sentinel Adept",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-008.webp",
+    "localPath": "assets/card-images/sfd-008-sentinel-adept.webp"
+  },
+  {
+    "id": "SFD-009",
+    "name": "Serrated Dirk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-009.webp",
+    "localPath": "assets/card-images/sfd-009-serrated-dirk.webp"
+  },
+  {
+    "id": "OGN-164",
+    "name": "Sett - Brawler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-164.webp",
+    "localPath": "assets/card-images/ogn-164-sett-brawler.webp"
+  },
+  {
+    "id": "OGN-164a",
+    "name": "Sett - Brawler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-164a.webp",
+    "localPath": "assets/card-images/ogn-164a-sett-brawler.webp"
+  },
+  {
+    "id": "SFD-232",
+    "name": "Sett - Brawler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-232.webp",
+    "localPath": "assets/card-images/sfd-232-sett-brawler.webp"
+  },
+  {
+    "id": "SFD-232-STAR",
+    "name": "Sett - Brawler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-232-STAR.webp",
+    "localPath": "assets/card-images/sfd-232-star-sett-brawler.webp"
+  },
+  {
+    "id": "OGN-240",
+    "name": "Sett - Kingpin",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-240.webp",
+    "localPath": "assets/card-images/ogn-240-sett-kingpin.webp"
+  },
+  {
+    "id": "OGN-240a",
+    "name": "Sett - Kingpin",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-240a.webp",
+    "localPath": "assets/card-images/ogn-240a-sett-kingpin.webp"
+  },
+  {
+    "id": "OGN-269",
+    "name": "Sett - The Boss",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-269.webp",
+    "localPath": "assets/card-images/ogn-269-sett-the-boss.webp"
+  },
+  {
+    "id": "OGN-269-P",
+    "name": "Sett - The Boss",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-269-P.webp",
+    "localPath": "assets/card-images/ogn-269-p-sett-the-boss.webp"
+  },
+  {
+    "id": "OGN-310",
+    "name": "Sett - The Boss",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-310.webp",
+    "localPath": "assets/card-images/ogn-310-sett-the-boss.webp"
+  },
+  {
+    "id": "OGN-310-STAR",
+    "name": "Sett - The Boss",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-310-STAR.webp",
+    "localPath": "assets/card-images/ogn-310-star-the-boss.webp"
+  },
+  {
+    "id": "OGN-033",
+    "name": "Shakedown",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-033.webp",
+    "localPath": "assets/card-images/ogn-033-shakedown.webp"
+  },
+  {
+    "id": "OGN-241",
+    "name": "Shen - Kinkou",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-241.webp",
+    "localPath": "assets/card-images/ogn-241-shen-kinkou.webp"
+  },
+  {
+    "id": "OGN-175",
+    "name": "Shipyard Skulker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-175.webp",
+    "localPath": "assets/card-images/ogn-175-shipyard-skulker.webp"
+  },
+  {
+    "id": "SFD-106",
+    "name": "Show of Strength",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-106.webp",
+    "localPath": "assets/card-images/sfd-106-show-of-strength.webp"
+  },
+  {
+    "id": "OGN-270",
+    "name": "Showstopper",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-270.webp",
+    "localPath": "assets/card-images/ogn-270-showstopper.webp"
+  },
+  {
+    "id": "SFD-192",
+    "name": "Shurelya's Requiem",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-192.webp",
+    "localPath": "assets/card-images/sfd-192-shurelyas-requiem.webp"
+  },
+  {
+    "id": "OGN-287",
+    "name": "Sigil of the Storm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-287.webp",
+    "localPath": "assets/card-images/ogn-287-sigil-of-the-storm.webp"
+  },
+  {
+    "id": "SFD-047",
+    "name": "Simian Ancestor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-047.webp",
+    "localPath": "assets/card-images/sfd-047-simian-ancestor.webp"
+  },
+  {
+    "id": "OGN-105",
+    "name": "Singularity",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-105.webp",
+    "localPath": "assets/card-images/ogn-105-singularity.webp"
+  },
+  {
+    "id": "OGN-266",
+    "name": "Siphon Power",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-266.webp",
+    "localPath": "assets/card-images/ogn-266-siphon-power.webp"
+  },
+  {
+    "id": "SFD-120",
+    "name": "Sivir - Ambitious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-120.webp",
+    "localPath": "assets/card-images/sfd-120-sivir-ambitious.webp"
+  },
+  {
+    "id": "SFD-120A",
+    "name": "Sivir - Ambitious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-120A.webp",
+    "localPath": "assets/card-images/sfd-120a-sivir-ambitious.webp"
+  },
+  {
+    "id": "SFD-203",
+    "name": "Sivir - Battle Mistress",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-203.webp",
+    "localPath": "assets/card-images/sfd-203-sivir-battle-mistress.webp"
+  },
+  {
+    "id": "SFD-250",
+    "name": "Sivir - Battle Mistress",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-250.webp",
+    "localPath": "assets/card-images/sfd-250-sivir-battle-mistress.webp"
+  },
+  {
+    "id": "SFD-143",
+    "name": "Sivir - Mercenary",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-143.webp",
+    "localPath": "assets/card-images/sfd-143-sivir-mercenary.webp"
+  },
+  {
+    "id": "SFD-143A",
+    "name": "Sivir - Mercenary",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-143A.webp",
+    "localPath": "assets/card-images/sfd-143a-sivir-mercenary.webp"
+  },
+  {
+    "id": "OGN-014",
+    "name": "Sky Splitter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-014.webp",
+    "localPath": "assets/card-images/ogn-014-sky-splitter.webp"
+  },
+  {
+    "id": "SFD-030",
+    "name": "Skyfall of Areion",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-030.webp",
+    "localPath": "assets/card-images/sfd-030-skyfall-of-areion.webp"
+  },
+  {
+    "id": "OGN-093",
+    "name": "Smoke Screen",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-093.webp",
+    "localPath": "assets/card-images/ogn-093-smoke-screen.webp"
+  },
+  {
+    "id": "OGN-176",
+    "name": "Sneaky Deckhand",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-176.webp",
+    "localPath": "assets/card-images/ogn-176-sneaky-deckhand.webp"
+  },
+  {
+    "id": "OGN-216",
+    "name": "Soaring Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-216.webp",
+    "localPath": "assets/card-images/ogn-216-soaring-scout.webp"
+  },
+  {
+    "id": "OGN-225",
+    "name": "Solari Chief",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-225.webp",
+    "localPath": "assets/card-images/ogn-225-solari-chief.webp"
+  },
+  {
+    "id": "OGN-051",
+    "name": "Solari Shieldbearer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-051.webp",
+    "localPath": "assets/card-images/ogn-051-solari-shieldbearer.webp"
+  },
+  {
+    "id": "OGN-072",
+    "name": "Solari Shrine",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-072.webp",
+    "localPath": "assets/card-images/ogn-072-solari-shrine.webp"
+  },
+  {
+    "id": "OGN-073",
+    "name": "Sona - Harmonious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-073.webp",
+    "localPath": "assets/card-images/ogn-073-sona-harmonious.webp"
+  },
+  {
+    "id": "SFD-173",
+    "name": "Soraka - Wanderer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-173.webp",
+    "localPath": "assets/card-images/sfd-173-soraka-wanderer.webp"
+  },
+  {
+    "id": "SFD-239",
+    "name": "Soraka - Wanderer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-239.webp",
+    "localPath": "assets/card-images/sfd-239-soraka-wanderer.webp"
+  },
+  {
+    "id": "SFD-239-STAR",
+    "name": "Soraka - Wanderer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-239-STAR.webp",
+    "localPath": "assets/card-images/sfd-239-star-soraka-wanderer.webp"
+  },
+  {
+    "id": "OGN-196",
+    "name": "Soulgorger",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-196.webp",
+    "localPath": "assets/card-images/ogn-196-soulgorger.webp"
+  },
+  {
+    "id": "OGN-226",
+    "name": "Spectral Matron",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-226.webp",
+    "localPath": "assets/card-images/ogn-226-spectral-matron.webp"
+  },
+  {
+    "id": "SFD-186",
+    "name": "Spinning Axe",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-186.webp",
+    "localPath": "assets/card-images/sfd-186-spinning-axe.webp"
+  },
+  {
+    "id": "SFD-144",
+    "name": "Spirit Wheel",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-144.webp",
+    "localPath": "assets/card-images/sfd-144-spirit-wheel.webp"
+  },
+  {
+    "id": "OGN-063",
+    "name": "Spirit's Refuge",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-063.webp",
+    "localPath": "assets/card-images/ogn-063-spirits-refuge.webp"
+  },
+  {
+    "id": "OGN-144",
+    "name": "Spoils of War",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-144.webp",
+    "localPath": "assets/card-images/ogn-144-spoils-of-war.webp"
+  },
+  {
+    "id": "OGN-274",
+    "name": "Sprite",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-274.webp",
+    "localPath": "assets/card-images/ogn-274-sprite.webp"
+  },
+  {
+    "id": "OGN-094",
+    "name": "Sprite Call",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-094.webp",
+    "localPath": "assets/card-images/ogn-094-sprite-call.webp"
+  },
+  {
+    "id": "OGN-106",
+    "name": "Sprite Mother",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-106.webp",
+    "localPath": "assets/card-images/ogn-106-sprite-mother.webp"
+  },
+  {
+    "id": "OGN-183",
+    "name": "Stacked Deck",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-183.webp",
+    "localPath": "assets/card-images/ogn-183-stacked-deck.webp"
+  },
+  {
+    "id": "OGN-183-P",
+    "name": "Stacked Deck",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-183-P.webp",
+    "localPath": "assets/card-images/ogn-183-p-stacked-deck.webp"
+  },
+  {
+    "id": "OGN-052",
+    "name": "Stalwart Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-052.webp",
+    "localPath": "assets/card-images/ogn-052-stalwart-poro.webp"
+  },
+  {
+    "id": "OGN-052-P",
+    "name": "Stalwart Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-052-P.webp",
+    "localPath": "assets/card-images/ogn-052-p-stalwart-poro.webp"
+  },
+  {
+    "id": "OGN-053",
+    "name": "Stand United",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-053.webp",
+    "localPath": "assets/card-images/ogn-053-stand-united.webp"
+  },
+  {
+    "id": "OGN-288",
+    "name": "Startipped Peak",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-288.webp",
+    "localPath": "assets/card-images/ogn-288-startipped-peak.webp"
+  },
+  {
+    "id": "OGN-288/298",
+    "name": "Startipped Peak (Oversized)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-288/298.webp",
+    "localPath": "assets/card-images/ogn-288298-startipped-peak-oversized.webp"
+  },
+  {
+    "id": "OGN-177",
+    "name": "Stealthy Pursuer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-177.webp",
+    "localPath": "assets/card-images/ogn-177-stealthy-pursuer.webp"
+  },
+  {
+    "id": "OGN-177-P",
+    "name": "Stealthy Pursuer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-177-P.webp",
+    "localPath": "assets/card-images/ogn-177-p-stealthy-pursuer.webp"
+  },
+  {
+    "id": "SFD-048",
+    "name": "Stellacorn Herder",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-048.webp",
+    "localPath": "assets/card-images/sfd-048-stellacorn-herder.webp"
+  },
+  {
+    "id": "SFD-056",
+    "name": "Sterak's Gage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-056.webp",
+    "localPath": "assets/card-images/sfd-056-steraks-gage.webp"
+  },
+  {
+    "id": "OGN-250",
+    "name": "Stormbringer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-250.webp",
+    "localPath": "assets/card-images/ogn-250-stormbringer.webp"
+  },
+  {
+    "id": "OGN-137",
+    "name": "Stormclaw Ursine",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-137.webp",
+    "localPath": "assets/card-images/ogn-137-stormclaw-ursine.webp"
+  },
+  {
+    "id": "OGN-137-P",
+    "name": "Stormclaw Ursine",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-137-P.webp",
+    "localPath": "assets/card-images/ogn-137-p-stormclaw-ursine.webp"
+  },
+  {
+    "id": "SFD-107",
+    "name": "Strike Down",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-107.webp",
+    "localPath": "assets/card-images/sfd-107-strike-down.webp"
+  },
+  {
+    "id": "OGN-095",
+    "name": "Stupefy",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-095.webp",
+    "localPath": "assets/card-images/ogn-095-stupefy.webp"
+  },
+  {
+    "id": "SFD-017",
+    "name": "Sudden Storm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-017.webp",
+    "localPath": "assets/card-images/sfd-017-sudden-storm.webp"
+  },
+  {
+    "id": "OGN-021",
+    "name": "Sun Disc",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-021.webp",
+    "localPath": "assets/card-images/ogn-021-sun-disc.webp"
+  },
+  {
+    "id": "SFD-218",
+    "name": "Sunken Temple",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-218.webp",
+    "localPath": "assets/card-images/sfd-218-sunken-temple.webp"
+  },
+  {
+    "id": "OGN-054",
+    "name": "Sunlit Guardian",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-054.webp",
+    "localPath": "assets/card-images/ogn-054-sunlit-guardian.webp"
+  },
+  {
+    "id": "OGN-252",
+    "name": "Super Mega Death Rocket!",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-252.webp",
+    "localPath": "assets/card-images/ogn-252-super-mega-death-rocket.webp"
+  },
+  {
+    "id": "SFD-059",
+    "name": "Svellsongur",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-059.webp",
+    "localPath": "assets/card-images/sfd-059-svellsongur.webp"
+  },
+  {
+    "id": "SFD-145",
+    "name": "Switcheroo",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-145.webp",
+    "localPath": "assets/card-images/sfd-145-switcheroo.webp"
+  },
+  {
+    "id": "OGN-227",
+    "name": "Symbol of the Solari",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-227.webp",
+    "localPath": "assets/card-images/ogn-227-symbol-of-the-solari.webp"
+  },
+  {
+    "id": "OGN-289",
+    "name": "Targon's Peak",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-289.webp",
+    "localPath": "assets/card-images/ogn-289-targons-peak.webp"
+  },
+  {
+    "id": "OGN-074",
+    "name": "Taric - Protector",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-074.webp",
+    "localPath": "assets/card-images/ogn-074-taric-protector.webp"
+  },
+  {
+    "id": "OGN-075",
+    "name": "Tasty Faefolk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-075.webp",
+    "localPath": "assets/card-images/ogn-075-tasty-faefolk.webp"
+  },
+  {
+    "id": "OGN-197",
+    "name": "Teemo - Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-197.webp",
+    "localPath": "assets/card-images/ogn-197-teemo-scout.webp"
+  },
+  {
+    "id": "OGN-197-p",
+    "name": "Teemo - Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-197-p.webp",
+    "localPath": "assets/card-images/ogn-197-p-teemo-scout.webp"
+  },
+  {
+    "id": "OGN-197a",
+    "name": "Teemo - Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-197a.webp",
+    "localPath": "assets/card-images/ogn-197a-teemo-scout.webp"
+  },
+  {
+    "id": "OGN-197b",
+    "name": "Teemo - Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-197b.webp",
+    "localPath": "assets/card-images/ogn-197b-teemo-scout.webp"
+  },
+  {
+    "id": "OGN-121",
+    "name": "Teemo - Strategist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-121.webp",
+    "localPath": "assets/card-images/ogn-121-teemo-strategist.webp"
+  },
+  {
+    "id": "OGN-121a",
+    "name": "Teemo - Strategist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-121a.webp",
+    "localPath": "assets/card-images/ogn-121a-teemo-strategist.webp"
+  },
+  {
+    "id": "SFD-230",
+    "name": "Teemo - Strategist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-230.webp",
+    "localPath": "assets/card-images/sfd-230-teemo-strategist.webp"
+  },
+  {
+    "id": "SFD-230-STAR",
+    "name": "Teemo - Strategist",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-230-STAR.webp",
+    "localPath": "assets/card-images/sfd-230-star-teemo-strategist.webp"
+  },
+  {
+    "id": "OGN-263",
+    "name": "Teemo - Swift Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-263.webp",
+    "localPath": "assets/card-images/ogn-263-teemo-swift-scout.webp"
+  },
+  {
+    "id": "OGN-263-a",
+    "name": "Teemo - Swift Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-263-a.webp",
+    "localPath": "assets/card-images/ogn-263-a-teemo-swift-scout.webp"
+  },
+  {
+    "id": "OGN-263-P",
+    "name": "Teemo - Swift Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-263-P.webp",
+    "localPath": "assets/card-images/ogn-263-p-teemo-swift-scout.webp"
+  },
+  {
+    "id": "OGN-307",
+    "name": "Teemo - Swift Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-307.webp",
+    "localPath": "assets/card-images/ogn-307-teemo-swift-scout.webp"
+  },
+  {
+    "id": "OGN-307-STAR",
+    "name": "Teemo - Swift Scout",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-307-STAR.webp",
+    "localPath": "assets/card-images/ogn-307-star-swift-scout.webp"
+  },
+  {
+    "id": "SFD-078",
+    "name": "Temporal Portal",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-078.webp",
+    "localPath": "assets/card-images/sfd-078-temporal-portal.webp"
+  },
+  {
+    "id": "SFD-129",
+    "name": "Temptation",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-129.webp",
+    "localPath": "assets/card-images/sfd-129-temptation.webp"
+  },
+  {
+    "id": "OGN-290",
+    "name": "The Arena's Greatest",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-290.webp",
+    "localPath": "assets/card-images/ogn-290-the-arenas-greatest.webp"
+  },
+  {
+    "id": "OGN-291",
+    "name": "The Candlelit Sanctum",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-291.webp",
+    "localPath": "assets/card-images/ogn-291-the-candlelit-sanctum.webp"
+  },
+  {
+    "id": "OGN-292",
+    "name": "The Dreaming Tree",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-292.webp",
+    "localPath": "assets/card-images/ogn-292-the-dreaming-tree.webp"
+  },
+  {
+    "id": "OGN-293",
+    "name": "The Grand Plaza",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-293.webp",
+    "localPath": "assets/card-images/ogn-293-the-grand-plaza.webp"
+  },
+  {
+    "id": "OGN-198",
+    "name": "The Harrowing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-198.webp",
+    "localPath": "assets/card-images/ogn-198-the-harrowing.webp"
+  },
+  {
+    "id": "SFD-219",
+    "name": "The Papertree",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-219.webp",
+    "localPath": "assets/card-images/sfd-219-the-papertree.webp"
+  },
+  {
+    "id": "OGN-184",
+    "name": "The Syren",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-184.webp",
+    "localPath": "assets/card-images/ogn-184-the-syren.webp"
+  },
+  {
+    "id": "SFD-090",
+    "name": "The Zero Drive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-090.webp",
+    "localPath": "assets/card-images/sfd-090-the-zero-drive.webp"
+  },
+  {
+    "id": "OGN-022",
+    "name": "Thermo Beam",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-022.webp",
+    "localPath": "assets/card-images/ogn-022-thermo-beam.webp"
+  },
+  {
+    "id": "OGN-116",
+    "name": "Thousand-Tailed Watcher",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-116.webp",
+    "localPath": "assets/card-images/ogn-116-thousand-tailed-watcher.webp"
+  },
+  {
+    "id": "SFD-040",
+    "name": "Thwonk!",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-040.webp",
+    "localPath": "assets/card-images/sfd-040-thwonk.webp"
+  },
+  {
+    "id": "SFD-060",
+    "name": "Tianna Crownguard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-060.webp",
+    "localPath": "assets/card-images/sfd-060-tianna-crownguard.webp"
+  },
+  {
+    "id": "OGS-018",
+    "name": "Tibbers",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-018.webp",
+    "localPath": "assets/card-images/ogs-018-tibbers.webp"
+  },
+  {
+    "id": "OGN-199",
+    "name": "Tideturner",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-199.webp",
+    "localPath": "assets/card-images/ogn-199-tideturner.webp"
+  },
+  {
+    "id": "OGN-122",
+    "name": "Time Warp",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-122.webp",
+    "localPath": "assets/card-images/ogn-122-time-warp.webp"
+  },
+  {
+    "id": "OGN-185",
+    "name": "Traveling Merchant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-185.webp",
+    "localPath": "assets/card-images/ogn-185-traveling-merchant.webp"
+  },
+  {
+    "id": "SFD-220",
+    "name": "Treasure Hoard",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-220.webp",
+    "localPath": "assets/card-images/sfd-220-treasure-hoard.webp"
+  },
+  {
+    "id": "SFD-130",
+    "name": "Treasure Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-130.webp",
+    "localPath": "assets/card-images/sfd-130-treasure-hunter.webp"
+  },
+  {
+    "id": "OGN-186",
+    "name": "Treasure Trove",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-186.webp",
+    "localPath": "assets/card-images/ogn-186-treasure-trove.webp"
+  },
+  {
+    "id": "OGN-217",
+    "name": "Trifarian Gloryseeker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-217.webp",
+    "localPath": "assets/card-images/ogn-217-trifarian-gloryseeker.webp"
+  },
+  {
+    "id": "OGN-294",
+    "name": "Trifarian War Camp",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-294.webp",
+    "localPath": "assets/card-images/ogn-294-trifarian-war-camp.webp"
+  },
+  {
+    "id": "OGN-294/298",
+    "name": "Trifarian War Camp (Oversized)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-294/298.webp",
+    "localPath": "assets/card-images/ogn-294298-trifarian-war-camp-oversized.webp"
+  },
+  {
+    "id": "SFD-115",
+    "name": "Trinity Force",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-115.webp",
+    "localPath": "assets/card-images/sfd-115-trinity-force.webp"
+  },
+  {
+    "id": "SFD-174",
+    "name": "Trove Golem",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-174.webp",
+    "localPath": "assets/card-images/sfd-174-trove-golem.webp"
+  },
+  {
+    "id": "SFD-159",
+    "name": "Trusty Ramhound",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-159.webp",
+    "localPath": "assets/card-images/sfd-159-trusty-ramhound.webp"
+  },
+  {
+    "id": "OGN-034",
+    "name": "Tryndamere - Barbarian",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-034.webp",
+    "localPath": "assets/card-images/ogn-034-tryndamere-barbarian.webp"
+  },
+  {
+    "id": "OGN-034-p",
+    "name": "Tryndamere, Barbarian",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-034-p.webp",
+    "localPath": "assets/card-images/ogn-034-p-tryndamere-barbarian.webp"
+  },
+  {
+    "id": "OGN-200",
+    "name": "Twisted Fate - Gambler",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-200.webp",
+    "localPath": "assets/card-images/ogn-200-twisted-fate-gambler.webp"
+  },
+  {
+    "id": "OGN-157",
+    "name": "Udyr - Wildman",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-157.webp",
+    "localPath": "assets/card-images/ogn-157-udyr-wildman.webp"
+  },
+  {
+    "id": "OGN-123",
+    "name": "Unchecked Power",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-123.webp",
+    "localPath": "assets/card-images/ogn-123-unchecked-power.webp"
+  },
+  {
+    "id": "OGN-178",
+    "name": "Undercover Agent",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-178.webp",
+    "localPath": "assets/card-images/ogn-178-undercover-agent.webp"
+  },
+  {
+    "id": "SFD-175",
+    "name": "Undertitan",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-175.webp",
+    "localPath": "assets/card-images/sfd-175-undertitan.webp"
+  },
+  {
+    "id": "OGN-023",
+    "name": "Unlicensed Armory",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-023.webp",
+    "localPath": "assets/card-images/ogn-023-unlicensed-armory.webp"
+  },
+  {
+    "id": "SFD-167",
+    "name": "Unsung Hero",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-167.webp",
+    "localPath": "assets/card-images/sfd-167-unsung-hero.webp"
+  },
+  {
+    "id": "OGN-145",
+    "name": "Unyielding Spirit",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-145.webp",
+    "localPath": "assets/card-images/ogn-145-unyielding-spirit.webp"
+  },
+  {
+    "id": "SFD-168",
+    "name": "Vanguard Armory",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-168.webp",
+    "localPath": "assets/card-images/sfd-168-vanguard-armory.webp"
+  },
+  {
+    "id": "OGS-016",
+    "name": "Vanguard Attendant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-016.webp",
+    "localPath": "assets/card-images/ogs-016-vanguard-attendant.webp"
+  },
+  {
+    "id": "OGN-218",
+    "name": "Vanguard Captain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-218.webp",
+    "localPath": "assets/card-images/ogn-218-vanguard-captain.webp"
+  },
+  {
+    "id": "OGN-218-P",
+    "name": "Vanguard Captain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-218-P.webp",
+    "localPath": "assets/card-images/ogn-218-p-vanguard-captain.webp"
+  },
+  {
+    "id": "OGN-228",
+    "name": "Vanguard Helm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-228.webp",
+    "localPath": "assets/card-images/ogn-228-vanguard-of-helm.webp"
+  },
+  {
+    "id": "OGN-219",
+    "name": "Vanguard Sergeant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-219.webp",
+    "localPath": "assets/card-images/ogn-219-vanguard-sergeant.webp"
+  },
+  {
+    "id": "OGN-035",
+    "name": "Vayne - Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-035.webp",
+    "localPath": "assets/card-images/ogn-035-vayne-hunter.webp"
+  },
+  {
+    "id": "SFD-223",
+    "name": "Vayne - Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-223.webp",
+    "localPath": "assets/card-images/sfd-223-vayne-hunter.webp"
+  },
+  {
+    "id": "SFD-223-STAR",
+    "name": "Vayne - Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-223-STAR.webp",
+    "localPath": "assets/card-images/sfd-223-star-vayne-hunter.webp"
+  },
+  {
+    "id": "SFD-221",
+    "name": "Veiled Temple",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-221.webp",
+    "localPath": "assets/card-images/sfd-221-veiled-temple.webp"
+  },
+  {
+    "id": "OGN-229",
+    "name": "Vengeance",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-229.webp",
+    "localPath": "assets/card-images/ogn-229-vengeance.webp"
+  },
+  {
+    "id": "OGN-229-P",
+    "name": "Vengeance",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-229-P.webp",
+    "localPath": "assets/card-images/ogn-229-p-vengeance.webp"
+  },
+  {
+    "id": "SFD-099",
+    "name": "Veteran Poro",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-099.webp",
+    "localPath": "assets/card-images/sfd-099-veteran-poro.webp"
+  },
+  {
+    "id": "SFD-146",
+    "name": "Vex - Cheerless",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-146.webp",
+    "localPath": "assets/card-images/sfd-146-vex-cheerless.webp"
+  },
+  {
+    "id": "ARC-001",
+    "name": "Vi - Destructive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/ARC-001.webp",
+    "localPath": "assets/card-images/arc-001-vi-destructive.webp"
+  },
+  {
+    "id": "OGN-036",
+    "name": "Vi - Destructive",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-036.webp",
+    "localPath": "assets/card-images/ogn-036-vi-destructive.webp"
+  },
+  {
+    "id": "OGN-265",
+    "name": "Viktor - Herald of the Arcane",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-265.webp",
+    "localPath": "assets/card-images/ogn-265-viktor-herald-of-the-arcane.webp"
+  },
+  {
+    "id": "OGN-265-P",
+    "name": "Viktor - Herald of the Arcane",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-265-P.webp",
+    "localPath": "assets/card-images/ogn-265-p-viktor-herald-of-the-arcane.webp"
+  },
+  {
+    "id": "OGN-308",
+    "name": "Viktor - Herald of the Arcane",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-308.webp",
+    "localPath": "assets/card-images/ogn-308-viktor-herald-of-the-arcane.webp"
+  },
+  {
+    "id": "OGN-308-STAR",
+    "name": "Viktor - Herald of the Arcane",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-308-STAR.webp",
+    "localPath": "assets/card-images/ogn-308-star-herald-of-the-arcane.webp"
+  },
+  {
+    "id": "OGN-117",
+    "name": "Viktor - Innovator",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-117.webp",
+    "localPath": "assets/card-images/ogn-117-viktor-innovator.webp"
+  },
+  {
+    "id": "OGN-117a",
+    "name": "Viktor - Innovator",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-117a.webp",
+    "localPath": "assets/card-images/ogn-117a-viktor-innovator.webp"
+  },
+  {
+    "id": "ARC-006",
+    "name": "Viktor - Leader",
+    "remote": "https://static.dotgg.gg/riftbound/cards/ARC-006.webp",
+    "localPath": "assets/card-images/arc-006-viktor-leader.webp"
+  },
+  {
+    "id": "OGN-246",
+    "name": "Viktor - Leader",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-246.webp",
+    "localPath": "assets/card-images/ogn-246-viktor-leader.webp"
+  },
+  {
+    "id": "OGN-246a",
+    "name": "Viktor - Leader",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-246a.webp",
+    "localPath": "assets/card-images/ogn-246a-viktor-leader.webp"
+  },
+  {
+    "id": "OGN-246-P",
+    "name": "Viktor, Leader",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-246-P.webp",
+    "localPath": "assets/card-images/ogn-246-p-viktor-leader.webp"
+  },
+  {
+    "id": "OGN-295",
+    "name": "Vilemaw's Lair",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-295.webp",
+    "localPath": "assets/card-images/ogn-295-vilemaws-lair.webp"
+  },
+  {
+    "id": "SFD-010",
+    "name": "Void Drone",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-010.webp",
+    "localPath": "assets/card-images/sfd-010-void-drone.webp"
+  },
+  {
+    "id": "OGN-296",
+    "name": "Void Gate",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-296.webp",
+    "localPath": "assets/card-images/ogn-296-void-gate.webp"
+  },
+  {
+    "id": "OGN-296/298",
+    "name": "Void Gate (Oversized)",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-296/298.webp",
+    "localPath": "assets/card-images/ogn-296298-void-gate-oversized.webp"
+  },
+  {
+    "id": "SFD-018",
+    "name": "Void Hatchling",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-018.webp",
+    "localPath": "assets/card-images/sfd-018-void-hatchling.webp"
+  },
+  {
+    "id": "SFD-188",
+    "name": "Void Rush",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-188.webp",
+    "localPath": "assets/card-images/sfd-188-void-rush.webp"
+  },
+  {
+    "id": "OGN-024",
+    "name": "Void Seeker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-024.webp",
+    "localPath": "assets/card-images/ogn-024-void-seeker.webp"
+  },
+  {
+    "id": "OGN-024-P",
+    "name": "Void Seeker",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-024-P.webp",
+    "localPath": "assets/card-images/ogn-024-p-void-seeker.webp"
+  },
+  {
+    "id": "OGN-041",
+    "name": "Volibear - Furious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-041.webp",
+    "localPath": "assets/card-images/ogn-041-volibear-furious.webp"
+  },
+  {
+    "id": "OGN-041a",
+    "name": "Volibear - Furious",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-041a.webp",
+    "localPath": "assets/card-images/ogn-041a-volibear-furious.webp"
+  },
+  {
+    "id": "OGN-158",
+    "name": "Volibear - Imposing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-158.webp",
+    "localPath": "assets/card-images/ogn-158-volibear-imposing.webp"
+  },
+  {
+    "id": "OGN-158a",
+    "name": "Volibear - Imposing",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-158a.webp",
+    "localPath": "assets/card-images/ogn-158a-volibear-imposing.webp"
+  },
+  {
+    "id": "OGN-249",
+    "name": "Volibear - Relentless Storm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-249.webp",
+    "localPath": "assets/card-images/ogn-249-volibear-relentless-storm.webp"
+  },
+  {
+    "id": "OGN-249-P",
+    "name": "Volibear - Relentless Storm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-249-P.webp",
+    "localPath": "assets/card-images/ogn-249-p-volibear-relentless-storm.webp"
+  },
+  {
+    "id": "OGN-300",
+    "name": "Volibear - Relentless Storm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-300.webp",
+    "localPath": "assets/card-images/ogn-300-volibear-relentless-storm.webp"
+  },
+  {
+    "id": "OGN-300-STAR",
+    "name": "Volibear - Relentless Storm",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-300-STAR.webp",
+    "localPath": "assets/card-images/ogn-300-star-relentless-storm.webp"
+  },
+  {
+    "id": "SFD-070",
+    "name": "Wages of Pain",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-070.webp",
+    "localPath": "assets/card-images/sfd-070-wages-of-pain.webp"
+  },
+  {
+    "id": "OGN-146",
+    "name": "Wallop",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-146.webp",
+    "localPath": "assets/card-images/ogn-146-wallop.webp"
+  },
+  {
+    "id": "SFD-108",
+    "name": "Warmog's Armor",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-108.webp",
+    "localPath": "assets/card-images/sfd-108-warmogs-armor.webp"
+  },
+  {
+    "id": "ARC-004",
+    "name": "Warwick - Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/ARC-004.webp",
+    "localPath": "assets/card-images/arc-004-warwick-hunter.webp"
+  },
+  {
+    "id": "OGN-159",
+    "name": "Warwick - Hunter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-159.webp",
+    "localPath": "assets/card-images/ogn-159-warwick-hunter.webp"
+  },
+  {
+    "id": "OGN-096",
+    "name": "Watchful Sentry",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-096.webp",
+    "localPath": "assets/card-images/ogn-096-watchful-sentry.webp"
+  },
+  {
+    "id": "OGN-187",
+    "name": "Whirlwind",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-187.webp",
+    "localPath": "assets/card-images/ogn-187-whirlwind.webp"
+  },
+  {
+    "id": "OGN-082",
+    "name": "Whiteflame Protector",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-082.webp",
+    "localPath": "assets/card-images/ogn-082-whiteflame-protector.webp"
+  },
+  {
+    "id": "OGN-055",
+    "name": "Wielder of Water",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-055.webp",
+    "localPath": "assets/card-images/ogn-055-wielder-of-water.webp"
+  },
+  {
+    "id": "OGN-055-P",
+    "name": "Wielder of Water",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-055-P.webp",
+    "localPath": "assets/card-images/ogn-055-p-wielder-of-water.webp"
+  },
+  {
+    "id": "OGN-147",
+    "name": "Wildclaw Shaman",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-147.webp",
+    "localPath": "assets/card-images/ogn-147-wildclaw-shaman.webp"
+  },
+  {
+    "id": "OGN-064",
+    "name": "Wind Wall",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-064.webp",
+    "localPath": "assets/card-images/ogn-064-wind-wall.webp"
+  },
+  {
+    "id": "SFD-138",
+    "name": "Windsinger",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-138.webp",
+    "localPath": "assets/card-images/sfd-138-windsinger.webp"
+  },
+  {
+    "id": "OGN-297",
+    "name": "Windswept Hillock",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-297.webp",
+    "localPath": "assets/card-images/ogn-297-windswept-hillock.webp"
+  },
+  {
+    "id": "OGN-065",
+    "name": "Wizened Elder",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-065.webp",
+    "localPath": "assets/card-images/ogn-065-wizened-elder.webp"
+  },
+  {
+    "id": "SFD-086",
+    "name": "World Atlas",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-086.webp",
+    "localPath": "assets/card-images/sfd-086-world-atlas.webp"
+  },
+  {
+    "id": "OGN-118",
+    "name": "Wraith of Echoes",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-118.webp",
+    "localPath": "assets/card-images/ogn-118-wraith-of-echoes.webp"
+  },
+  {
+    "id": "OGS-019",
+    "name": "Wuju Bladesman - Starter",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-019.webp",
+    "localPath": "assets/card-images/ogs-019-master-yi-wuju-bladesman.webp"
+  },
+  {
+    "id": "SFD-176",
+    "name": "Xin Zhao - Vigilant",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-176.webp",
+    "localPath": "assets/card-images/sfd-176-xin-zhao-vigilant.webp"
+  },
+  {
+    "id": "OGN-076",
+    "name": "Yasuo - Remorseful",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-076.webp",
+    "localPath": "assets/card-images/ogn-076-yasuo-remorseful.webp"
+  },
+  {
+    "id": "OGN-076a",
+    "name": "Yasuo - Remorseful",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-076a.webp",
+    "localPath": "assets/card-images/ogn-076a-yasuo-remorseful.webp"
+  },
+  {
+    "id": "OGN-259",
+    "name": "Yasuo - Unforgiven",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-259.webp",
+    "localPath": "assets/card-images/ogn-259-yasuo-unforgiven.webp"
+  },
+  {
+    "id": "OGN-259-P",
+    "name": "Yasuo - Unforgiven",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-259-P.webp",
+    "localPath": "assets/card-images/ogn-259-p-yasuo-unforgiven.webp"
+  },
+  {
+    "id": "OGN-305",
+    "name": "Yasuo - Unforgiven",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-305.webp",
+    "localPath": "assets/card-images/ogn-305-yasuo-unforgiven.webp"
+  },
+  {
+    "id": "OGN-305-STAR",
+    "name": "Yasuo - Unforgiven",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-305-STAR.webp",
+    "localPath": "assets/card-images/ogn-305-star-unforgiven.webp"
+  },
+  {
+    "id": "OGN-205",
+    "name": "Yasuo - Windrider",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-205.webp",
+    "localPath": "assets/card-images/ogn-205-yasuo-windrider.webp"
+  },
+  {
+    "id": "OGN-205a",
+    "name": "Yasuo - Windrider",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-205a.webp",
+    "localPath": "assets/card-images/ogn-205a-yasuo-windrider.webp"
+  },
+  {
+    "id": "SFD-235",
+    "name": "Yasuo - Windrider",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-235.webp",
+    "localPath": "assets/card-images/sfd-235-yasuo-windrider.webp"
+  },
+  {
+    "id": "SFD-235-STAR",
+    "name": "Yasuo - Windrider",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-235-STAR.webp",
+    "localPath": "assets/card-images/sfd-235-star-yasuo-windrider.webp"
+  },
+  {
+    "id": "SFD-116",
+    "name": "Yone - Blademaster",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-116.webp",
+    "localPath": "assets/card-images/sfd-116-yone-blademaster.webp"
+  },
+  {
+    "id": "SFD-233",
+    "name": "Yone - Blademaster",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-233.webp",
+    "localPath": "assets/card-images/sfd-233-yone-blademaster.webp"
+  },
+  {
+    "id": "SFD-233-STAR",
+    "name": "Yone - Blademaster",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-233-STAR.webp",
+    "localPath": "assets/card-images/sfd-233-star-yone-blademaster.webp"
+  },
+  {
+    "id": "SFD-100",
+    "name": "Yordle Explorer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-100.webp",
+    "localPath": "assets/card-images/sfd-100-yordle-explorer.webp"
+  },
+  {
+    "id": "SFD-160",
+    "name": "Zaun Punk",
+    "remote": "https://static.dotgg.gg/riftbound/cards/SFD-160.webp",
+    "localPath": "assets/card-images/sfd-160-zaun-punk.webp"
+  },
+  {
+    "id": "OGN-298",
+    "name": "Zaun Warrens",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-298.webp",
+    "localPath": "assets/card-images/ogn-298-zaun-warrens.webp"
+  },
+  {
+    "id": "OGN-188",
+    "name": "Zaunite Bouncer",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-188.webp",
+    "localPath": "assets/card-images/ogn-188-zaunite-bouncer.webp"
+  },
+  {
+    "id": "OGN-262",
+    "name": "Zenith Blade",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-262.webp",
+    "localPath": "assets/card-images/ogn-262-zenith-blade.webp"
+  },
+  {
+    "id": "OGS-005",
+    "name": "Zephyr Sage",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGS-005.webp",
+    "localPath": "assets/card-images/ogs-005-zephyr-sage.webp"
+  },
+  {
+    "id": "OGN-077",
+    "name": "Zhonya's Hourglass",
+    "remote": "https://static.dotgg.gg/riftbound/cards/OGN-077.webp",
+    "localPath": "assets/card-images/ogn-077-zhonyas-hourglass.webp"
+  }
+]

@@ -68,6 +68,19 @@ docs/
 - **Auth**: AWS Cognito
 - **Logging**: Winston
 
+## 🧩 Card Catalog & Assets
+
+- Run `npm run generate:cards` to transform `champion-dump.json` into `data/cards.enriched.json` and `data/card-images.json`.
+- `src/card-catalog.ts` loads the enriched data, provides lookup helpers, activation-state seeds, and drives the `cardCatalog` GraphQL queries.
+- The match engine now hydrates decklists from catalog IDs/slugs and tracks activation state per permanent so stateful abilities persist correctly.
+- Use the `cardImageManifest` GraphQL query (or the `data/card-images.json` file) to fetch remote artwork. Example download script:
+
+  ```bash
+  node -e "const fs=require('fs');const path=require('path');const https=require('https');const manifest=require('./data/card-images.json');manifest.forEach(({remote,localPath})=>{if(!remote)return;const target=path.resolve(localPath);fs.mkdirSync(path.dirname(target),{recursive:true});const file=fs.createWriteStream(target);https.get(remote,(res)=>{if(res.statusCode!==200){console.error('Failed',remote);res.resume();return;}res.pipe(file);});});"
+  ```
+
+- Infrastructure now provisions a `CardCatalogTable` DynamoDB table (see `cdk/src/database-stack.ts`) so the catalog can be replicated to DDB if desired.
+
 ## 📦 Available Commands
 
 ```bash

@@ -5,6 +5,10 @@ import helmet from 'helmet';
 import AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import logger from './logger';
+import { ApolloServer } from '@apollo/server';
+import { expressMiddleware } from '@apollo/server/express4';
+import { typeDefs } from './graphql/schema';
+import { queryResolvers, mutationResolvers, subscriptionResolvers } from './graphql/resolvers';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -62,6 +66,21 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   logger.info(`${req.method} ${req.path}`);
   next();
 });
+
+// Initialize Apollo Server for GraphQL
+async function startApolloServer() {
+  const server = new ApolloServer({
+    typeDefs,
+    resolvers: {
+      Query: queryResolvers,
+      Mutation: mutationResolvers,
+      Subscription: subscriptionResolvers,
+    },
+  });
+
+  await server.start();
+  app.use('/graphql', expressMiddleware(server));
+}
 
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response): void => {
@@ -236,8 +255,20 @@ app.use((_req: Request, res: Response): void => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-});
+
+async function runServer() {
+  try {
+    await startApolloServer();
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+      logger.info(`GraphQL endpoint available at http://localhost:${PORT}/graphql`);
+    });
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+runServer();
 
 export default app;

@@ -9,6 +9,7 @@ export interface DatabaseStackProps extends cdk.StackProps {
 export class DatabaseStack extends cdk.Stack {
   public readonly usersTable: dynamodb.Table;
   public readonly matchHistoryTable: dynamodb.Table;
+  public readonly cardCatalogTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DatabaseStackProps) {
     super(scope, id, props);
@@ -75,6 +76,49 @@ export class DatabaseStack extends cdk.Stack {
       },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+
+    // Card catalog table
+    this.cardCatalogTable = new dynamodb.Table(this, 'CardCatalogTable', {
+      tableName: `riftbound-${props.environment}-card-catalog`,
+      partitionKey: {
+        name: 'CardSlug',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'CardId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      timeToLiveAttribute: 'ArchivedAt',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.cardCatalogTable.addGlobalSecondaryIndex({
+      indexName: 'CardTypeIndex',
+      partitionKey: {
+        name: 'CardType',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'CardRarity',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    this.cardCatalogTable.addGlobalSecondaryIndex({
+      indexName: 'CardDomainIndex',
+      partitionKey: {
+        name: 'PrimaryDomain',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'CardSlug',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
     
     // Outputs
     new cdk.CfnOutput(this, 'UsersTableName', {
@@ -85,6 +129,11 @@ export class DatabaseStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'MatchHistoryTableName', {
       value: this.matchHistoryTable.tableName,
       exportName: `riftbound-${props.environment}-match-history-table`,
+    });
+
+    new cdk.CfnOutput(this, 'CardCatalogTableName', {
+      value: this.cardCatalogTable.tableName,
+      exportName: `riftbound-${props.environment}-card-catalog-table`,
     });
   }
 }
