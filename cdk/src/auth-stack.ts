@@ -47,7 +47,7 @@ export class AuthStack extends cdk.Stack {
     // Create User Pool Client
     this.userPoolClient = this.userPool.addClient('AppClient', {
       userPoolClientName: `riftbound-${props.environment}-client`,
-      generateSecret: true,
+      generateSecret: false,
       authFlows: {
         adminUserPassword: true,
         userPassword: true,

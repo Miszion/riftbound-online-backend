@@ -14,9 +14,9 @@ override.tf.json
 *_override.tf.json
 
 # Environment
-.env
 .env.local
 .env.*.local
+.env
 
 # Node/npm
 node_modules/
@@ -46,3 +46,4 @@ build/
 *.js.map
 *.d.ts.map
 cdk/cdk.out/
+.container-image

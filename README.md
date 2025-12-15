@@ -85,10 +85,30 @@ docs/
   npm run upload:cards
   ```
 
--## 🔐 Authentication
--
--The Express server now exposes `/auth/sign-in`, `/auth/sign-up`, and `/auth/refresh` endpoints directly, so the UI talks to the ECS service without any Lambda/API Gateway hops. Set `COGNITO_USER_POOL_ID` and `COGNITO_CLIENT_ID` (plus `AWS_REGION`) before starting the server or deploying so the handlers can reach your Cognito pool. Successful sign-ups automatically confirm the user and upsert their DynamoDB profile; sign-ins return Cognito tokens plus expiry metadata so the UI can refresh sessions via `/auth/refresh`.
--
+## 🔐 Authentication
+
+The Express server now exposes `/auth/sign-in`, `/auth/sign-up`, and `/auth/refresh` endpoints directly, so the UI talks to the ECS service without any Lambda/API Gateway hops. Set `COGNITO_USER_POOL_ID` and `COGNITO_CLIENT_ID` (plus `AWS_REGION`) before starting the server or deploying so the handlers can reach your Cognito pool. Successful sign-ups automatically confirm the user and upsert their DynamoDB profile; sign-ins return Cognito tokens plus expiry metadata so the UI can refresh sessions via `/auth/refresh`.
+
+## ⚙️ Environment Configuration
+
+All backend scripts read `.env` in the repository root so you can manage deployment variables (AWS profile, region, Cognito, ECR, etc.) in one place. Update the file with your own values:
+
+```bash
+AWS_PROFILE=riftbound-dev
+AWS_REGION=us-east-1
+ENVIRONMENT=dev
+COGNITO_USER_POOL_ID=us-east-1_example
+COGNITO_CLIENT_ID=exampleclientid
+CARD_CATALOG_TABLE=riftbound-dev-card-catalog
+ECR_REPOSITORY=riftbound-dev-app
+IMAGE_TAG=latest
+CORS_ORIGINS=http://localhost:3000,https://your-ui-domain
+```
+
+The `docker:publish` and `deploy:stacks` scripts automatically source `.env`, so `npm run deploy:stacks` builds TypeScript, publishes the amd64 container image to the configured ECR repository, and deploys every CDK stack without exporting each variable manually.
+
+During `npm run deploy:stacks` a fresh `REDEPLOY_TOKEN` is generated and baked into the ECS task definition, so each run forces a new service deployment even if you reuse the same image tag.
+
 ## 📦 Available Commands
 
 ```bash
@@ -101,7 +121,7 @@ npm run build        # Compile TypeScript
 npm run test         # Run tests
 
 # Deployment
-npm run deploy:stacks  # Build + deploy all CDK stacks w/ latest AWS CDK CLI (respects ENVIRONMENT)
+npm run deploy:stacks  # Build TS, publish amd64 image, inject a redeploy token, then deploy all CDK stacks
 cdk deploy           # Deploy infrastructure (manual control)
 npm run deploy:match-service  # Deploy match service
 

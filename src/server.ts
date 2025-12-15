@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express, { Express, Request, Response, NextFunction, ErrorRequestHandler } from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import logger from './logger';
@@ -11,6 +10,7 @@ import { typeDefs } from './graphql/schema';
 import { queryResolvers, mutationResolvers, subscriptionResolvers } from './graphql/resolvers';
 
 const awsRegion = process.env.AWS_REGION || 'us-east-1';
+const environment = process.env.ENVIRONMENT || 'dev';
 
 // Initialize AWS SDK clients
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -26,6 +26,33 @@ const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
 const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID;
 
 const app: Express = express();
+const normalizedStage = environment.replace(/^\//, '').replace(/\/$/, '');
+const stagePrefix = normalizedStage ? `/${normalizedStage}` : '';
+
+const disableCors = process.env.DISABLE_CORS === 'true';
+
+const allowedOrigins = (process.env.CORS_ORIGINS || '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
+
+const baseCorsOptions: cors.CorsOptions = {
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: '*',
+  exposedHeaders: ['Content-Type'],
+};
+
+const corsOptions: cors.CorsOptions = {
+  ...baseCorsOptions,
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+};
 
 // Type definitions
 interface UserProfile {
@@ -171,24 +198,78 @@ const handleCognitoError = (res: Response, error: any) => {
   });
 };
 
-const requireUserHeader = (req: Request, res: Response, next: NextFunction) => {
-  const userId = req.header('x-user-id');
-  if (!userId) {
-    res.status(401).json({ error: 'Unauthorized: missing x-user-id header' });
-    return;
-  }
-  (req as AuthedRequest).userId = userId;
-  next();
-};
+const corsMiddleware = disableCors
+  ? cors({ ...baseCorsOptions, origin: true })
+  : cors(corsOptions);
+
+if (disableCors) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+    }
+    next();
+  });
+}
+
+if (disableCors) {
+  logger.warn('DISABLE_CORS flag detected; allowing all origins temporarily');
+}
 
 // Middleware
-app.use(helmet());
-app.use(cors());
-app.use(express.json());
+app.use(corsMiddleware);
+app.options('*', corsMiddleware);
 
-// Request logging
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  logger.info(`${req.method} ${req.path}`);
+if (stagePrefix) {
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    if (req.url === stagePrefix || req.url.startsWith(`${stagePrefix}/`)) {
+      const originalUrl = req.url;
+      req.url = req.url.slice(stagePrefix.length) || '/';
+      logger.info('[HTTP] Stage prefix rewritten', { from: originalUrl, to: req.url });
+    }
+    next();
+  });
+}
+
+app.use(express.json({ limit: '2mb' }));
+
+// Detailed request logging
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const { method, originalUrl, headers, query, ip } = req;
+  const logContext: Record<string, any> = {
+    method,
+    path: originalUrl,
+    origin: headers.origin,
+    host: headers.host,
+    referer: headers.referer,
+    userAgent: headers['user-agent'],
+    contentType: headers['content-type'],
+    xUserId: headers['x-user-id'],
+    stage: environment,
+    ip,
+    query,
+  };
+  if (method !== 'GET') {
+    try {
+      const bodyPreview =
+        typeof req.body === 'string'
+          ? req.body.slice(0, 1000)
+          : JSON.stringify(req.body).slice(0, 1000);
+      logContext.bodyPreview = bodyPreview;
+    } catch {
+      logContext.bodyPreview = '[unserializable body]';
+    }
+  }
+    logger.info(`[HTTP] Incoming request ${method} ${originalUrl}`, logContext);
+  res.on('finish', () => {
+    logger.info('[HTTP] Response sent', {
+      method,
+      path: originalUrl,
+      statusCode: res.statusCode,
+      contentLength: res.getHeader('content-length'),
+    });
+  });
   next();
 });
 
@@ -204,20 +285,68 @@ async function startApolloServer() {
   });
 
   await server.start();
-  app.use(
-    '/graphql',
-    requireUserHeader,
-    expressMiddleware(server, {
+  
+  // Apply middleware to /graphql endpoint (support both raw and stage-prefixed paths)
+  const graphqlPaths = ['/graphql'];
+  if (environment) {
+    const envPath = `/${environment.replace(/^\//, '').trim()}/graphql`;
+    if (!graphqlPaths.includes(envPath)) {
+      graphqlPaths.push(envPath);
+    }
+  }
+
+  graphqlPaths.forEach((path) => {
+    const graphqlHandler = expressMiddleware(server, {
       context: async ({ req }) => ({
         userId: (req as AuthedRequest).userId
       })
-    })
-  );
+    });
+
+    app.use(path, async (req: Request, res: Response, next: NextFunction) => {
+      const body: any = req.body;
+      logger.info('[GraphQL] Incoming operation', {
+        path,
+        operationName: body?.operationName,
+        hasBody: Boolean(body),
+        userId: (req as AuthedRequest).userId,
+        headers: {
+          origin: req.headers.origin,
+          host: req.headers.host,
+          referer: req.headers.referer,
+          'content-type': req.headers['content-type'],
+          'x-user-id': req.headers['x-user-id'],
+        },
+      });
+
+      res.on('finish', () => {
+        logger.info('[GraphQL] Response sent', {
+          path,
+          statusCode: res.statusCode,
+          operationName: body?.operationName,
+        });
+      });
+
+      return graphqlHandler(req, res, next);
+    });
+  });
+
+  const registeredPaths =
+    app._router?.stack
+      ?.map((layer: any) => (layer.route ? layer.route.path : null))
+      ?.filter(Boolean) ?? [];
+  logger.info(`GraphQL middleware mounted on: ${graphqlPaths.join(', ')}`, {
+    registeredPaths,
+  });
 }
 
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response): void => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Debug endpoint
+app.get('/debug', (_req: Request, res: Response): void => {
+  res.status(200).json({ message: 'Debug endpoint working', apolloStarted: true });
 });
 
 // Authentication endpoints (migrated from Lambda)
@@ -294,7 +423,6 @@ app.post('/auth/sign-up', async (req: Request, res: Response) => {
       Password: password,
       UserAttributes: [
         { Name: 'email', Value: normalizedEmail },
-        { Name: 'email_verified', Value: 'false' },
         { Name: 'preferred_username', Value: normalizedUsername }
       ]
     };
@@ -533,17 +661,29 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 
 app.use(errorHandler);
 
-// 404 handler
-app.use((_req: Request, res: Response): void => {
-  res.status(404).json({ error: 'Not found' });
-});
-
 // Start server
 const PORT = process.env.PORT || 3000;
 
 async function runServer() {
   try {
     await startApolloServer();
+
+    // 404 handler (registered after GraphQL middleware to avoid intercepting it)
+    app.use((_req: Request, res: Response): void => {
+      logger.warn('[HTTP] Unmatched route', {
+        method: _req.method,
+        path: _req.originalUrl,
+        headers: {
+          origin: _req.headers.origin,
+          host: _req.headers.host,
+          'content-type': _req.headers['content-type'],
+          'x-user-id': _req.headers['x-user-id'],
+        },
+        body: _req.body,
+      });
+      res.status(404).json({ error: 'Not found', path: _req.originalUrl });
+    });
+
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info(`GraphQL endpoint available at http://localhost:${PORT}/graphql`);

@@ -1,0 +1,12 @@
+# Reduce Docker/asset build context to avoid recursive copying
+.git
+node_modules
+dist
+cdk/cdk.out
+cdk/dist
+cdk/node_modules
+.DS_Store
+data/card-images
+*.log
+# Ignore build artifacts produced during CDK asset staging
+asset.*

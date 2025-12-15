@@ -5,7 +5,7 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as path from 'path';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
 import { Construct } from 'constructs';
 
 export interface EcsStackProps extends cdk.StackProps {
@@ -17,6 +17,7 @@ export interface EcsStackProps extends cdk.StackProps {
   readonly matchHistoryTable: dynamodb.Table;
   readonly decklistsTable: dynamodb.Table;
   readonly matchmakingQueueTable: dynamodb.Table;
+  readonly userPoolArn?: string;
   readonly containerImage?: string;
   readonly desiredCount?: number;
   readonly taskCpu?: string;
@@ -49,6 +50,15 @@ export class EcsStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    let appRepository: ecr.IRepository | undefined;
+    if (!props.containerImage) {
+      appRepository = ecr.Repository.fromRepositoryName(
+        this,
+        'AppRepository',
+        `riftbound-${props.environment}-app`
+      );
+    }
+
     // Create ECS Task Role
     const taskRole = new iam.Role(this, 'TaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
@@ -59,6 +69,21 @@ export class EcsStack extends cdk.Stack {
     props.matchHistoryTable.grantReadWriteData(taskRole);
     props.decklistsTable.grantReadWriteData(taskRole);
     props.matchmakingQueueTable.grantReadWriteData(taskRole);
+
+    if (props.userPoolArn) {
+      taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'cognito-idp:AdminInitiateAuth',
+            'cognito-idp:AdminConfirmSignUp',
+            'cognito-idp:SignUp',
+            'cognito-idp:InitiateAuth'
+          ],
+          resources: [props.userPoolArn]
+        })
+      );
+    }
 
     // Create Task Execution Role
     const executionRole = new iam.Role(this, 'ExecutionRole', {
@@ -82,7 +107,16 @@ export class EcsStack extends cdk.Stack {
 
     const containerImage = props.containerImage
       ? ecs.ContainerImage.fromRegistry(props.containerImage)
-      : ecs.ContainerImage.fromAsset(path.resolve(__dirname, '..', '..'));
+      : appRepository
+      ? ecs.ContainerImage.fromEcrRepository(appRepository)
+      : (() => {
+          throw new Error('ECR repository not available and containerImage not provided');
+        })();
+
+    // Allow ECS tasks to pull from repository
+    if (appRepository) {
+      appRepository.grantPull(executionRole);
+    }
 
     // Add container to task definition
     const container = taskDefinition.addContainer('AppContainer', {
@@ -98,6 +132,7 @@ export class EcsStack extends cdk.Stack {
         DECKLISTS_TABLE: props.decklistsTable.tableName,
         MATCHMAKING_QUEUE_TABLE: props.matchmakingQueueTable.tableName,
         AWS_REGION: this.region,
+        REDEPLOY_TOKEN: process.env.REDEPLOY_TOKEN ?? '',
       },
       portMappings: [
         {
@@ -185,5 +220,12 @@ export class EcsStack extends cdk.Stack {
       value: this.service.serviceName,
       exportName: `riftbound-${props.environment}-service-name`,
     });
+
+    if (appRepository) {
+      new cdk.CfnOutput(this, 'AppRepositoryUri', {
+        value: appRepository.repositoryUri,
+        exportName: `riftbound-${props.environment}-ecr-repo-uri`,
+      });
+    }
   }
 }

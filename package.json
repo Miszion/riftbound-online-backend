@@ -14,7 +14,8 @@
     "format": "prettier --write src/",
     "generate:cards": "node transformChampionDump.js",
     "upload:cards": "ts-node scripts/uploadCardCatalog.ts",
-    "deploy:stacks": "npm run build && (cd cdk && npm install && ENVIRONMENT=${ENVIRONMENT:-dev} npx aws-cdk@latest deploy --all)"
+    "docker:publish": "bash scripts/publish-ecr.sh",
+    "deploy:stacks": "bash scripts/deploy-stacks.sh"
   },
   "keywords": [
     "game",

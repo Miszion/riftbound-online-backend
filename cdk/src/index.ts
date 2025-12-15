@@ -4,6 +4,7 @@ import { DatabaseStack } from './database-stack';
 import { NetworkingStack } from './networking-stack';
 import { EcsStack } from './ecs-stack';
 import { MatchServiceStack } from './match-service-stack';
+import { ApiGatewayStack } from './api-gateway-stack';
 
 const app = new cdk.App();
 
@@ -14,6 +15,10 @@ const matchServiceImage =
 const desiredCount = parseInt(process.env.DESIRED_COUNT || '2');
 const taskCpu = process.env.TASK_CPU || '1024';
 const taskMemory = process.env.TASK_MEMORY || '2048';
+const corsOrigins = (process.env.CORS_ORIGINS || '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
 
 // Create stacks
 const networkingStack = new NetworkingStack(app, `RiftboundNetworking-${environment}`, {
@@ -26,7 +31,7 @@ const databaseStack = new DatabaseStack(app, `RiftboundDatabase-${environment}`,
   description: `Database infrastructure for Riftbound Online ${environment}`,
 });
 
-new AuthStack(app, `RiftboundAuth-${environment}`, {
+const authStack = new AuthStack(app, `RiftboundAuth-${environment}`, {
   environment,
   description: `Authentication infrastructure for Riftbound Online ${environment}`,
 });
@@ -39,11 +44,19 @@ const ecsStack = new EcsStack(app, `RiftboundEcs-${environment}`, {
   matchHistoryTable: databaseStack.matchHistoryTable,
   decklistsTable: databaseStack.decklistsTable,
   matchmakingQueueTable: databaseStack.matchmakingQueueTable,
+  userPoolArn: authStack.userPool.userPoolArn,
   containerImage,
   desiredCount,
   taskCpu,
   taskMemory,
   description: `ECS infrastructure for Riftbound Online ${environment}`,
+});
+
+const apiGatewayStack = new ApiGatewayStack(app, `RiftboundApi-${environment}`, {
+  environment,
+  loadBalancerDnsName: ecsStack.loadBalancer.loadBalancerDnsName,
+  allowedOrigins: corsOrigins,
+  description: `Public API Gateway for Riftbound Online ${environment}`,
 });
 
 // Match Service Stack - One task per match
@@ -64,5 +77,6 @@ ecsStack.addDependency(networkingStack);
 ecsStack.addDependency(databaseStack);
 matchServiceStack.addDependency(networkingStack);
 matchServiceStack.addDependency(databaseStack);
+apiGatewayStack.addDependency(ecsStack);
 
 app.synth();
