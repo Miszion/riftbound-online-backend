@@ -12,7 +12,9 @@
     "test:watch": "jest --watch",
     "lint": "eslint src/",
     "format": "prettier --write src/",
-    "generate:cards": "node transformChampionDump.js"
+    "generate:cards": "node transformChampionDump.js",
+    "upload:cards": "ts-node scripts/uploadCardCatalog.ts",
+    "deploy:stacks": "npm run build && (cd cdk && npm install && ENVIRONMENT=${ENVIRONMENT:-dev} npx aws-cdk@latest deploy --all)"
   },
   "keywords": [
     "game",

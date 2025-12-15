@@ -127,7 +127,6 @@ GET    /health                       - Health check
 
 CloudWatch integration:
 - ECS logs → `/ecs/riftbound-{env}`
-- Lambda logs → `/aws/lambda/riftbound-{env}-*`
 - Metrics for CPU, memory, requests, errors
 
 View logs:
@@ -139,11 +138,10 @@ aws logs tail /ecs/riftbound-dev --follow
 
 Monthly (us-east-1):
 - Cognito: $0.50
-- Lambda: $0.20
 - ECS Fargate: $60-100
 - DynamoDB: $5-50
 - ALB: $16
-- **Total: ~$90-200/month**
+- **Total: ~$80-170/month**
 
 ## 🔄 Deployment Workflow
 
@@ -238,7 +236,6 @@ cp cdk/.env.example cdk/.env
 - **`CDK_README.md`** - Architecture and concepts
 - **`QUICKSTART.md`** - 5-minute setup guide
 - **`src/server.js`** - Game server code
-- **`lambda/*/index.js`** - Auth handlers
 
 ## 🎓 Learning Resources
 

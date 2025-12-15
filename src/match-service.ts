@@ -1,8 +1,9 @@
 import 'dotenv/config';
-import express, { Express, Request, Response } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import AWS from 'aws-sdk';
 import logger from './logger';
 import { RiftboundGameEngine, Card } from './game-engine';
+import { serializeGameState, serializePlayerState, buildOpponentView } from './game-state-serializer';
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
 import { WebSocketServer } from 'ws';
@@ -45,7 +46,21 @@ interface MatchConfig {
   createdAt: number;
 }
 
-// ============================================================================
+interface AuthedRequest extends Request {
+  userId?: string;
+}
+
+const requireUserHeader = (req: Request, res: Response, next: NextFunction) => {
+  const userId = req.header('x-user-id');
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized: missing x-user-id header' });
+    return;
+  }
+  (req as AuthedRequest).userId = userId;
+  next();
+};
+
+// ============================================================================ 
 // EXPRESS SERVER
 // ============================================================================
 
@@ -74,7 +89,15 @@ async function startApolloServer() {
   });
 
   await server.start();
-  app.use('/graphql', expressMiddleware(server));
+  app.use(
+    '/graphql',
+    requireUserHeader,
+    expressMiddleware(server, {
+      context: async ({ req }) => ({
+        userId: (req as AuthedRequest).userId
+      })
+    })
+  );
   return server;
 }
 
@@ -128,7 +151,7 @@ app.post('/matches/init', async (req: Request, res: Response): Promise<void> => 
       matchId,
       status: 'initialized',
       players: [player1, player2],
-      gameState: engine.getGameState()
+      gameState: serializeGameState(engine.getGameState())
     });
   } catch (error) {
     logger.error('[MATCH-INIT] Error:', error);
@@ -150,7 +173,7 @@ app.get('/matches/:matchId', (req: Request, res: Response): void => {
       return;
     }
 
-    const gameState = engine.getGameState();
+    const gameState = serializeGameState(engine.getGameState());
     res.json(gameState);
   } catch (error) {
     logger.error('[MATCH-GET] Error:', error);
@@ -178,23 +201,19 @@ app.get('/matches/:matchId/player/:playerId', (req: Request, res: Response): voi
       return;
     }
 
-    // Return player's view (can see opponent's board but not hand)
+    const rawState = engine.getGameState();
+    const currentPlayer = serializePlayerState(playerState, 'self');
+    const opponentSummary = buildOpponentView(rawState, playerId);
+
     res.json({
       matchId,
-      currentPlayer: playerState,
-      opponent: {
-        playerId: engine.getGameState().players.find((p) => p.playerId !== playerId)?.playerId,
-        health: engine.getGameState().players.find((p) => p.playerId !== playerId)?.health,
-        handSize: engine.getGameState().players.find((p) => p.playerId !== playerId)?.hand.length,
-        board: engine
-          .getGameState()
-          .players.find((p) => p.playerId !== playerId)?.board
-      },
+      currentPlayer,
+      opponent: opponentSummary,
       gameState: {
         matchId,
-        currentPhase: engine.getGameState().currentPhase,
-        turnNumber: engine.getGameState().turnNumber,
-        currentPlayerIndex: engine.getGameState().currentPlayerIndex,
+        currentPhase: rawState.currentPhase,
+        turnNumber: rawState.turnNumber,
+        currentPlayerIndex: rawState.currentPlayerIndex,
         canAct: engine.canPlayerAct(playerId)
       }
     });
@@ -229,12 +248,15 @@ app.post('/matches/:matchId/actions/play-card', async (req: Request, res: Respon
 
     await saveGameState(matchId, engine);
 
+    const rawState = engine.getGameState();
+    const spectatorState = serializeGameState(rawState);
+
     logger.info(`[MATCH] Player ${playerId} played card in match ${matchId}`);
 
     res.json({
       success: true,
-      gameState: engine.getGameState(),
-      currentPhase: engine.getGameState().currentPhase
+      gameState: spectatorState,
+      currentPhase: spectatorState.currentPhase
     });
   } catch (error: any) {
     logger.error('[PLAY-CARD] Error:', error);
@@ -267,11 +289,13 @@ app.post('/matches/:matchId/actions/attack', async (req: Request, res: Response)
 
     await saveGameState(matchId, engine);
 
+    const spectatorState = serializeGameState(engine.getGameState());
+
     logger.info(`[MATCH] Player ${playerId} declared attack in match ${matchId}`);
 
     res.json({
       success: true,
-      gameState: engine.getGameState()
+      gameState: spectatorState
     });
   } catch (error: any) {
     logger.error('[ATTACK] Error:', error);
@@ -304,12 +328,14 @@ app.post('/matches/:matchId/actions/next-phase', async (req: Request, res: Respo
 
     await saveGameState(matchId, engine);
 
+    const spectatorState = serializeGameState(engine.getGameState());
+
     logger.info(`[MATCH] Player ${playerId} advanced phase in match ${matchId}`);
 
     res.json({
       success: true,
-      currentPhase: engine.getGameState().currentPhase,
-      gameState: engine.getGameState()
+      currentPhase: spectatorState.currentPhase,
+      gameState: spectatorState
     });
   } catch (error: any) {
     logger.error('[NEXT-PHASE] Error:', error);
@@ -339,15 +365,18 @@ app.post('/matches/:matchId/result', async (req: Request, res: Response): Promis
       return;
     }
 
+    const rawState = engine.getGameState();
+    const spectatorState = serializeGameState(rawState);
+
     // Get final game state
     const matchResult = engine.getMatchResult() || {
       matchId,
       winner,
-      loser: engine.getGameState().players.find((p) => p.playerId !== winner)?.playerId,
-      reason: reason || 'health_depletion',
-      duration: Date.now() - engine.getGameState().timestamp,
-      turns: engine.getGameState().turnNumber,
-      moves: engine.getGameState().moveHistory
+      loser: rawState.players.find((p) => p.playerId !== winner)?.playerId,
+      reason: reason || 'victory_points',
+      duration: Date.now() - rawState.timestamp,
+      turns: rawState.turnNumber,
+      moves: rawState.moveHistory
     };
 
     // Save final state to DynamoDB
@@ -356,12 +385,15 @@ app.post('/matches/:matchId/result', async (req: Request, res: Response): Promis
         TableName: MATCH_TABLE,
         Item: {
           MatchId: matchId,
+          Players: rawState.players.map((p) => p.playerId),
           Winner: matchResult.winner,
           Loser: matchResult.loser,
           Reason: matchResult.reason,
           Duration: matchResult.duration,
           Turns: matchResult.turns,
           MoveCount: matchResult.moves.length,
+          Moves: matchResult.moves,
+          FinalState: spectatorState,
           CreatedAt: Date.now(),
           Status: 'completed'
         }
@@ -411,14 +443,17 @@ app.post('/matches/:matchId/concede', async (req: Request, res: Response): Promi
       return;
     }
 
+    const rawState = engine.getGameState();
+    const spectatorState = serializeGameState(rawState);
+
     const matchResult = engine.getMatchResult() || {
       matchId,
       winner: opponent.playerId,
       loser: playerId,
       reason: 'concede' as const,
-      duration: Date.now() - engine.getGameState().timestamp,
-      turns: engine.getGameState().turnNumber,
-      moves: engine.getGameState().moveHistory
+      duration: Date.now() - rawState.timestamp,
+      turns: rawState.turnNumber,
+      moves: rawState.moveHistory
     };
 
     // Save to DynamoDB
@@ -427,12 +462,15 @@ app.post('/matches/:matchId/concede', async (req: Request, res: Response): Promi
         TableName: MATCH_TABLE,
         Item: {
           MatchId: matchId,
+          Players: rawState.players.map((p) => p.playerId),
           Winner: matchResult.winner,
           Loser: matchResult.loser,
           Reason: matchResult.reason,
           Duration: matchResult.duration,
           Turns: matchResult.turns,
           MoveCount: matchResult.moves.length,
+          Moves: matchResult.moves,
+          FinalState: spectatorState,
           CreatedAt: Date.now(),
           Status: 'completed'
         }
@@ -511,6 +549,16 @@ async function startServer() {
           Mutation: mutationResolvers,
           Subscription: subscriptionResolvers,
         } as any,
+        onConnect: async (ctx) => {
+          const userId = (ctx.connectionParams as Record<string, string> | undefined)?.['x-user-id'];
+          if (!userId) {
+            throw new Error('Unauthorized');
+          }
+          (ctx.extra as any).userId = userId;
+        },
+        context: (ctx) => ({
+          userId: (ctx.extra as any).userId
+        })
       },
       wsServer
     );
@@ -548,7 +596,7 @@ startServer();
  */
 async function saveGameState(matchId: string, engine: RiftboundGameEngine): Promise<void> {
   try {
-    const gameState = engine.getGameState();
+    const gameState = serializeGameState(engine.getGameState());
     await dynamodb
       .put({
         TableName: STATE_TABLE,

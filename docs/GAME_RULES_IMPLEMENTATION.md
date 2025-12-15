@@ -440,47 +440,38 @@ channelRunes(playerId, count) {
 ### Implementation
 
 ```typescript
-applyDamage(target, damageAmount) {
-  if (target.type === 'PLAYER') {
-    target.health -= damageAmount;
-    
-    if (target.health <= 0) {
-      this.endGame(this.getOpponent(target.id), 'HEALTH_ZERO');
+private drawCards(player: PlayerState, count: number) {
+  for (let i = 0; i < count; i++) {
+    if (player.deck.length === 0) {
+      this.burnOut(player);
+      return;
+    }
+
+    const card = player.deck.shift();
+    if (card) {
+      player.hand.push(card);
     }
   }
 }
 
-drawCard(playerId) {
-  const player = this.getPlayer(playerId);
-  
-  if (player.deck.length === 0) {
-    // Burn Out: Cannot draw = loss
-    this.endGame(this.getOpponent(playerId), 'BURN_OUT');
-    return null;
-  }
-  
-  return player.deck.pop();
-}
-
-checkWinCondition() {
-  // Check each player for loss condition
-  this.players.forEach(player => {
-    if (player.health <= 0) {
-      this.endGame(
-        this.getOpponent(player.id), 
-        'HEALTH_ZERO'
-      );
-    }
+private burnOut(player: PlayerState) {
+  const opponent = this.getOtherPlayer(player);
+  this.gameState.scoreLog.push({
+    playerId: opponent.playerId,
+    amount: 0,
+    reason: 'decking',
+    sourceCardId: undefined,
+    timestamp: Date.now()
   });
+  this.endGame(opponent, player, 'burn_out');
 }
 ```
 
 **Win Condition Checks**:
-- ✅ Health damage tracking
-- ✅ Health ≤ 0 ends game
-- ✅ Deck depletion triggers burn out
-- ✅ No cards to draw = loss
-- ✅ Card-based win conditions (if any)
+- ✅ Victory Points tracked via score log
+- ✅ Burn Out when a player cannot draw
+- ✅ Burn Out result surfaced through `matchResult.reason`
+- ✅ Card-based alternate wins still respected
 
 ## Testing Checklist
 

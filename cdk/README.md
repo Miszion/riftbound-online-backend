@@ -367,12 +367,10 @@ curl -X POST {ALB_DNS_NAME}/api/matches \
 
 ### CloudWatch Logs
 - **ECS**: `/ecs/riftbound-{env}`
-- **Lambda**: `/aws/lambda/riftbound-{env}-*`
 
 ### CloudWatch Metrics
 - ECS CPU/Memory utilization
 - ECS task count
-- Lambda invocations and errors
 - ALB request count and latency
 - DynamoDB consumed capacity
 
@@ -380,9 +378,6 @@ curl -X POST {ALB_DNS_NAME}/api/matches \
 ```bash
 # ECS logs
 aws logs tail /ecs/riftbound-dev --follow
-
-# Lambda logs
-aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
 ```
 
 ## Cost Estimation
@@ -392,7 +387,6 @@ aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
 | Service | Cost | Notes |
 |---------|------|-------|
 | **Cognito** | $0.50 | Per 10,000 authentications |
-| **Lambda** | $0.20 | Per 1M requests + compute time |
 | **ECS Fargate** | $60-100 | Depends on CPU/memory and uptime |
 | **DynamoDB** | $5-50 | On-demand billing |
 | **ALB** | $16 | Plus $0.006 per LCU |
@@ -466,21 +460,6 @@ Error: Need to perform a one-time bootstrap of your environment
 **Solution:**
 ```bash
 cdk bootstrap aws://ACCOUNT-ID/us-east-1
-```
-
-### Lambda Code Not Found
-```
-Error: code object cannot be null
-```
-
-**Solution:** Ensure Lambda code directories exist:
-```bash
-mkdir -p ../lambda/sign_in
-mkdir -p ../lambda/sign_up
-mkdir -p ../lambda/refresh_token
-touch ../lambda/sign_in/index.js
-touch ../lambda/sign_up/index.js
-touch ../lambda/refresh_token/index.js
 ```
 
 ### Insufficient ECS Capacity

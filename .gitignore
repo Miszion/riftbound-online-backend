@@ -24,9 +24,6 @@ npm-debug.log
 yarn-error.log
 .pnpm-debug.log
 
-# Lambda builds
-lambda/*.zip
-
 # IDEs
 .vscode/
 .idea/
@@ -48,4 +45,4 @@ dist/
 build/
 *.js.map
 *.d.ts.map
-
+cdk/cdk.out/

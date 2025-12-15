@@ -177,18 +177,6 @@ Deploy order:
 
 ## Common Modifications
 
-### Add Custom Domain to API Gateway
-
-```typescript
-// In auth-stack.ts
-new apigateway.DomainName(this, 'DomainName', {
-  domainName: 'api.riftbound.example.com',
-  certificate: acm.Certificate.fromCertificateArn(...),
-  basePath: 'auth',
-  endpoint: api
-});
-```
-
 ### Enable HTTPS on ALB
 
 ```typescript
@@ -198,31 +186,6 @@ this.loadBalancer.addListener('HttpsListener', {
   protocol: elbv2.ApplicationProtocol.HTTPS,
   certificates: [acm.Certificate.fromCertificateArn(...)],
   defaultTargetGroups: [targetGroup]
-});
-```
-
-### Add Lambda Layer
-
-```typescript
-// In auth-stack.ts
-const layer = new lambda.LayerVersion(this, 'SharedLayer', {
-  code: lambda.Code.fromAsset('../lambda/layers/shared'),
-  compatibleRuntimes: [lambda.Runtime.NODEJS_18_X]
-});
-
-signInFunction.addLayers(layer);
-```
-
-### Enable CORS on API Gateway
-
-```typescript
-// In auth-stack.ts
-const api = new apigateway.RestApi(this, 'AuthApi', {
-  defaultCorsPreflightOptions: {
-    allowOrigins: apigateway.Cors.ALL_ORIGINS,
-    allowMethods: apigateway.Cors.ALL_METHODS,
-    allowHeaders: apigateway.Cors.DEFAULT_HEADERS
-  }
 });
 ```
 
@@ -285,11 +248,6 @@ const userPoolId = cdk.Fn.importValue('riftbound-userpool-id');
 ## Useful CDK Constructs
 
 ```typescript
-// AWS::Lambda
-new lambda.Function(...)
-new lambda.Code.fromAsset(path)
-new lambda.Runtime.NODEJS_18_X
-
 // AWS::DynamoDB
 new dynamodb.Table(...)
 new dynamodb.BillingMode.PAY_PER_REQUEST

@@ -8,7 +8,7 @@ Your Riftbound Online backend is now fully set up with **AWS CDK TypeScript**!
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| **Auth** | `cdk/src/auth-stack.ts` | Cognito + Lambda + API Gateway |
+| **Auth** | `cdk/src/auth-stack.ts` | Cognito user + identity pools |
 | **Database** | `cdk/src/database-stack.ts` | DynamoDB tables |
 | **Networking** | `cdk/src/networking-stack.ts` | VPC + subnets + security |
 | **ECS** | `cdk/src/ecs-stack.ts` | Game server + load balancer |
@@ -35,10 +35,7 @@ Your Riftbound Online backend is now fully set up with **AWS CDK TypeScript**!
 
 | File | Purpose |
 |------|---------|
-| `src/server.js` | Express game server |
-| `lambda/sign_in/index.js` | Auth Lambda handler |
-| `lambda/sign_up/index.js` | Registration handler |
-| `lambda/refresh_token/index.js` | Token refresh handler |
+| `src/server.js` | Express game server + auth routes |
 
 ## 🚀 Getting Started (3 Steps)
 
@@ -86,8 +83,7 @@ curl -X POST $API/sign-up \
 │  │  AUTHENTICATION              ECS CLUSTER      │ │
 │  │  ├── Cognito User Pool       ├── ALB         │ │
 │  │  ├── Identity Pool           ├── Fargate     │ │
-│  │  ├── Lambda Functions        ├── Auto-scale  │ │
-│  │  └── API Gateway             └── CloudWatch  │ │
+│  │  └── Express Auth Routes     ├── Auto-scale  │ │
 │  │                                               │ │
 │  └───────────────────┬──────────────────────────┘ │
 │                      │                             │
@@ -128,15 +124,6 @@ riftbound-online-backend/
 │   ├── server.js                ← Express app
 │   └── logger.js                ← Logging
 │
-├── lambda/                       ← Lambda Functions
-│   ├── sign_in/
-│   │   └── index.js
-│   ├── sign_up/
-│   │   └── index.js
-│   ├── refresh_token/
-│   │   └── index.js
-│   └── build.sh                 ← Build script
-│
 ├── Dockerfile                   ← Container
 ├── package.json                 ← App dependencies
 ├── .env.example                 ← Environment
@@ -152,7 +139,7 @@ riftbound-online-backend/
 ### ✅ Authentication
 - Cognito User Pool with email verification
 - Password policy enforcement (12 chars, upper, lower, number, symbol)
-- Lambda-based sign-up, sign-in, token refresh
+- Express-based sign-up, sign-in, token refresh routes
 - JWT tokens (ID, Access, Refresh)
 
 ### ✅ Game Server
@@ -178,7 +165,6 @@ riftbound-online-backend/
 ### ✅ Monitoring
 - CloudWatch logs integration
 - ECS Container Insights
-- Lambda logs
 - Application metrics
 
 ## 💡 Why CDK Over Terraform?
@@ -214,9 +200,6 @@ ENVIRONMENT=prod \
 ```bash
 # Real-time ECS logs
 aws logs tail /ecs/riftbound-dev --follow
-
-# Real-time Lambda logs
-aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
 ```
 
 ### Check Status

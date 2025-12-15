@@ -121,8 +121,8 @@ export interface PlayerBoard {
 export interface PlayerState {
   playerId: string;
   name: string;
-  health: number;
-  maxHealth: number;
+  victoryPoints: number;
+  victoryScore: number;
   mana: number;
   maxMana: number;
   deck: Card[];
@@ -184,6 +184,16 @@ export interface TemporaryEffect {
   };
 }
 
+export type ScoreReason = 'combat' | 'objective' | 'support' | 'decking' | 'concede' | 'timeout';
+
+export interface ScoreEvent {
+  playerId: string;
+  amount: number;
+  reason: ScoreReason;
+  sourceCardId?: string;
+  timestamp: number;
+}
+
 export enum GamePhase {
   BEGIN = 'begin',
   MAIN_1 = 'main_1',
@@ -211,6 +221,9 @@ export interface GameState {
   winner?: string;
   moveHistory: GameMove[];
   timestamp: number;
+  victoryScore: number;
+  scoreLog: ScoreEvent[];
+  endReason?: MatchResult['reason'];
 }
 
 export interface GameMove {
@@ -227,7 +240,7 @@ export interface MatchResult {
   matchId: string;
   winner: string;
   loser: string;
-  reason: 'health_depletion' | 'deck_empty' | 'concede' | 'timeout';
+  reason: 'victory_points' | 'burn_out' | 'concede' | 'timeout';
   duration: number;
   turns: number;
   moves: GameMove[];
@@ -241,7 +254,9 @@ export class RiftboundGameEngine {
   private gameState: GameState;
   private readonly MAX_HAND_SIZE = 7;
   private readonly INITIAL_HAND_SIZE = 4;
-  private readonly STARTING_HEALTH = 21;
+  private readonly VICTORY_SCORE = 8;
+  private readonly COMBAT_POINTS_PER_DAMAGE = 3;
+  private readonly SUPPORT_POINTS_PER_VALUE = 5;
   private readonly MIN_DECK_SIZE = 40;
   private readonly RUNE_DECK_SIZE = 12;
   private readonly RUNES_PER_TURN = 2;
@@ -261,7 +276,9 @@ export class RiftboundGameEngine {
       turnNumber: 1,
       status: GameStatus.SETUP,
       moveHistory: [],
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      victoryScore: this.VICTORY_SCORE,
+      scoreLog: []
     };
   }
 
@@ -273,8 +290,8 @@ export class RiftboundGameEngine {
     return {
       playerId,
       name: playerId,
-      health: this.STARTING_HEALTH,
-      maxHealth: this.STARTING_HEALTH,
+      victoryPoints: 0,
+      victoryScore: this.VICTORY_SCORE,
       mana: 0,
       maxMana: 0,
       deck: [],
@@ -663,16 +680,17 @@ export class RiftboundGameEngine {
       }
     }
 
-    player.health -= actualDamage;
-
-    // Check for lethal
-    if (player.health <= 0) {
-      this.endGame(this.getOtherPlayer(player), player, 'health_depletion');
+    const scoringPlayer =
+      controller ??
+      (this.isBoardCard(source) ? this.getPlayerByCard(source.instanceId) : this.getOtherPlayer(player));
+    if (actualDamage > 0) {
+      const pointsEarned = this.pointsFromCombat(actualDamage);
+      if (pointsEarned > 0) {
+        this.awardVictoryPoints(scoringPlayer, pointsEarned, 'combat', source.id);
+      }
     }
 
-    const controllingPlayer =
-      controller ?? (this.isBoardCard(source) ? this.getPlayerByCard(source.instanceId) : this.getCurrentPlayer());
-    this.triggerAbilities(source, 'damage', controllingPlayer, [player.playerId]);
+    this.triggerAbilities(source, 'damage', scoringPlayer, [player.playerId]);
   }
 
   /**
@@ -680,7 +698,46 @@ export class RiftboundGameEngine {
    */
   public healPlayer(playerId: string, amount: number): void {
     const player = this.getPlayerById(playerId);
-    player.health = Math.min(player.health + amount, player.maxHealth);
+    if (amount <= 0) return;
+    const supportPoints = Math.floor(amount / this.SUPPORT_POINTS_PER_VALUE);
+    if (supportPoints > 0) {
+      this.awardVictoryPoints(player, supportPoints, 'support');
+    }
+  }
+
+  private pointsFromCombat(amount: number): number {
+    if (amount <= 0) return 0;
+    if (amount < this.COMBAT_POINTS_PER_DAMAGE) {
+      return 1;
+    }
+    return Math.floor(amount / this.COMBAT_POINTS_PER_DAMAGE);
+  }
+
+  private awardVictoryPoints(
+    player: PlayerState,
+    amount: number,
+    reason: ScoreReason,
+    sourceCardId?: string
+  ): void {
+    if (amount <= 0 || this.gameState.status !== GameStatus.IN_PROGRESS) {
+      return;
+    }
+
+    const previous = player.victoryPoints;
+    player.victoryPoints = Math.min(player.victoryPoints + amount, player.victoryScore);
+
+    this.gameState.scoreLog.push({
+      playerId: player.playerId,
+      amount: player.victoryPoints - previous,
+      reason,
+      sourceCardId,
+      timestamp: Date.now()
+    });
+
+    if (player.victoryPoints >= player.victoryScore) {
+      const opponent = this.getOtherPlayer(player);
+      this.endGame(player, opponent, 'victory_points');
+    }
   }
 
   // ========================================================================
@@ -693,8 +750,7 @@ export class RiftboundGameEngine {
   private drawCards(player: PlayerState, count: number): void {
     for (let i = 0; i < count; i++) {
       if (player.deck.length === 0) {
-        // Mill the player (deck is empty)
-        this.endGame(this.getOtherPlayer(player), player, 'deck_empty');
+        this.burnOut(player);
         return;
       }
 
@@ -708,6 +764,18 @@ export class RiftboundGameEngine {
         }
       }
     }
+  }
+
+  private burnOut(player: PlayerState): void {
+    const opponent = this.getOtherPlayer(player);
+    this.gameState.scoreLog.push({
+      playerId: opponent.playerId,
+      amount: 0,
+      reason: 'decking',
+      sourceCardId: undefined,
+      timestamp: Date.now()
+    });
+    this.endGame(opponent, player, 'burn_out');
   }
 
   /**
@@ -1342,10 +1410,11 @@ export class RiftboundGameEngine {
   private endGame(
     winner: PlayerState,
     _loser: PlayerState,
-    _reason: 'health_depletion' | 'deck_empty' | 'concede' | 'timeout'
+    reason: MatchResult['reason']
   ): void {
     this.gameState.status = GameStatus.WINNER_DETERMINED;
     this.gameState.winner = winner.playerId;
+    this.gameState.endReason = reason;
   }
 
   // ========================================================================
@@ -1387,7 +1456,7 @@ export class RiftboundGameEngine {
       matchId: this.gameState.matchId,
       winner: winner.playerId,
       loser: loser.playerId,
-      reason: 'health_depletion',
+      reason: this.gameState.endReason ?? 'victory_points',
       duration: Date.now() - this.gameState.timestamp,
       turns: this.turnNumber,
       moves: this.gameState.moveHistory

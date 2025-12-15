@@ -29,8 +29,7 @@ That's it! Your backend is running.
 ### **AWS CDK Infrastructure** (`/cdk`)
 Complete infrastructure as code with:
 - ✅ Cognito authentication (sign-up, sign-in, token refresh)
-- ✅ Lambda functions for auth endpoints
-- ✅ API Gateway for REST API
+- ✅ Built-in Express auth endpoints
 - ✅ ECS Fargate for game server
 - ✅ DynamoDB for users and match history
 - ✅ VPC with NAT gateways and load balancing
@@ -43,12 +42,6 @@ Express.js server with:
 - Leaderboard system
 - DynamoDB integration
 
-### **Lambda Functions** (`/lambda`)
-Serverless authentication:
-- Sign-up handler
-- Sign-in handler
-- Token refresh handler
-
 ### **Docker** (`Dockerfile`)
 Container image for ECS deployment with health checks.
 
@@ -59,11 +52,9 @@ Container image for ECS deployment with health checks.
 │           AWS Cloud                         │
 ├─────────────────────────────────────────────┤
 │                                             │
-│  API Gateway ────────── Lambda Functions   │
-│                         (Auth)              │
+│  Cognito User Pool                          │
 │         │                                   │
-│         └──────────── Cognito              │
-│                      (User Pool)            │
+│         └──────────── Express Auth Routes   │
 │                                             │
 │  Application Load Balancer                  │
 │         │                                   │
@@ -162,9 +153,6 @@ curl -X POST $API_ENDPOINT/sign-in \
 ```bash
 # ECS logs
 aws logs tail /ecs/riftbound-dev --follow
-
-# Lambda logs
-aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
 ```
 
 ### Cleanup
@@ -181,7 +169,7 @@ riftbound-online-backend/
 ├── cdk/                          # AWS CDK Infrastructure
 │   ├── src/
 │   │   ├── index.ts             # Main app (defines stacks)
-│   │   ├── auth-stack.ts        # Cognito + Lambda
+│   │   ├── auth-stack.ts        # Cognito + Identity Pools
 │   │   ├── database-stack.ts    # DynamoDB tables
 │   │   ├── networking-stack.ts  # VPC and networking
 │   │   └── ecs-stack.ts         # ECS Fargate
@@ -196,14 +184,6 @@ riftbound-online-backend/
 ├── src/                          # Game Server
 │   ├── server.js                # Express server
 │   └── logger.js                # Winston logging
-│
-├── lambda/                       # Lambda Functions
-│   ├── sign_in/
-│   │   └── index.js
-│   ├── sign_up/
-│   │   └── index.js
-│   └── refresh_token/
-│       └── index.js
 │
 ├── Dockerfile                   # Container image
 ├── package.json                # Dependencies
@@ -241,14 +221,10 @@ aws logs describe-log-groups
 
 # Follow ECS logs
 aws logs tail /ecs/riftbound-dev --follow
-
-# Follow Lambda logs
-aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
 ```
 
 ### CloudWatch Metrics
 - ECS CPU/Memory utilization
-- Lambda invocations and errors
 - ALB request count and latency
 - DynamoDB consumed capacity
 
@@ -259,11 +235,10 @@ Monthly costs (approximate, US East 1):
 | Service | Cost | Notes |
 |---------|------|-------|
 | Cognito | $0.50 | Per 10k authentications |
-| Lambda | $0.20 | Per 1M requests |
 | ECS Fargate | $60-100 | Depends on CPU/memory |
 | DynamoDB | $5-50 | On-demand billing |
 | ALB | $16 | Plus $0.006 per LCU |
-| **Total** | ~$90-200 | Dev environment |
+| **Total** | ~$80-170 | Dev environment |
 
 See [cdk/README.md](cdk/README.md) for production cost estimates.
 

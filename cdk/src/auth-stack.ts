@@ -1,9 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface AuthStackProps extends cdk.StackProps {
@@ -14,7 +11,6 @@ export class AuthStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly identityPool: cognito.CfnIdentityPool;
-  public readonly apiEndpoint: string;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
     super(scope, id, props);
@@ -120,97 +116,6 @@ export class AuthStack extends cdk.Stack {
       },
     });
 
-    // Create Lambda execution role
-    const lambdaRole = new iam.Role(this, 'LambdaExecutionRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-      ],
-    });
-
-    // Add Cognito permissions to Lambda role
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          'cognito-idp:AdminInitiateAuth',
-          'cognito-idp:SignUp',
-          'cognito-idp:AdminConfirmSignUp',
-          'cognito-idp:AdminGetUser',
-          'cognito-idp:AdminUserGlobalSignOut',
-          'cognito-idp:InitiateAuth',
-        ],
-        resources: [this.userPool.userPoolArn],
-      })
-    );
-
-    // Create Lambda functions
-    const signInFunction = new lambda.Function(this, 'SignInFunction', {
-      functionName: `riftbound-${props.environment}-sign-in`,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'dist/index.handler',
-      code: lambda.Code.fromAsset('../lambda/sign_in'),
-      timeout: cdk.Duration.seconds(30),
-      role: lambdaRole,
-      environment: {
-        COGNITO_USER_POOL_ID: this.userPool.userPoolId,
-        COGNITO_CLIENT_ID: this.userPoolClient.userPoolClientId,
-      },
-      logRetention: logs.RetentionDays.ONE_WEEK,
-    });
-
-    const signUpFunction = new lambda.Function(this, 'SignUpFunction', {
-      functionName: `riftbound-${props.environment}-sign-up`,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'dist/index.handler',
-      code: lambda.Code.fromAsset('../lambda/sign_up'),
-      timeout: cdk.Duration.seconds(30),
-      role: lambdaRole,
-      environment: {
-        COGNITO_USER_POOL_ID: this.userPool.userPoolId,
-        COGNITO_CLIENT_ID: this.userPoolClient.userPoolClientId,
-      },
-      logRetention: logs.RetentionDays.ONE_WEEK,
-    });
-
-    const refreshTokenFunction = new lambda.Function(this, 'RefreshTokenFunction', {
-      functionName: `riftbound-${props.environment}-refresh-token`,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'dist/index.handler',
-      code: lambda.Code.fromAsset('../lambda/refresh_token'),
-      timeout: cdk.Duration.seconds(30),
-      role: lambdaRole,
-      environment: {
-        COGNITO_USER_POOL_ID: this.userPool.userPoolId,
-        COGNITO_CLIENT_ID: this.userPoolClient.userPoolClientId,
-      },
-      logRetention: logs.RetentionDays.ONE_WEEK,
-    });
-
-    // Create API Gateway
-    const api = new apigateway.RestApi(this, 'AuthApi', {
-      restApiName: `riftbound-${props.environment}-auth-api`,
-      description: 'Authentication API for Riftbound Online',
-      defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: apigateway.Cors.ALL_METHODS,
-      },
-    });
-
-    // Sign-in endpoint
-    const signInResource = api.root.addResource('sign-in');
-    signInResource.addMethod('POST', new apigateway.LambdaIntegration(signInFunction));
-
-    // Sign-up endpoint
-    const signUpResource = api.root.addResource('sign-up');
-    signUpResource.addMethod('POST', new apigateway.LambdaIntegration(signUpFunction));
-
-    // Refresh token endpoint
-    const refreshTokenResource = api.root.addResource('refresh-token');
-    refreshTokenResource.addMethod('POST', new apigateway.LambdaIntegration(refreshTokenFunction));
-
-    this.apiEndpoint = api.url;
-
     // Output values
     new cdk.CfnOutput(this, 'UserPoolId', {
       value: this.userPool.userPoolId,
@@ -226,15 +131,9 @@ export class AuthStack extends cdk.Stack {
       value: this.userPoolClient.userPoolClientId,
       exportName: `riftbound-${props.environment}-client-id`,
     });
-
     new cdk.CfnOutput(this, 'IdentityPoolId', {
       value: this.identityPool.ref,
       exportName: `riftbound-${props.environment}-identity-pool-id`,
-    });
-
-    new cdk.CfnOutput(this, 'ApiEndpoint', {
-      value: this.apiEndpoint,
-      exportName: `riftbound-${props.environment}-auth-api-endpoint`,
     });
   }
 }

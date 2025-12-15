@@ -178,9 +178,6 @@ ENVIRONMENT=dev \
 # Real-time ECS logs
 aws logs tail /ecs/riftbound-dev --follow
 
-# Real-time Lambda logs
-aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
-
 # Query logs
 aws logs filter-log-events \
   --log-group-name /ecs/riftbound-dev \
@@ -210,17 +207,6 @@ ENVIRONMENT=dev \
 ### "Need to perform a one-time bootstrap"
 ```bash
 cdk bootstrap aws://ACCOUNT-ID/us-east-1
-```
-
-### "Lambda code not found"
-```bash
-# Ensure lambda directories exist
-mkdir -p ../lambda/sign_in
-mkdir -p ../lambda/sign_up
-mkdir -p ../lambda/refresh_token
-
-# Create placeholder index.js files
-touch ../lambda/sign_in/index.js
 ```
 
 ### "Stack creation failed"

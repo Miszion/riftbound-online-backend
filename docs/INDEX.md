@@ -30,7 +30,6 @@ Welcome to the Riftbound Online Backend documentation. This is your central hub 
 
 #### 📦 Source Code Organization
 - **[Source Code README](./src/README.md)** - Source structure & components
-- **[Lambda Functions README](./lambda/README.md)** - Lambda function documentation
 
 #### 📋 Project Documentation
 - **[README](./README.md)** - Main project overview
@@ -62,7 +61,6 @@ Welcome to the Riftbound Online Backend documentation. This is your central hub 
 #### Integrate Services
 1. Read [Infrastructure Overview](./INFRASTRUCTURE_OVERVIEW.md)
 2. Review [Match Service Integration](./MATCH_SERVICE_INTEGRATION.md)
-3. Check [Lambda Functions README](./lambda/README.md)
 
 #### Understand Game Rules
 1. Start with [Rules Summary](./docs/RULES_SUMMARY.md)
@@ -92,7 +90,6 @@ npm run deploy:match-service
 - Game Logic: `src/game-engine.ts`
 - Match Service: `src/match-service.ts`
 - Infrastructure: `cdk/src/`
-- Lambda Functions: `lambda/`
 
 ---
 
@@ -129,7 +126,6 @@ All documentation is in Markdown format and located in:
 - Root directory: Project-level docs
 - `docs/`: Game rules and specifications
 - `cdk/`: Infrastructure documentation
-- `src/`, `lambda/`: Component-specific READMEs
 
 When updating documentation, maintain consistent formatting and update this index accordingly.
 

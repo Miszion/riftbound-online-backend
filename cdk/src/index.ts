@@ -8,7 +8,9 @@ import { MatchServiceStack } from './match-service-stack';
 const app = new cdk.App();
 
 const environment = process.env.ENVIRONMENT || 'dev';
-const containerImage = process.env.CONTAINER_IMAGE || 'nginx:latest';
+const containerImage = process.env.CONTAINER_IMAGE;
+const matchServiceImage =
+  process.env.MATCH_SERVICE_IMAGE || containerImage || 'nginx:latest';
 const desiredCount = parseInt(process.env.DESIRED_COUNT || '2');
 const taskCpu = process.env.TASK_CPU || '1024';
 const taskMemory = process.env.TASK_MEMORY || '2048';
@@ -24,7 +26,7 @@ const databaseStack = new DatabaseStack(app, `RiftboundDatabase-${environment}`,
   description: `Database infrastructure for Riftbound Online ${environment}`,
 });
 
-const authStack = new AuthStack(app, `RiftboundAuth-${environment}`, {
+new AuthStack(app, `RiftboundAuth-${environment}`, {
   environment,
   description: `Authentication infrastructure for Riftbound Online ${environment}`,
 });
@@ -35,6 +37,8 @@ const ecsStack = new EcsStack(app, `RiftboundEcs-${environment}`, {
   ecsSecurityGroup: networkingStack.ecsSecurityGroup,
   usersTable: databaseStack.usersTable,
   matchHistoryTable: databaseStack.matchHistoryTable,
+  decklistsTable: databaseStack.decklistsTable,
+  matchmakingQueueTable: databaseStack.matchmakingQueueTable,
   containerImage,
   desiredCount,
   taskCpu,
@@ -50,7 +54,7 @@ const matchServiceStack = new MatchServiceStack(
     vpc: networkingStack.vpc,
     matchTableArn: databaseStack.matchHistoryTable.tableArn,
     stateTableArn: databaseStack.matchHistoryTable.tableArn,
-    containerImage,
+    containerImage: matchServiceImage,
     description: `Match Service infrastructure for Riftbound Online ${environment}`
   }
 );

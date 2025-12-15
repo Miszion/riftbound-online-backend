@@ -10,6 +10,8 @@ export class DatabaseStack extends cdk.Stack {
   public readonly usersTable: dynamodb.Table;
   public readonly matchHistoryTable: dynamodb.Table;
   public readonly cardCatalogTable: dynamodb.Table;
+  public readonly decklistsTable: dynamodb.Table;
+  public readonly matchmakingQueueTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DatabaseStackProps) {
     super(scope, id, props);
@@ -119,6 +121,48 @@ export class DatabaseStack extends cdk.Stack {
       },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+
+    // Decklists table
+    this.decklistsTable = new dynamodb.Table(this, 'DecklistsTable', {
+      tableName: `riftbound-${props.environment}-decklists`,
+      partitionKey: {
+        name: 'UserId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'DeckId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.decklistsTable.addGlobalSecondaryIndex({
+      indexName: 'DeckIdIndex',
+      partitionKey: {
+        name: 'DeckId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Matchmaking queue table
+    this.matchmakingQueueTable = new dynamodb.Table(this, 'MatchmakingQueueTable', {
+      tableName: `riftbound-${props.environment}-matchmaking-queue`,
+      partitionKey: {
+        name: 'Mode',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'UserId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      timeToLiveAttribute: 'ExpiresAt',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
     
     // Outputs
     new cdk.CfnOutput(this, 'UsersTableName', {
@@ -134,6 +178,16 @@ export class DatabaseStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CardCatalogTableName', {
       value: this.cardCatalogTable.tableName,
       exportName: `riftbound-${props.environment}-card-catalog-table`,
+    });
+
+    new cdk.CfnOutput(this, 'DecklistsTableName', {
+      value: this.decklistsTable.tableName,
+      exportName: `riftbound-${props.environment}-decklists-table`,
+    });
+
+    new cdk.CfnOutput(this, 'MatchmakingQueueTableName', {
+      value: this.matchmakingQueueTable.tableName,
+      exportName: `riftbound-${props.environment}-matchmaking-queue-table`,
     });
   }
 }

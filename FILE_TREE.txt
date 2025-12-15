@@ -33,15 +33,6 @@ riftbound-online-backend/
 │   │   └── GET  /api/leaderboard             Top players
 │   └── logger.js                             Winston logging (~20 lines)
 │
-├── 📂 lambda/                                 Lambda Functions (Node.js)
-│   ├── 📂 sign_in/
-│   │   └── index.js                          Cognito sign-in handler (~70 lines)
-│   ├── 📂 sign_up/
-│   │   └── index.js                          User registration handler (~80 lines)
-│   ├── 📂 refresh_token/
-│   │   └── index.js                          Token refresh handler (~60 lines)
-│   └── build.sh                              Build script for Lambda packages
-│
 ├── 🐳 Dockerfile                             Container image (Node 18 + Alpine)
 │
 ├── 📦 package.json                           App dependencies (Express, AWS SDK, etc)
@@ -74,9 +65,8 @@ Infrastructure:
   • Multi-AZ VPC networking
 
 Application:
-  • Express.js game server
-  • 3 Lambda auth handlers
-  • 6 REST API endpoints
+  • Express.js game server (REST + GraphQL)
+  • Built-in auth endpoints (no Lambda)
   • Winston logging
 
 Documentation:

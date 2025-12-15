@@ -47,11 +47,6 @@ src/
 │                         - DynamoDB integration
 └── logger.js             # Winston logging
 
-lambda/
-├── sign_in/index.js      # Cognito sign-in handler
-├── sign_up/index.js      # User registration handler
-├── refresh_token/index.js # JWT token refresh handler
-└── build.sh              # Lambda packaging script
 ```
 
 ### Configuration & Documentation
@@ -77,7 +72,7 @@ Root Directory:
 ### 1. **Authentication Stack**
 - ✅ Cognito User Pool (sign-up, sign-in, MFA)
 - ✅ Cognito Identity Pool (AWS SDK credentials)
-- ✅ 3 Lambda Functions (sign-in, sign-up, refresh-token)
+- ✅ Express-based auth endpoints (sign-in, sign-up, refresh-token)
 - ✅ API Gateway REST API with 3 endpoints
 - ✅ JWT token-based security
 
@@ -234,7 +229,6 @@ curl -X POST $API_ENDPOINT/sign-in \
 │                                                        │
 │  CloudWatch Logs & Metrics                           │
 │  ├── /ecs/riftbound-dev                              │
-│  ├── /aws/lambda/riftbound-dev-*                     │
 │  └── ECS metrics, ALB metrics, DynamoDB metrics      │
 │                                                        │
 └────────────────────────────────────────────────────────┘
@@ -247,7 +241,7 @@ curl -X POST $API_ENDPOINT/sign-in \
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | **Infrastructure** | AWS CDK (TypeScript) | IaC management |
-| **Authentication** | AWS Cognito + Lambda | User auth & tokens |
+| **Authentication** | AWS Cognito + Express | User auth & tokens |
 | **Game Server** | Node.js + Express | Game logic & API |
 | **Database** | AWS DynamoDB | User & match data |
 | **Compute** | AWS ECS Fargate | Containerized server |
@@ -362,9 +356,6 @@ cd cdk
 ```bash
 # Real-time ECS logs
 aws logs tail /ecs/riftbound-dev --follow
-
-# Real-time Lambda logs
-aws logs tail /aws/lambda/riftbound-dev-sign-in --follow
 ```
 
 ### Check Status
@@ -503,12 +494,6 @@ riftbound-online-backend/
 ├── src/                              ← Game Server (Node.js)
 │   ├── server.js                    (Express app - 150 lines)
 │   └── logger.js                    (Logging - 20 lines)
-│
-├── lambda/                           ← Lambda Functions
-│   ├── sign_in/index.js             (70 lines)
-│   ├── sign_up/index.js             (80 lines)
-│   ├── refresh_token/index.js       (60 lines)
-│   └── build.sh                     (Build script)
 │
 ├── Dockerfile                        ← Container image
 ├── package.json                      ← App dependencies

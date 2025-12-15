@@ -5,6 +5,7 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as path from 'path';
 import { Construct } from 'constructs';
 
 export interface EcsStackProps extends cdk.StackProps {
@@ -14,7 +15,9 @@ export interface EcsStackProps extends cdk.StackProps {
   readonly ecsSecurityGroup: ec2.SecurityGroup;
   readonly usersTable: dynamodb.Table;
   readonly matchHistoryTable: dynamodb.Table;
-  readonly containerImage: string;
+  readonly decklistsTable: dynamodb.Table;
+  readonly matchmakingQueueTable: dynamodb.Table;
+  readonly containerImage?: string;
   readonly desiredCount?: number;
   readonly taskCpu?: string;
   readonly taskMemory?: string;
@@ -54,6 +57,8 @@ export class EcsStack extends cdk.Stack {
     // Add DynamoDB permissions
     props.usersTable.grantReadWriteData(taskRole);
     props.matchHistoryTable.grantReadWriteData(taskRole);
+    props.decklistsTable.grantReadWriteData(taskRole);
+    props.matchmakingQueueTable.grantReadWriteData(taskRole);
 
     // Create Task Execution Role
     const executionRole = new iam.Role(this, 'ExecutionRole', {
@@ -75,9 +80,13 @@ export class EcsStack extends cdk.Stack {
       executionRole,
     });
 
+    const containerImage = props.containerImage
+      ? ecs.ContainerImage.fromRegistry(props.containerImage)
+      : ecs.ContainerImage.fromAsset(path.resolve(__dirname, '..', '..'));
+
     // Add container to task definition
     const container = taskDefinition.addContainer('AppContainer', {
-      image: ecs.ContainerImage.fromRegistry(props.containerImage),
+      image: containerImage,
       logging: ecs.LogDriver.awsLogs({
         streamPrefix: 'ecs',
         logGroup: logGroup,
@@ -86,6 +95,8 @@ export class EcsStack extends cdk.Stack {
         ENVIRONMENT: props.environment,
         USERS_TABLE: props.usersTable.tableName,
         MATCH_HISTORY_TABLE: props.matchHistoryTable.tableName,
+        DECKLISTS_TABLE: props.decklistsTable.tableName,
+        MATCHMAKING_QUEUE_TABLE: props.matchmakingQueueTable.tableName,
         AWS_REGION: this.region,
       },
       portMappings: [

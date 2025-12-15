@@ -4,7 +4,6 @@
 # Compiles TypeScript for:
 # - Main server (src/)
 # - Match service (src/)
-# - Lambda functions (lambda/)
 # - CDK infrastructure (cdk/)
 
 set -e
@@ -32,43 +31,6 @@ if [ -d "dist" ]; then
 else
     echo "${RED}✗ Failed to compile server${NC}"
     exit 1
-fi
-
-echo ""
-
-# ============================================================================
-# BUILD LAMBDA FUNCTIONS
-# ============================================================================
-
-echo "${YELLOW}Building Lambda functions...${NC}"
-
-if [ -d "lambda" ]; then
-    cd lambda
-    
-    for service in sign_in sign_up refresh_token; do
-        if [ -d "$service" ]; then
-            echo "  Compiling lambda/$service..."
-            cd $service
-            npm install > /dev/null 2>&1
-            npm run build > /dev/null 2>&1
-            cd ..
-            echo "  ${GREEN}✓${NC} lambda/$service compiled"
-        fi
-    done
-    
-    echo "${YELLOW}Creating Lambda deployment packages...${NC}"
-    bash build.sh
-    
-    if ls *.zip 1> /dev/null 2>&1; then
-        echo "${GREEN}✓ Lambda packages created${NC}"
-        ls -lh *.zip
-    else
-        echo "${YELLOW}⚠ Lambda packages may not have been created (check build.sh)${NC}"
-    fi
-    
-    cd ..
-else
-    echo "${YELLOW}⚠ Lambda directory not found, skipping Lambda build${NC}"
 fi
 
 echo ""
@@ -131,8 +93,6 @@ echo "${GREEN}✅ Build complete!${NC}"
 echo ""
 echo "Compiled files:"
 echo "  - Main server & match service: dist/"
-echo "  - Lambda functions: lambda/*/dist/"
-echo "  - Lambda packages: lambda/*.zip"
 echo "  - CDK: cdk/cdk.out/"
 echo "  - Docker image: $DOCKER_IMAGE"
 echo ""

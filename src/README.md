@@ -151,6 +151,8 @@ AWS_REGION=us-east-1
 # DynamoDB Tables
 USERS_TABLE=riftbound-online-users-dev
 MATCH_HISTORY_TABLE=riftbound-online-match-history-dev
+DECKLISTS_TABLE=riftbound-online-decklists-dev
+MATCHMAKING_QUEUE_TABLE=riftbound-online-matchmaking-queue-dev
 ```
 
 ## Configuration

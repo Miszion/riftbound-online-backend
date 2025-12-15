@@ -39,12 +39,23 @@ export const typeDefs = `#graphql
   # ============================================================================
   type Card {
     cardId: String!
+    instanceId: ID
     name: String!
-    cost: Int!
-    power: Int!
-    toughness: Int!
-    abilities: [String!]
     type: String!
+    rarity: String
+    cost: Int
+    power: Int
+    toughness: Int
+    currentToughness: Int
+    keywords: [String!]
+    tags: [String!]
+    abilities: [String!]
+    text: String
+    assets: CardAssetInfo
+    isTapped: Boolean
+    summoned: Boolean
+    counters: JSON
+    activationState: CardActivationStateEntry
   }
 
   # ============================================================================
@@ -120,17 +131,150 @@ export const typeDefs = `#graphql
     isStateful: Boolean!
     active: Boolean!
     lastChangedAt: DateTime
+    history: [ActivationHistoryEntry!]!
+  }
+
+  type ActivationHistoryEntry {
+    at: DateTime
+    reason: String!
+    active: Boolean!
+  }
+
+  type DeckCard {
+    cardId: ID
+    slug: String
+    quantity: Int!
+  }
+
+  type Decklist {
+    deckId: ID!
+    userId: ID!
+    name: String!
+    description: String
+    heroSlug: String
+    format: String
+    tags: [String!]
+    isPublic: Boolean!
+    cardCount: Int!
+    cards: [DeckCard!]!
+    runeDeck: [DeckCard!]
+    createdAt: DateTime
+    updatedAt: DateTime
+  }
+
+  enum MatchMode {
+    ranked
+    free
+  }
+
+  type MatchmakingParticipant {
+    userId: ID!
+    mmr: Int!
+    deckId: ID
+  }
+
+  type MatchmakingResult {
+    mode: MatchMode!
+    queued: Boolean!
+    matchFound: Boolean!
+    matchId: ID
+    opponentId: ID
+    mmr: Int!
+    estimatedWaitSeconds: Int!
+  }
+
+  type MatchmakingStatus {
+    mode: MatchMode!
+    state: String!
+    queued: Boolean!
+    mmr: Int
+    queuedAt: DateTime
+    estimatedWaitSeconds: Int
+    matchId: ID
+    opponentId: ID
+  }
+
+  type MatchReplay {
+    matchId: ID!
+    players: [ID!]!
+    winner: ID
+    loser: ID
+    duration: Int
+    turns: Int
+    moves: [JSON!]
+    finalState: JSON
+    createdAt: DateTime
+  }
+
+  type RecentMatchSummary {
+    matchId: ID!
+    players: [ID!]
+    winner: ID
+    loser: ID
+    duration: Int
+    turns: Int
+    createdAt: DateTime
+  }
+
+  type RuneCardState {
+    runeId: ID!
+    name: String!
+    domain: String
+    energyValue: Int
+    powerValue: Int
+  }
+
+  type PlayerBoardState {
+    creatures: [Card!]!
+    artifacts: [Card!]!
+    enchantments: [Card!]!
+  }
+
+  type ResourcePoolState {
+    energy: Int!
+    universalPower: Int!
+    power: JSON!
+  }
+
+  type TemporaryEffectState {
+    id: ID!
+    affectedCards: [ID!]
+    affectedPlayer: ID
+    duration: Int!
+    effect: TemporaryEffectEffect!
+  }
+
+  type TemporaryEffectEffect {
+    type: String!
+    value: Int
   }
 
   type PlayerState {
     playerId: ID!
-    health: Int!
-    maxHealth: Int!
+    name: String!
+    victoryPoints: Int!
+    victoryScore: Int!
     mana: Int!
     maxMana: Int!
+    handSize: Int!
+    deckCount: Int!
+    runeDeckSize: Int!
     hand: [Card!]!
-    board: [Card!]!
+    board: PlayerBoardState!
     graveyard: [Card!]!
+    exile: [Card!]!
+    channeledRunes: [RuneCardState!]!
+    runeDeck: [RuneCardState!]!
+    resources: ResourcePoolState!
+    temporaryEffects: [TemporaryEffectState!]!
+  }
+
+  type ScoreEvent {
+    playerId: ID!
+    amount: Int!
+    reason: String!
+    sourceCardId: String
+    timestamp: DateTime!
   }
 
   type GameState {
@@ -140,8 +284,12 @@ export const typeDefs = `#graphql
     turnNumber: Int!
     currentPlayerIndex: Int!
     status: String!
+    winner: ID
     moveHistory: [JSON!]
     timestamp: DateTime!
+    victoryScore: Int!
+    scoreLog: [ScoreEvent!]!
+    endReason: String
   }
 
   type MatchResult {
@@ -163,9 +311,10 @@ export const typeDefs = `#graphql
 
   type OpponentView {
     playerId: ID
-    health: Int
+    victoryPoints: Int
+    victoryScore: Int
     handSize: Int
-    board: [Card!]
+    board: PlayerBoardState
   }
 
   type GameStateView {
@@ -207,6 +356,17 @@ export const typeDefs = `#graphql
     cardBySlug(slug: String!): CatalogCard
     cardImageManifest: [CardImageEntry!]!
     cardActivationStates: [CardActivationStateEntry!]!
+
+    # Deckbuilder
+    decklists(userId: ID!): [Decklist!]!
+    decklist(deckId: ID!): Decklist
+
+    # Matchmaking
+    matchmakingStatus(userId: ID!, mode: MatchMode!): MatchmakingStatus!
+
+    # Spectator / Replay
+    matchReplay(matchId: ID!): MatchReplay
+    recentMatches(limit: Int): [RecentMatchSummary!]!
   }
 
   input CardCatalogFilter {
@@ -215,6 +375,31 @@ export const typeDefs = `#graphql
     domain: String
     rarity: String
     limit: Int
+  }
+
+  input DeckCardInput {
+    cardId: ID
+    slug: String
+    quantity: Int!
+  }
+
+  input DecklistInput {
+    deckId: ID
+    userId: ID!
+    name: String!
+    description: String
+    heroSlug: String
+    format: String
+    tags: [String!]
+    isPublic: Boolean
+    cards: [DeckCardInput!]!
+    runeDeck: [DeckCardInput!]
+  }
+
+  input MatchmakingQueueInput {
+    userId: ID!
+    mode: MatchMode!
+    deckId: ID
   }
 
   # ============================================================================
@@ -267,6 +452,14 @@ export const typeDefs = `#graphql
       matchId: ID!
       playerId: ID!
     ): MatchResultResponse!
+
+    # Deckbuilding
+    saveDecklist(input: DecklistInput!): Decklist!
+    deleteDecklist(userId: ID!, deckId: ID!): Boolean!
+
+    # Matchmaking
+    joinMatchmakingQueue(input: MatchmakingQueueInput!): MatchmakingResult!
+    leaveMatchmakingQueue(userId: ID!, mode: MatchMode!): Boolean!
   }
 
   # ============================================================================

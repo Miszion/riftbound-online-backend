@@ -131,18 +131,18 @@ Six domains, each with color and symbol:
 ### Damage (Rule 404+)
 - **Deal**: Assign damage to units or players
 - **Unit Damage**: Reduces toughness; unit dies when toughness reaches 0
-- **Player Damage**: Reduces health total
+- **Player Damage**: Converts into Victory Points for the attacker (combat scoring), not health loss
 - **Damage Source**: Card or effect creating the damage
 
 ## Win Conditions (Rule 450+)
 
 ### Standard Win Conditions
-- Reduce opponent health to 0
+- Reach the Victory Score (8 points) by scoring Battlefields (Hold/Conquer) or triggered objective effects
 - Opponent cannot draw cards (deck empty + burn out)
 - Alternative win conditions on specific cards
 
 ### Loss Conditions
-- Health reaches 0
+- Opponent reaches Victory Score first
 - Cannot draw when required (Burn Out)
 - Specific card effects
 
@@ -188,8 +188,8 @@ Six domains, each with color and symbol:
 - Cumulative damage marker tracking
 
 ### Healing
-- Restore health to players/units
-- Cannot exceed maximum health
+- Restore toughness to units; player-targeted healing represents recovery that can award support points
+- Cannot exceed maximum toughness when restoring units
 - Remove damage markers when healing
 
 ## Game Concepts

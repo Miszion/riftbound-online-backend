@@ -88,11 +88,6 @@ riftbound-online-backend/
 │   ├── server.js                       ← Express app
 │   └── logger.js                       ← Logging
 │
-├── lambda/                             ← Lambda Functions
-│   ├── sign_in/index.js               ← Sign-in handler
-│   ├── sign_up/index.js               ← Sign-up handler
-│   └── refresh_token/index.js         ← Token refresh
-│
 └── Dockerfile                          ← Container image
 ```
 
