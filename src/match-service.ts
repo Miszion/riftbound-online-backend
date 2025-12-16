@@ -265,14 +265,82 @@ app.post('/matches/:matchId/actions/play-card', async (req: Request, res: Respon
 });
 
 /**
+ * Select a battlefield during setup
+ * POST /matches/:matchId/actions/select-battlefield
+ * Body: { playerId, battlefieldId }
+ */
+app.post('/matches/:matchId/actions/select-battlefield', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { matchId } = req.params;
+    const { playerId, battlefieldId } = req.body;
+
+    const engine = activeGames.get(matchId);
+    if (!engine) {
+      res.status(404).json({ error: 'Match not found' });
+      return;
+    }
+
+    engine.selectBattlefield(playerId, battlefieldId);
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info(
+      `[MATCH] Player ${playerId} selected battlefield ${battlefieldId} for match ${matchId}`
+    );
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    logger.error('[BATTLEFIELD-SELECT] Error:', error);
+    res.status(400).json({ error: error.message || 'Failed to select battlefield' });
+  }
+});
+
+/**
+ * Submit mulligan choices
+ * POST /matches/:matchId/actions/mulligan
+ * Body: { playerId, indices }
+ */
+app.post('/matches/:matchId/actions/mulligan', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { matchId } = req.params;
+    const { playerId, indices } = req.body;
+
+    const engine = activeGames.get(matchId);
+    if (!engine) {
+      res.status(404).json({ error: 'Match not found' });
+      return;
+    }
+
+    engine.submitMulligan(playerId, Array.isArray(indices) ? indices : []);
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info(`[MATCH] Player ${playerId} submitted mulligan for match ${matchId}`);
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    logger.error('[MULLIGAN] Error:', error);
+    res.status(400).json({ error: error.message || 'Failed to submit mulligan' });
+  }
+});
+
+/**
  * Attack with a creature
  * POST /matches/:matchId/actions/attack
- * Body: { playerId, creatureInstanceId, defenderId? }
+ * Body: { playerId, creatureInstanceId, destinationId }
  */
 app.post('/matches/:matchId/actions/attack', async (req: Request, res: Response): Promise<void> => {
   try {
     const { matchId } = req.params;
-    const { playerId, creatureInstanceId, defenderId } = req.body;
+    const { playerId, creatureInstanceId, destinationId } = req.body;
 
     const engine = activeGames.get(matchId);
     if (!engine) {
@@ -285,7 +353,16 @@ app.post('/matches/:matchId/actions/attack', async (req: Request, res: Response)
       return;
     }
 
-    engine.declareAttacker(playerId, creatureInstanceId, defenderId);
+    if (!destinationId) {
+      res.status(400).json({ error: 'Destination required' });
+      return;
+    }
+    if (destinationId === 'base') {
+      res.status(400).json({ error: 'Use move endpoint to return to base' });
+      return;
+    }
+
+    engine.moveUnit(playerId, creatureInstanceId, destinationId);
 
     await saveGameState(matchId, engine);
 
@@ -301,7 +378,46 @@ app.post('/matches/:matchId/actions/attack', async (req: Request, res: Response)
     logger.error('[ATTACK] Error:', error);
     res.status(400).json({ error: error.message || 'Failed to attack' });
   }
-});;
+});
+
+/**
+ * Move a unit between locations
+ * POST /matches/:matchId/actions/move
+ * Body: { playerId, creatureInstanceId, destinationId }
+ */
+app.post('/matches/:matchId/actions/move', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { matchId } = req.params;
+    const { playerId, creatureInstanceId, destinationId } = req.body;
+
+    const engine = activeGames.get(matchId);
+    if (!engine) {
+      res.status(404).json({ error: 'Match not found' });
+      return;
+    }
+
+    if (!engine.canPlayerAct(playerId)) {
+      res.status(403).json({ error: 'Not your turn' });
+      return;
+    }
+
+    engine.moveUnit(playerId, creatureInstanceId, destinationId);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info(`[MATCH] Player ${playerId} moved a unit in match ${matchId}`);
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    logger.error('[MOVE] Error:', error);
+    res.status(400).json({ error: error.message || 'Failed to move unit' });
+  }
+});
 
 /**
  * End current phase and proceed to next

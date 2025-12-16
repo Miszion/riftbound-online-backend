@@ -222,7 +222,7 @@ Body:
 {
   "playerId": "player-1-id",
   "creatureInstanceId": "creature-instance-id",
-  "defenderId": "player-2-id" (optional)
+  "destinationId": "battlefield-id"
 }
 
 Response:
@@ -230,6 +230,24 @@ Response:
   "success": true,
   "gameState": { GameState }
 }
+
+#### Move Unit
+```
+POST /matches/:matchId/actions/move
+
+Body:
+{
+  "playerId": "player-1-id",
+  "creatureInstanceId": "creature-instance-id",
+  "destinationId": "battlefield-id or base"
+}
+
+Response:
+{
+  "success": true,
+  "gameState": { GameState }
+}
+```
 ```
 
 #### Next Phase

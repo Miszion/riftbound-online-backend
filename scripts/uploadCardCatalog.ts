@@ -51,6 +51,7 @@ const mapCardToItem = (card: EnrichedCardRecord) => {
     Might: card.might,
     Cost: card.cost,
     ActivationProfile: card.activation,
+    EffectProfile: card.effectProfile,
     RuleClauses: card.rules,
     CardImageUrl: card.assets?.remote ?? null,
     CardImageLocalPath: card.assets?.localPath ?? null,

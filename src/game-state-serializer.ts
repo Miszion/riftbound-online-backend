@@ -1,9 +1,14 @@
 import type {
+  BattlefieldState,
   BoardCard,
   Card,
+  CardLocation,
+  GamePrompt,
   GameState,
+  GameStateSnapshot,
   PlayerState,
   PlayerBoard,
+  PriorityWindow,
   RuneCard,
   TemporaryEffect
 } from './game-engine';
@@ -36,6 +41,22 @@ const abilityLabels = (card: Card): string[] => {
 
 const isBoardCard = (card: Card | BoardCard): card is BoardCard => {
   return typeof (card as BoardCard).instanceId === 'string';
+};
+
+const serializeLocation = (location?: CardLocation | null) => {
+  if (!location) {
+    return null;
+  }
+  if (location.zone === 'base') {
+    return {
+      zone: 'base',
+      battlefieldId: null
+    };
+  }
+  return {
+    zone: 'battlefield',
+    battlefieldId: location.battlefieldId
+  };
 };
 
 const serializeActivationState = (card: BoardCard) => {
@@ -74,7 +95,8 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
     abilities: abilityLabels(card),
     text: card.text ?? null,
     assets: card.assets ?? null,
-    metadata: card.metadata ?? null
+    metadata: card.metadata ?? null,
+    location: null as ReturnType<typeof serializeLocation>
   };
 
   if (!isBoardCard(card)) {
@@ -83,7 +105,8 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
       isTapped: null,
       summoned: null,
       counters: null,
-      activationState: null
+      activationState: null,
+      location: null
     };
   }
 
@@ -92,7 +115,8 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
     isTapped: card.isTapped,
     summoned: card.summoned,
     counters: card.counters ?? null,
-    activationState: serializeActivationState(card)
+    activationState: serializeActivationState(card),
+    location: serializeLocation(card.location)
   };
 };
 
@@ -102,6 +126,18 @@ const serializePlayerBoard = (board: PlayerBoard) => ({
   creatures: serializeCardZone(board.creatures),
   artifacts: serializeCardZone(board.artifacts),
   enchantments: serializeCardZone(board.enchantments)
+});
+
+const serializeBattlefieldState = (battlefield: BattlefieldState) => ({
+  battlefieldId: battlefield.battlefieldId,
+  slug: battlefield.slug ?? null,
+  name: battlefield.name,
+  ownerId: battlefield.ownerId,
+  controller: battlefield.controller ?? null,
+  contestedBy: battlefield.contestedBy,
+  lastConqueredTurn: battlefield.lastConqueredTurn ?? null,
+  lastHoldTurn: battlefield.lastHoldTurn ?? null,
+  card: battlefield.card ? serializeCardSnapshot(battlefield.card) : null
 });
 
 const serializeRuneCard = (rune: RuneCard) => ({
@@ -121,6 +157,39 @@ const serializeTemporaryEffect = (effect: TemporaryEffect) => ({
     type: effect.effect.type,
     value: effect.effect.value ?? null
   }
+});
+
+const serializePrompt = (prompt: GamePrompt) => ({
+  id: prompt.id,
+  type: prompt.type,
+  playerId: prompt.playerId,
+  data: prompt.data,
+  resolved: prompt.resolved,
+  createdAt: toDate(prompt.createdAt),
+  resolvedAt: toDate(prompt.resolvedAt),
+  resolution: prompt.resolution ?? null
+});
+
+const serializePriorityWindow = (window: PriorityWindow | null) => {
+  if (!window) {
+    return null;
+  }
+  return {
+    id: window.id,
+    type: window.type,
+    holder: window.holder,
+    openedAt: toDate(window.openedAt),
+    expiresAt: window.expiresAt ? toDate(window.expiresAt) : null,
+    event: window.event ?? null
+  };
+};
+
+const serializeSnapshot = (snapshot: GameStateSnapshot) => ({
+  turn: snapshot.turn,
+  phase: snapshot.phase,
+  timestamp: toDate(snapshot.timestamp),
+  reason: snapshot.reason,
+  summary: snapshot.summary
 });
 
 export const serializePlayerState = (player: PlayerState, visibility: PlayerVisibility) => {
@@ -181,7 +250,11 @@ export const serializeGameState = (state: GameState, options?: SerializeGameStat
       sourceCardId: entry.sourceCardId ?? null,
       timestamp: toDate(entry.timestamp)
     })),
-    endReason: state.endReason ?? null
+    endReason: state.endReason ?? null,
+    prompts: state.prompts.map(serializePrompt),
+    priorityWindow: serializePriorityWindow(state.priorityWindow),
+    snapshots: state.snapshots.map(serializeSnapshot),
+    battlefields: state.battlefields.map(serializeBattlefieldState)
   };
 };
 

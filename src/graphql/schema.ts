@@ -56,6 +56,12 @@ export const typeDefs = `#graphql
     summoned: Boolean
     counters: JSON
     activationState: CardActivationStateEntry
+    location: CardLocationState
+  }
+
+  type CardLocationState {
+    zone: String!
+    battlefieldId: ID
   }
 
   # ============================================================================
@@ -97,6 +103,18 @@ export const typeDefs = `#graphql
     keywords: [String!]
     effect: String
     assets: CardAssetInfo
+  }
+
+  type BattlefieldState {
+    battlefieldId: ID!
+    slug: String
+    name: String!
+    ownerId: ID!
+    controller: ID
+    contestedBy: [ID!]!
+    lastConqueredTurn: Int
+    lastHoldTurn: Int
+    card: CardSnapshot
   }
 
   type CardPricing {
@@ -197,6 +215,7 @@ export const typeDefs = `#graphql
     matchFound: Boolean!
     matchId: ID
     opponentId: ID
+    opponentName: String
     mmr: Int!
     estimatedWaitSeconds: Int!
   }
@@ -210,6 +229,7 @@ export const typeDefs = `#graphql
     estimatedWaitSeconds: Int
     matchId: ID
     opponentId: ID
+    opponentName: String
   }
 
   type MatchReplay {
@@ -267,6 +287,34 @@ export const typeDefs = `#graphql
     value: Int
   }
 
+  type GamePrompt {
+    id: ID!
+    type: String!
+    playerId: ID!
+    data: JSON
+    resolved: Boolean!
+    createdAt: DateTime
+    resolvedAt: DateTime
+    resolution: JSON
+  }
+
+  type PriorityWindow {
+    id: ID!
+    type: String!
+    holder: ID!
+    openedAt: DateTime
+    expiresAt: DateTime
+    event: String
+  }
+
+  type GameStateSnapshot {
+    turn: Int!
+    phase: String!
+    timestamp: DateTime
+    reason: String!
+    summary: String!
+  }
+
   type PlayerState {
     playerId: ID!
     name: String!
@@ -308,6 +356,10 @@ export const typeDefs = `#graphql
     victoryScore: Int!
     scoreLog: [ScoreEvent!]!
     endReason: String
+    prompts: [GamePrompt!]!
+    priorityWindow: PriorityWindow
+    snapshots: [GameStateSnapshot!]!
+    battlefields: [BattlefieldState!]!
   }
 
   type MatchResult {
@@ -464,6 +516,24 @@ export const typeDefs = `#graphql
       decks: JSON!
     ): MatchInitResponse!
 
+    submitInitiativeChoice(
+      matchId: ID!
+      playerId: ID!
+      choice: Int!
+    ): GameState!
+
+    submitMulligan(
+      matchId: ID!
+      playerId: ID!
+      indices: [Int!]
+    ): GameState!
+
+    selectBattlefield(
+      matchId: ID!
+      playerId: ID!
+      battlefieldId: ID!
+    ): GameState!
+
     playCard(
       matchId: ID!
       playerId: ID!
@@ -475,7 +545,14 @@ export const typeDefs = `#graphql
       matchId: ID!
       playerId: ID!
       creatureInstanceId: String!
-      defenderId: String
+      destinationId: String!
+    ): ActionResponse!
+
+    moveUnit(
+      matchId: ID!
+      playerId: ID!
+      creatureInstanceId: String!
+      destinationId: String!
     ): ActionResponse!
 
     nextPhase(
@@ -564,7 +641,7 @@ export const typeDefs = `#graphql
     matchId: ID!
     playerId: ID!
     creatureInstanceId: String!
-    defenderId: String
+    destinationId: String!
     timestamp: DateTime!
   }
 

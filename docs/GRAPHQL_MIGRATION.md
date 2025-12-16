@@ -235,13 +235,13 @@ mutation Attack(
   $matchId: ID!
   $playerId: ID!
   $creatureInstanceId: String!
-  $defenderId: String
+  $destinationId: String!
 ) {
   attack(
     matchId: $matchId
     playerId: $playerId
     creatureInstanceId: $creatureInstanceId
-    defenderId: $defenderId
+    destinationId: $destinationId
   ) {
     success
     gameState { ... }

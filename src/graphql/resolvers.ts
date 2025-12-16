@@ -31,6 +31,39 @@ const dynamodb = new AWS.DynamoDB.DocumentClient({
 // Store active games (in match-service context)
 const activeGames = new Map<string, RiftboundGameEngine>();
 
+const initializeMatchEngine = async ({
+  matchId,
+  player1,
+  player2,
+  decks,
+}: {
+  matchId: string;
+  player1: string;
+  player2: string;
+  decks: any;
+}) => {
+  if (activeGames.has(matchId)) {
+    throw new Error('Match already exists');
+  }
+
+  const engine = new RiftboundGameEngine(matchId, [player1, player2]);
+  engine.initializeGame(decks);
+
+  activeGames.set(matchId, engine);
+  await saveGameState(matchId, engine);
+
+  const gameState = engine.getGameState();
+
+  logger.info(`[MATCH-INIT] Match ${matchId} initialized between ${player1} and ${player2}`);
+
+  return {
+    matchId,
+    status: 'initialized',
+    players: [player1, player2],
+    gameState,
+  };
+};
+
 interface LeaderboardEntry {
   userId: string;
   username?: string;
@@ -313,6 +346,40 @@ const getUserMmr = async (userId: string): Promise<number> => {
   }
 };
 
+const getUserProfileSummary = async (
+  userId: string
+): Promise<{ userId: string; username?: string | null } | null> => {
+  if (!userId) {
+    return null;
+  }
+  try {
+    const result = await dynamodb
+      .get({
+        TableName: process.env.USERS_TABLE || 'riftbound-online-users-dev',
+        Key: { UserId: userId },
+        ProjectionExpression: 'UserId, Username, Email'
+      })
+      .promise();
+    if (!result.Item) {
+      return null;
+    }
+    return {
+      userId: result.Item.UserId,
+      username: result.Item.Username ?? result.Item.Email ?? null
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getUsernameForUser = async (userId?: string | null): Promise<string | null> => {
+  if (!userId) {
+    return null;
+  }
+  const profile = await getUserProfileSummary(userId);
+  return profile?.username ?? null;
+};
+
 const queueKey = (mode: MatchMode, userId: string) => ({
   Mode: mode,
   UserId: userId
@@ -324,13 +391,14 @@ const listQueuedEntries = async (mode: MatchMode) => {
   const result = await dynamodb
     .query({
       TableName: MATCHMAKING_QUEUE_TABLE,
-      KeyConditionExpression: 'Mode = :mode',
+      KeyConditionExpression: '#mode = :mode',
       ExpressionAttributeValues: {
         ':mode': mode,
         ':queued': MATCHMAKING_STATE.QUEUED
       },
       ExpressionAttributeNames: {
-        '#state': 'State'
+        '#state': 'State',
+        '#mode': 'Mode'
       },
       FilterExpression: '#state = :queued'
     })
@@ -358,13 +426,14 @@ const getQueueLength = async (mode: MatchMode): Promise<number> => {
   const result = await dynamodb
     .query({
       TableName: MATCHMAKING_QUEUE_TABLE,
-      KeyConditionExpression: 'Mode = :mode',
+      KeyConditionExpression: '#mode = :mode',
       ExpressionAttributeValues: {
         ':mode': mode,
         ':queued': MATCHMAKING_STATE.QUEUED
       },
       ExpressionAttributeNames: {
-        '#state': 'State'
+        '#state': 'State',
+        '#mode': 'Mode'
       },
       FilterExpression: '#state = :queued',
       Select: 'COUNT'
@@ -402,8 +471,8 @@ const attemptMatch = async (mode: MatchMode) => {
       const a = queued[i];
       const b = queued[j];
       const waitMs = Math.max(now - a.queuedAt, now - b.queuedAt);
-      const tolerance = getMmrTolerance(mode, waitMs);
-      if (Math.abs(a.mmr - b.mmr) <= tolerance) {
+      const tolerance = mode === 'free' ? Number.POSITIVE_INFINITY : getMmrTolerance(mode, waitMs);
+      if (mode === 'free' || Math.abs(a.mmr - b.mmr) <= tolerance) {
         const matchId = uuidv4();
         const opponentForA = b.userId;
         const opponentForB = a.userId;
@@ -455,13 +524,55 @@ const attemptMatch = async (mode: MatchMode) => {
               ]
             })
             .promise();
+          const playerIds = [a.userId, b.userId];
+          // Attempt to find decklists for the selected participants
+          const decksResult = await dynamodb
+            .scan({
+              TableName: decklistsTableName,
+              FilterExpression: 'UserId IN (:playerA, :playerB)',
+              ExpressionAttributeValues: {
+                ':playerA': a.userId,
+                ':playerB': b.userId
+              }
+            })
+            .promise();
+          const decksByUser = new Map<string, any>();
+          (decksResult.Items || []).forEach((deck) => {
+            decksByUser.set(deck.UserId, deck);
+          });
+          let matchInitialized = false;
+          if (decksByUser.size === playerIds.length) {
+            const decksPayload: Record<string, any> = {};
+            playerIds.forEach((playerId) => {
+              decksPayload[playerId] = decksByUser.get(playerId);
+            });
+            try {
+              await initializeMatchEngine({
+                matchId,
+                player1: playerIds[0],
+                player2: playerIds[1],
+                decks: decksPayload
+              });
+              matchInitialized = true;
+            } catch (error) {
+              logger.error('[MATCHMAKING] Failed to init match', error);
+            }
+          } else {
+            logger.warn(
+              `[MATCHMAKING] Missing decklists for players ${playerIds.join(
+                ', '
+              )}; deferring match initialization`
+            );
+          }
+
           return {
             matchId,
             mode,
             players: [
               { userId: a.userId, mmr: a.mmr, deckId: a.deckId },
               { userId: b.userId, mmr: b.mmr, deckId: b.deckId }
-            ]
+            ],
+            initialized: matchInitialized
           };
         } catch {
           // Entry might have been removed; continue searching
@@ -747,9 +858,16 @@ export const queryResolvers = {
         state: 'idle',
         queued: false,
         mmr,
-        estimatedWaitSeconds
+        estimatedWaitSeconds,
+        opponentId: null,
+        opponentName: null,
+        matchId: null,
+        queuedAt: null
       };
     }
+
+    const opponentId = entry.OpponentId ?? null;
+    const opponentName = await getUsernameForUser(opponentId);
 
     return {
       mode: normalizedMode,
@@ -759,7 +877,8 @@ export const queryResolvers = {
       queuedAt: entry.QueuedAt ? new Date(entry.QueuedAt) : null,
       estimatedWaitSeconds,
       matchId: entry.MatchId ?? null,
-      opponentId: entry.OpponentId ?? null
+      opponentId,
+      opponentName
     };
   },
 
@@ -951,30 +1070,128 @@ export const mutationResolvers = {
     }
   ) {
     try {
-      if (activeGames.has(matchId)) {
-        throw new Error('Match already exists');
-      }
-
-      const engine = new RiftboundGameEngine(matchId, [player1, player2]);
-      engine.initializeGame(decks);
-
-      activeGames.set(matchId, engine);
-
-      // Save initial state
-      await saveGameState(matchId, engine);
-
-      const gameState = engine.getGameState();
-
-      logger.info(`[MATCH-INIT] Match ${matchId} initialized between ${player1} and ${player2}`);
-
-      return {
-        matchId,
-        status: 'initialized',
-        players: [player1, player2],
-        gameState,
-      };
+      return await initializeMatchEngine({ matchId, player1, player2, decks });
     } catch (error) {
       logger.error('[MATCH-INIT] Error:', error);
+      throw error;
+    }
+  },
+
+  async submitInitiativeChoice(
+    _parent: any,
+    { matchId, playerId, choice }: { matchId: string; playerId: string; choice: number },
+    context: ResolverContext
+  ) {
+    const targetUser = requireUser(context, playerId);
+    try {
+      const engine = activeGames.get(matchId);
+      if (!engine) {
+        throw new Error('Match not found');
+      }
+
+      engine.submitInitiativeChoice(playerId, choice);
+      await saveGameState(matchId, engine);
+
+      const rawState = engine.getGameState();
+      const spectatorState = serializeGameState(rawState);
+      const currentPlayerSnapshot = serializePlayerState(engine.getPlayerState(playerId), 'self');
+      const opponentSummary = buildOpponentView(rawState, playerId);
+
+      publishGameStateChange(matchId, spectatorState);
+      publishPlayerGameStateChange(matchId, playerId, {
+        matchId,
+        currentPlayer: currentPlayerSnapshot,
+        opponent: opponentSummary,
+        gameState: {
+          matchId,
+          currentPhase: rawState.currentPhase,
+          turnNumber: rawState.turnNumber,
+          currentPlayerIndex: rawState.currentPlayerIndex,
+          canAct: engine.canPlayerAct(playerId)
+        }
+      });
+
+      logger.info(
+        `[INITIATIVE] Player ${playerId} (${targetUser}) locked initiative choice ${choice} for match ${matchId}`
+      );
+
+      return spectatorState;
+    } catch (error) {
+      logger.error('[INITIATIVE] Error:', error);
+      throw error;
+    }
+  },
+
+  async submitMulligan(
+    _parent: any,
+    { matchId, playerId, indices }: { matchId: string; playerId: string; indices?: number[] },
+    context: ResolverContext
+  ) {
+    const targetUser = requireUser(context, playerId);
+    try {
+      const engine = activeGames.get(matchId);
+      if (!engine) {
+        throw new Error('Match not found');
+      }
+
+      engine.submitMulligan(playerId, indices ?? []);
+      await saveGameState(matchId, engine);
+
+      const rawState = engine.getGameState();
+      const spectatorState = serializeGameState(rawState);
+      const currentPlayerSnapshot = serializePlayerState(engine.getPlayerState(playerId), 'self');
+      const opponentSummary = buildOpponentView(rawState, playerId);
+
+      publishGameStateChange(matchId, spectatorState);
+      publishPlayerGameStateChange(matchId, playerId, {
+        matchId,
+        currentPlayer: currentPlayerSnapshot,
+        opponent: opponentSummary,
+        gameState: {
+          matchId,
+          currentPhase: rawState.currentPhase,
+          turnNumber: rawState.turnNumber,
+          currentPlayerIndex: rawState.currentPlayerIndex,
+          canAct: engine.canPlayerAct(playerId),
+        },
+      });
+
+      logger.info(
+        `[MULLIGAN] Player ${playerId} (${targetUser}) submitted mulligan for match ${matchId}`
+      );
+
+      return spectatorState;
+    } catch (error) {
+      logger.error('[MULLIGAN] Error:', error);
+      throw error;
+    }
+  },
+
+  async selectBattlefield(
+    _parent: any,
+    { matchId, playerId, battlefieldId }: { matchId: string; playerId: string; battlefieldId: string },
+    context: ResolverContext
+  ) {
+    const targetUser = requireUser(context, playerId);
+    try {
+      const engine = activeGames.get(matchId);
+      if (!engine) {
+        throw new Error('Match not found');
+      }
+
+      engine.selectBattlefield(playerId, battlefieldId);
+      await saveGameState(matchId, engine);
+
+      const spectatorState = serializeGameState(engine.getGameState());
+      publishGameStateChange(matchId, spectatorState);
+
+      logger.info(
+        `[BATTLEFIELD] Player ${playerId} (${targetUser}) selected battlefield ${battlefieldId} for match ${matchId}`
+      );
+
+      return spectatorState;
+    } catch (error) {
+      logger.error('[SELECT-BATTLEFIELD] Error:', error);
       throw error;
     }
   },
@@ -1067,12 +1284,12 @@ export const mutationResolvers = {
       matchId,
       playerId,
       creatureInstanceId,
-      defenderId,
+      destinationId,
     }: {
       matchId: string;
       playerId: string;
       creatureInstanceId: string;
-      defenderId?: string;
+      destinationId: string;
     }
   ) {
     try {
@@ -1085,7 +1302,15 @@ export const mutationResolvers = {
         throw new Error('Not your turn');
       }
 
-      engine.declareAttacker(playerId, creatureInstanceId, defenderId);
+      if (!destinationId) {
+        throw new Error('Battlefield destination required');
+      }
+
+      if (destinationId === 'base') {
+        throw new Error('Use moveUnit to return to base');
+      }
+
+      engine.moveUnit(playerId, creatureInstanceId, destinationId);
       await saveGameState(matchId, engine);
 
       const rawState = engine.getGameState();
@@ -1096,7 +1321,7 @@ export const mutationResolvers = {
         matchId,
         playerId,
         creatureInstanceId,
-        defenderId,
+        destinationId,
         timestamp: new Date(),
       });
 
@@ -1109,6 +1334,49 @@ export const mutationResolvers = {
       };
     } catch (error: any) {
       logger.error('[ATTACK] Error:', error);
+      throw error;
+    }
+  },
+
+  async moveUnit(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      creatureInstanceId,
+      destinationId,
+    }: {
+      matchId: string;
+      playerId: string;
+      creatureInstanceId: string;
+      destinationId: string;
+    }
+  ) {
+    try {
+      const engine = activeGames.get(matchId);
+      if (!engine) {
+        throw new Error('Match not found');
+      }
+
+      if (!engine.canPlayerAct(playerId)) {
+        throw new Error('Not your turn');
+      }
+
+      engine.moveUnit(playerId, creatureInstanceId, destinationId);
+      await saveGameState(matchId, engine);
+
+      const rawState = engine.getGameState();
+      const spectatorState = serializeGameState(rawState);
+
+      publishGameStateChange(matchId, spectatorState);
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[MOVE-UNIT] Error:', error);
       throw error;
     }
   },
@@ -1463,12 +1731,17 @@ export const mutationResolvers = {
       const existing = await getQueueEntry(normalizedMode, userId);
 
       if (existing && existing.State === MATCHMAKING_STATE.MATCHED) {
+        const existingOpponentId = existing.OpponentId ?? null;
+        const existingOpponentName = existingOpponentId
+          ? await getUsernameForUser(existingOpponentId)
+          : null;
         return {
           mode: normalizedMode,
           queued: false,
           matchFound: true,
           matchId: existing.MatchId ?? null,
-          opponentId: existing.OpponentId ?? null,
+          opponentId: existingOpponentId,
+          opponentName: existingOpponentName,
           mmr: existing.MMR ?? (await getUserMmr(userId)),
           estimatedWaitSeconds: getEstimatedWaitSeconds(normalizedMode, await getQueueLength(normalizedMode))
         };
@@ -1497,15 +1770,18 @@ export const mutationResolvers = {
       const queueLength = await getQueueLength(normalizedMode);
       const estimatedWaitSeconds = getEstimatedWaitSeconds(normalizedMode, queueLength);
       const participant = match?.players.find((player) => player.userId === userId);
+      const opponentId = participant
+        ? match?.players.find((player) => player.userId !== userId)?.userId ?? null
+        : null;
+      const opponentName = opponentId ? await getUsernameForUser(opponentId) : null;
 
       return {
         mode: normalizedMode,
         queued: !participant,
         matchFound: Boolean(participant),
         matchId: participant ? match?.matchId ?? null : null,
-        opponentId: participant
-          ? match?.players.find((player) => player.userId !== userId)?.userId ?? null
-          : null,
+        opponentId,
+        opponentName,
         mmr,
         estimatedWaitSeconds
       };

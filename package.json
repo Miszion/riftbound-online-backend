@@ -13,7 +13,9 @@
     "lint": "eslint src/",
     "format": "prettier --write src/",
     "generate:cards": "node transformChampionDump.js",
+    "generate:taxonomy": "ts-node scripts/buildEffectIndex.ts",
     "upload:cards": "ts-node scripts/uploadCardCatalog.ts",
+    "sync:cards": "npm run generate:cards && npm run generate:taxonomy && npm run upload:cards",
     "docker:publish": "bash scripts/publish-ecr.sh",
     "deploy:stacks": "bash scripts/deploy-stacks.sh"
   },
