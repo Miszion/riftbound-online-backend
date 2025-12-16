@@ -1395,30 +1395,25 @@ export const mutationResolvers = {
           .query({
             TableName: decklistsTableName,
             KeyConditionExpression: 'UserId = :userId',
-            FilterExpression: '#deckId <> :deckId AND attribute_exists(#isDefault) AND #isDefault = :true',
             ExpressionAttributeValues: {
-              ':userId': input.userId,
-              ':deckId': deckId,
-              ':true': true
-            },
-            ExpressionAttributeNames: {
-              '#deckId': 'DeckId',
-              '#isDefault': 'IsDefault'
+              ':userId': input.userId
             }
           })
           .promise();
 
-        const updates = (existingDefaults.Items || []).map((deck) =>
-          dynamodb
-            .update({
-              TableName: decklistsTableName,
-              Key: { UserId: deck.UserId, DeckId: deck.DeckId },
-              UpdateExpression: 'SET #isDefault = :false',
-              ExpressionAttributeNames: { '#isDefault': 'IsDefault' },
-              ExpressionAttributeValues: { ':false': false }
-            })
-            .promise()
-        );
+        const updates = (existingDefaults.Items || [])
+          .filter((deck) => deck.DeckId !== deckId && deck.IsDefault)
+          .map((deck) =>
+            dynamodb
+              .update({
+                TableName: decklistsTableName,
+                Key: { UserId: deck.UserId, DeckId: deck.DeckId },
+                UpdateExpression: 'SET #isDefault = :false',
+                ExpressionAttributeNames: { '#isDefault': 'IsDefault' },
+                ExpressionAttributeValues: { ':false': false }
+              })
+              .promise()
+          );
         if (updates.length) {
           await Promise.all(updates);
         }
