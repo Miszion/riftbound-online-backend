@@ -89,6 +89,7 @@ interface DecklistInput {
   format?: string;
   tags?: string[];
   isPublic?: boolean;
+  isDefault?: boolean;
   cards: DeckCardInput[];
   runeDeck?: DeckCardInput[];
   battlefields?: DeckCardInput[];
@@ -265,6 +266,7 @@ const mapDecklistItem = (
     format: item.Format,
     tags: item.Tags || [],
     isPublic: Boolean(item.IsPublic),
+    isDefault: Boolean(item.IsDefault),
     cardCount: item.CardCount ?? 0,
     cards: item.Cards || [],
     runeDeck: item.RuneDeck || [],
@@ -1354,6 +1356,8 @@ export const mutationResolvers = {
         }
       }
 
+      const isDefaultDeck = Boolean(input.isDefault);
+
       const item: Record<string, any> = {
         UserId: input.userId,
         DeckId: deckId,
@@ -1363,6 +1367,7 @@ export const mutationResolvers = {
         Format: input.format ?? 'standard',
         Tags: input.tags ?? [],
         IsPublic: Boolean(input.isPublic),
+        IsDefault: isDefaultDeck,
         CardCount: cardCount,
         Cards: normalizedCards,
         RuneDeck: normalizedRunes,
@@ -1384,6 +1389,40 @@ export const mutationResolvers = {
           Item: item
         })
         .promise();
+
+      if (isDefaultDeck) {
+        const existingDefaults = await dynamodb
+          .query({
+            TableName: decklistsTableName,
+            KeyConditionExpression: 'UserId = :userId',
+            FilterExpression: '#deckId <> :deckId AND attribute_exists(#isDefault) AND #isDefault = :true',
+            ExpressionAttributeValues: {
+              ':userId': input.userId,
+              ':deckId': deckId,
+              ':true': true
+            },
+            ExpressionAttributeNames: {
+              '#deckId': 'DeckId',
+              '#isDefault': 'IsDefault'
+            }
+          })
+          .promise();
+
+        const updates = (existingDefaults.Items || []).map((deck) =>
+          dynamodb
+            .update({
+              TableName: decklistsTableName,
+              Key: { UserId: deck.UserId, DeckId: deck.DeckId },
+              UpdateExpression: 'SET #isDefault = :false',
+              ExpressionAttributeNames: { '#isDefault': 'IsDefault' },
+              ExpressionAttributeValues: { ':false': false }
+            })
+            .promise()
+        );
+        if (updates.length) {
+          await Promise.all(updates);
+        }
+      }
 
       return mapDecklistItem(item);
     } catch (error) {

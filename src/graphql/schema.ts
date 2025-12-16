@@ -168,6 +168,7 @@ export const typeDefs = `#graphql
     format: String
     tags: [String!]
     isPublic: Boolean!
+    isDefault: Boolean!
     cardCount: Int!
     cards: [DeckCard!]!
     runeDeck: [DeckCard!]
@@ -427,6 +428,7 @@ export const typeDefs = `#graphql
     format: String
     tags: [String!]
     isPublic: Boolean
+    isDefault: Boolean
     cards: [DeckCardInput!]!
     runeDeck: [DeckCardInput!]
     battlefields: [DeckCardInput!]
