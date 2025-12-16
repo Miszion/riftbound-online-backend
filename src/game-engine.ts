@@ -257,7 +257,7 @@ export class RiftboundGameEngine {
   private readonly VICTORY_SCORE = 8;
   private readonly COMBAT_POINTS_PER_DAMAGE = 3;
   private readonly SUPPORT_POINTS_PER_VALUE = 5;
-  private readonly MIN_DECK_SIZE = 40;
+  private readonly MIN_DECK_SIZE = 39;
   private readonly RUNE_DECK_SIZE = 12;
   private readonly RUNES_PER_TURN = 2;
   private readonly cardActivationTemplates = buildActivationStateIndex();

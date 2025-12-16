@@ -87,6 +87,18 @@ export const typeDefs = `#graphql
     localPath: String!
   }
 
+  type CardSnapshot {
+    cardId: String
+    slug: String
+    name: String
+    type: String
+    rarity: String
+    colors: [String!]
+    keywords: [String!]
+    effect: String
+    assets: CardAssetInfo
+  }
+
   type CardPricing {
     price: Float
     foilPrice: Float
@@ -144,6 +156,7 @@ export const typeDefs = `#graphql
     cardId: ID
     slug: String
     quantity: Int!
+    cardSnapshot: CardSnapshot
   }
 
   type Decklist {
@@ -158,6 +171,10 @@ export const typeDefs = `#graphql
     cardCount: Int!
     cards: [DeckCard!]!
     runeDeck: [DeckCard!]
+    battlefields: [DeckCard!]
+    sideDeck: [DeckCard!]
+    championLegend: DeckCard
+    championLeader: DeckCard
     createdAt: DateTime
     updatedAt: DateTime
   }
@@ -381,6 +398,24 @@ export const typeDefs = `#graphql
     cardId: ID
     slug: String
     quantity: Int!
+    cardSnapshot: CardSnapshotInput
+  }
+
+  input CardAssetInfoInput {
+    remote: String
+    localPath: String
+  }
+
+  input CardSnapshotInput {
+    cardId: String
+    slug: String
+    name: String
+    type: String
+    rarity: String
+    colors: [String!]
+    keywords: [String!]
+    effect: String
+    assets: CardAssetInfoInput
   }
 
   input DecklistInput {
@@ -394,6 +429,10 @@ export const typeDefs = `#graphql
     isPublic: Boolean
     cards: [DeckCardInput!]!
     runeDeck: [DeckCardInput!]
+    battlefields: [DeckCardInput!]
+    sideDeck: [DeckCardInput!]
+    championLegend: DeckCardInput
+    championLeader: DeckCardInput
   }
 
   input MatchmakingQueueInput {

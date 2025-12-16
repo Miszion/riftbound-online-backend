@@ -234,6 +234,15 @@ if (stagePrefix) {
 
 app.use(express.json({ limit: '2mb' }));
 
+// Promote x-user-id header into request context for downstream handlers (GraphQL, REST)
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  const headerUserId = req.header('x-user-id');
+  if (headerUserId) {
+    (req as AuthedRequest).userId = headerUserId;
+  }
+  next();
+});
+
 // Detailed request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
   const { method, originalUrl, headers, query, ip } = req;

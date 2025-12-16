@@ -56,10 +56,28 @@ interface CardCatalogFilterInput {
   limit?: number;
 }
 
+interface CardAssetInfoInput {
+  remote?: string | null;
+  localPath?: string | null;
+}
+
+interface CardSnapshotInput {
+  cardId?: string;
+  slug?: string;
+  name?: string;
+  type?: string;
+  rarity?: string;
+  colors?: string[];
+  keywords?: string[];
+  effect?: string;
+  assets?: CardAssetInfoInput | null;
+}
+
 interface DeckCardInput {
   cardId?: string;
   slug?: string;
   quantity?: number;
+  cardSnapshot?: CardSnapshotInput | null;
 }
 
 interface DecklistInput {
@@ -73,18 +91,41 @@ interface DecklistInput {
   isPublic?: boolean;
   cards: DeckCardInput[];
   runeDeck?: DeckCardInput[];
+  battlefields?: DeckCardInput[];
+  sideDeck?: DeckCardInput[];
+  championLegend?: DeckCardInput | null;
+  championLeader?: DeckCardInput | null;
 }
+
+type CardSnapshotRecord = {
+  cardId?: string;
+  slug?: string;
+  name?: string;
+  type?: string;
+  rarity?: string;
+  colors?: string[];
+  keywords?: string[];
+  effect?: string;
+  assets?: {
+    remote?: string | null;
+    localPath: string;
+  };
+} | null;
 
 type DeckCardRecord = {
   cardId?: string;
   slug?: string;
   quantity: number;
+  cardSnapshot?: CardSnapshotRecord;
 };
 
 const decklistsTableName = process.env.DECKLISTS_TABLE || 'riftbound-online-decklists-dev';
 const deckIdIndexName = 'DeckIdIndex';
-const MIN_DECK_SIZE = 40;
+const MIN_DECK_SIZE = 39;
+const MAX_DECK_SIZE = 39;
 const MAX_CARD_COPIES = 3;
+const MAX_SIDE_DECK_CARDS = 8;
+const BATTLEFIELD_SLOTS = 3;
 const matchTableName = process.env.MATCH_TABLE || 'riftbound-online-matches-dev';
 
 type MatchMode = 'ranked' | 'free';
@@ -120,6 +161,44 @@ const toIsoString = (value?: number | null): string | null => {
   }
 };
 
+const sanitizeCardSnapshot = (snapshot?: CardSnapshotInput | null): CardSnapshotRecord => {
+  if (!snapshot) {
+    return null;
+  }
+  const colors = Array.isArray(snapshot.colors) ? snapshot.colors.filter(Boolean) : undefined;
+  const keywords = Array.isArray(snapshot.keywords) ? snapshot.keywords.filter(Boolean) : undefined;
+  const assets = snapshot.assets
+    ? {
+        remote: snapshot.assets.remote ?? null,
+        localPath: snapshot.assets.localPath ?? ''
+      }
+    : undefined;
+  const hasData =
+    snapshot.cardId ||
+    snapshot.slug ||
+    snapshot.name ||
+    snapshot.type ||
+    snapshot.rarity ||
+    (colors && colors.length) ||
+    (keywords && keywords.length) ||
+    snapshot.effect ||
+    assets;
+  if (!hasData) {
+    return null;
+  }
+  return {
+    cardId: snapshot.cardId || undefined,
+    slug: snapshot.slug ? snapshot.slug.toLowerCase() : undefined,
+    name: snapshot.name || undefined,
+    type: snapshot.type || undefined,
+    rarity: snapshot.rarity || undefined,
+    colors,
+    keywords,
+    effect: snapshot.effect || undefined,
+    assets
+  };
+};
+
 const mergeDeckCardEntries = (entries: DeckCardRecord[]): DeckCardRecord[] => {
   const merged = new Map<string, DeckCardRecord>();
   for (const entry of entries) {
@@ -128,6 +207,9 @@ const mergeDeckCardEntries = (entries: DeckCardRecord[]): DeckCardRecord[] => {
     const existing = merged.get(key);
     if (existing) {
       existing.quantity = Math.min(MAX_CARD_COPIES, existing.quantity + entry.quantity);
+      if (!existing.cardSnapshot && entry.cardSnapshot) {
+        existing.cardSnapshot = entry.cardSnapshot;
+      }
     } else {
       merged.set(key, { ...entry });
     }
@@ -143,11 +225,27 @@ const sanitizeDeckCards = (cards?: DeckCardInput[]): DeckCardRecord[] => {
     .map((card) => ({
       cardId: card.cardId || undefined,
       slug: card.slug ? card.slug.toLowerCase() : undefined,
-      quantity: Math.min(MAX_CARD_COPIES, Math.max(1, card.quantity ?? 1))
+      quantity: Math.min(MAX_CARD_COPIES, Math.max(1, card.quantity ?? 1)),
+      cardSnapshot: sanitizeCardSnapshot(card.cardSnapshot)
     }))
     .filter((card) => (card.cardId || card.slug) && card.quantity > 0);
 
   return mergeDeckCardEntries(normalized);
+};
+
+const sanitizeSingleDeckCard = (card?: DeckCardInput | null): DeckCardRecord | null => {
+  if (!card) {
+    return null;
+  }
+  const [sanitized] = sanitizeDeckCards([card]);
+  if (!sanitized) {
+    return null;
+  }
+  return {
+    ...sanitized,
+    quantity: 1,
+    cardSnapshot: sanitized.cardSnapshot
+  };
 };
 
 const mapDecklistItem = (
@@ -168,6 +266,10 @@ const mapDecklistItem = (
     cardCount: item.CardCount ?? 0,
     cards: item.Cards || [],
     runeDeck: item.RuneDeck || [],
+    battlefields: item.Battlefields || [],
+    sideDeck: item.SideDeck || [],
+    championLegend: item.ChampionLegend || null,
+    championLeader: item.ChampionLeader || null,
     createdAt: toIsoString(item.CreatedAt),
     updatedAt: toIsoString(item.UpdatedAt)
   };
@@ -1193,10 +1295,30 @@ export const mutationResolvers = {
       const cardCount = normalizedCards.reduce((sum, card) => sum + card.quantity, 0);
 
       if (cardCount < MIN_DECK_SIZE) {
-        throw new Error(`Deck must include at least ${MIN_DECK_SIZE} cards (currently ${cardCount})`);
+        throw new Error(
+          `Deck must include at least ${MIN_DECK_SIZE} cards (currently ${cardCount})`
+        );
+      }
+
+      if (cardCount > MAX_DECK_SIZE) {
+        throw new Error(
+          `Deck cannot include more than ${MAX_DECK_SIZE} cards (currently ${cardCount})`
+        );
       }
 
       const normalizedRunes = sanitizeDeckCards(input.runeDeck || []);
+      const normalizedBattlefields = sanitizeDeckCards(input.battlefields || [])
+        .map((entry) => ({ ...entry, quantity: 1 }))
+        .slice(0, BATTLEFIELD_SLOTS);
+      const normalizedSideDeck = sanitizeDeckCards(input.sideDeck || []);
+      const sanitizedLegend = sanitizeSingleDeckCard(input.championLegend);
+      const sanitizedLeader = sanitizeSingleDeckCard(input.championLeader);
+      const sideDeckCount = normalizedSideDeck.reduce((sum, card) => sum + card.quantity, 0);
+      if (sideDeckCount > MAX_SIDE_DECK_CARDS) {
+        throw new Error(
+          `Side deck cannot include more than ${MAX_SIDE_DECK_CARDS} cards (currently ${sideDeckCount})`
+        );
+      }
       const now = Date.now();
       const deckId = input.deckId ?? uuidv4();
 
@@ -1213,7 +1335,7 @@ export const mutationResolvers = {
         }
       }
 
-      const item = {
+      const item: Record<string, any> = {
         UserId: input.userId,
         DeckId: deckId,
         Name: input.name,
@@ -1225,9 +1347,17 @@ export const mutationResolvers = {
         CardCount: cardCount,
         Cards: normalizedCards,
         RuneDeck: normalizedRunes,
+        Battlefields: normalizedBattlefields,
+        SideDeck: normalizedSideDeck,
         CreatedAt: createdAt,
         UpdatedAt: now
       };
+      if (sanitizedLegend) {
+        item.ChampionLegend = sanitizedLegend;
+      }
+      if (sanitizedLeader) {
+        item.ChampionLeader = sanitizedLeader;
+      }
 
       await dynamodb
         .put({
