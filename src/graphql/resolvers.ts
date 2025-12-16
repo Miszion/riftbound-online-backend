@@ -124,6 +124,8 @@ const deckIdIndexName = 'DeckIdIndex';
 const MIN_DECK_SIZE = 39;
 const MAX_DECK_SIZE = 39;
 const MAX_CARD_COPIES = 3;
+const MAX_RUNE_COPIES = 12;
+const MAX_RUNE_TOTAL = 12;
 const MAX_SIDE_DECK_CARDS = 8;
 const BATTLEFIELD_SLOTS = 3;
 const matchTableName = process.env.MATCH_TABLE || 'riftbound-online-matches-dev';
@@ -217,7 +219,7 @@ const mergeDeckCardEntries = (entries: DeckCardRecord[]): DeckCardRecord[] => {
   return Array.from(merged.values());
 };
 
-const sanitizeDeckCards = (cards?: DeckCardInput[]): DeckCardRecord[] => {
+const sanitizeDeckCards = (cards?: DeckCardInput[], maxCopies = MAX_CARD_COPIES): DeckCardRecord[] => {
   if (!cards || cards.length === 0) {
     return [];
   }
@@ -225,7 +227,7 @@ const sanitizeDeckCards = (cards?: DeckCardInput[]): DeckCardRecord[] => {
     .map((card) => ({
       cardId: card.cardId || undefined,
       slug: card.slug ? card.slug.toLowerCase() : undefined,
-      quantity: Math.min(MAX_CARD_COPIES, Math.max(1, card.quantity ?? 1)),
+      quantity: Math.min(maxCopies, Math.max(1, card.quantity ?? 1)),
       cardSnapshot: sanitizeCardSnapshot(card.cardSnapshot)
     }))
     .filter((card) => (card.cardId || card.slug) && card.quantity > 0);
@@ -237,7 +239,7 @@ const sanitizeSingleDeckCard = (card?: DeckCardInput | null): DeckCardRecord | n
   if (!card) {
     return null;
   }
-  const [sanitized] = sanitizeDeckCards([card]);
+  const [sanitized] = sanitizeDeckCards([card], 1);
   if (!sanitized) {
     return null;
   }
@@ -1306,7 +1308,24 @@ export const mutationResolvers = {
         );
       }
 
-      const normalizedRunes = sanitizeDeckCards(input.runeDeck || []);
+      const normalizedRunesRaw = sanitizeDeckCards(input.runeDeck || [], MAX_RUNE_COPIES);
+      const normalizedRunes: DeckCardRecord[] = [];
+      let runeTotal = 0;
+      for (const entry of normalizedRunesRaw) {
+        if (runeTotal >= MAX_RUNE_TOTAL) {
+          break;
+        }
+        const remaining = MAX_RUNE_TOTAL - runeTotal;
+        const quantity = Math.min(entry.quantity, remaining);
+        if (quantity <= 0) {
+          continue;
+        }
+        normalizedRunes.push({
+          ...entry,
+          quantity
+        });
+        runeTotal += quantity;
+      }
       const normalizedBattlefields = sanitizeDeckCards(input.battlefields || [])
         .map((entry) => ({ ...entry, quantity: 1 }))
         .slice(0, BATTLEFIELD_SLOTS);
