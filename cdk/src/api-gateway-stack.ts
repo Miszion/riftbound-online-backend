@@ -29,7 +29,8 @@ export class ApiGatewayStack extends cdk.Stack {
       'X-Api-Key',
       'X-Amz-Security-Token',
       'X-Requested-With',
-      'x-user-id'
+      'x-user-id',
+      'x-id-token'
     ];
     const corsAllowHeaders = corsAllowHeadersList.join(',');
 

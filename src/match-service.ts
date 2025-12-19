@@ -2,23 +2,26 @@ import 'dotenv/config';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import AWS from 'aws-sdk';
 import logger from './logger';
-import { RiftboundGameEngine, Card } from './game-engine';
+import { RiftboundGameEngine } from './game-engine';
 import { serializeGameState, serializePlayerState, buildOpponentView } from './game-state-serializer';
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
-import { WebSocketServer } from 'ws';
-import { useServer } from 'graphql-ws/lib/use/ws';
-import { typeDefs } from './graphql/schema';
-import { queryResolvers, mutationResolvers, subscriptionResolvers } from './graphql/resolvers';
-import cors from 'cors';
+import { matchServiceTypeDefs, matchServiceResolvers } from './graphql/match-service-schema';
+import { requireAuthenticatedUser } from './auth-utils';
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
-const MATCH_TABLE = process.env.MATCH_TABLE || 'riftbound-online-matches-dev';
-const STATE_TABLE = process.env.STATE_TABLE || 'riftbound-online-match-states-dev';
+const MATCH_TABLE =
+  process.env.MATCH_TABLE ||
+  process.env.MATCH_HISTORY_TABLE ||
+  'riftbound-online-matches-dev';
+const STATE_TABLE =
+  process.env.STATE_TABLE ||
+  process.env.MATCH_STATE_TABLE ||
+  'riftbound-online-match-states-dev';
 
 const dynamodb = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || 'us-east-1'
@@ -40,25 +43,14 @@ interface MatchConfig {
   matchId: string;
   player1: string;
   player2: string;
-  decks: {
-    [playerId: string]: Card[];
-  };
-  createdAt: number;
+  decks: Record<string, any>;
+  playerProfiles?: Record<string, { username?: string | null }>;
+  createdAt?: number;
 }
 
 interface AuthedRequest extends Request {
   userId?: string;
 }
-
-const requireUserHeader = (req: Request, res: Response, next: NextFunction) => {
-  const userId = req.header('x-user-id');
-  if (!userId) {
-    res.status(401).json({ error: 'Unauthorized: missing x-user-id header' });
-    return;
-  }
-  (req as AuthedRequest).userId = userId;
-  next();
-};
 
 // ============================================================================ 
 // EXPRESS SERVER
@@ -67,7 +59,12 @@ const requireUserHeader = (req: Request, res: Response, next: NextFunction) => {
 const app: Express = express();
 
 // Middleware
-app.use(cors());
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/health') {
+    return next();
+  }
+  return requireAuthenticatedUser(req, res, next);
+});
 app.use(express.json());
 app.use((_req, _res, next) => {
   logger.info(`[MATCH-SERVICE] ${_req.method} ${_req.path}`);
@@ -80,18 +77,13 @@ app.use((_req, _res, next) => {
 
 async function startApolloServer() {
   const server = new ApolloServer({
-    typeDefs,
-    resolvers: {
-      Query: queryResolvers,
-      Mutation: mutationResolvers,
-      Subscription: subscriptionResolvers,
-    },
+    typeDefs: matchServiceTypeDefs,
+    resolvers: matchServiceResolvers,
   });
 
   await server.start();
   app.use(
     '/graphql',
-    requireUserHeader,
     expressMiddleware(server, {
       context: async ({ req }) => ({
         userId: (req as AuthedRequest).userId
@@ -124,7 +116,7 @@ app.get('/health', (_req: Request, res: Response): void => {
  */
 app.post('/matches/init', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { matchId, player1, player2, decks }: MatchConfig = req.body;
+    const { matchId, player1, player2, decks, playerProfiles }: MatchConfig = req.body;
 
     if (!matchId || !player1 || !player2 || !decks) {
       res.status(400).json({ error: 'Missing required fields' });
@@ -136,8 +128,19 @@ app.post('/matches/init', async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
+    const playerMetadata = [
+      {
+        playerId: player1,
+        name: playerProfiles?.[player1]?.username ?? null
+      },
+      {
+        playerId: player2,
+        name: playerProfiles?.[player2]?.username ?? null
+      }
+    ];
+
     // Create and initialize game engine
-    const engine = new RiftboundGameEngine(matchId, [player1, player2]);
+    const engine = new RiftboundGameEngine(matchId, playerMetadata);
     engine.initializeGame(decks);
 
     activeGames.set(matchId, engine);
@@ -329,6 +332,39 @@ app.post('/matches/:matchId/actions/mulligan', async (req: Request, res: Respons
   } catch (error: any) {
     logger.error('[MULLIGAN] Error:', error);
     res.status(400).json({ error: error.message || 'Failed to submit mulligan' });
+  }
+});
+
+/**
+ * Submit initiative choice (coin flip)
+ * POST /matches/:matchId/actions/initiative
+ * Body: { playerId, choice }
+ */
+app.post('/matches/:matchId/actions/initiative', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { matchId } = req.params;
+    const { playerId, choice } = req.body;
+
+    const engine = activeGames.get(matchId);
+    if (!engine) {
+      res.status(404).json({ error: 'Match not found' });
+      return;
+    }
+
+    engine.submitInitiativeChoice(playerId, Number(choice));
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info(`[MATCH] Player ${playerId} submitted initiative choice ${choice} for match ${matchId}`);
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    logger.error('[INITIATIVE] Error:', error);
+    res.status(400).json({ error: error.message || 'Failed to submit initiative choice' });
   }
 });
 
@@ -650,42 +686,13 @@ async function startServer() {
     // Create HTTP server
     const server = app.listen(PORT, () => {
       logger.info(`[MATCH-SERVICE] Started on port ${PORT}`);
-      logger.info(`[MATCH-SERVICE] GraphQL endpoint available at ws://localhost:${PORT}/graphql`);
+      logger.info(`[MATCH-SERVICE] GraphQL endpoint available at http://localhost:${PORT}/graphql`);
       logger.info(`[MATCH-SERVICE] Ready to handle matches`);
     });
 
-    // Create WebSocket server for subscriptions
-    const wsServer = new WebSocketServer({ server, path: '/graphql' });
-
-    const wsCleanup = useServer(
-      {
-        schema: require('./graphql/schema').typeDefs,
-        roots: {
-          Query: queryResolvers,
-          Mutation: mutationResolvers,
-          Subscription: subscriptionResolvers,
-        } as any,
-        onConnect: async (ctx) => {
-          const userId = (ctx.connectionParams as Record<string, string> | undefined)?.['x-user-id'];
-          if (!userId) {
-            throw new Error('Unauthorized');
-          }
-          (ctx.extra as any).userId = userId;
-        },
-        context: (ctx) => ({
-          userId: (ctx.extra as any).userId
-        })
-      },
-      wsServer
-    );
-
     const handleShutdown = (signal: NodeJS.Signals) => {
       logger.info(`[SHUTDOWN] ${signal} received, shutting down gracefully...`);
-      Promise.allSettled([
-        apolloServer.stop(),
-        wsCleanup.dispose(),
-      ]).finally(() => {
-        wsServer.close();
+      Promise.allSettled([apolloServer.stop()]).finally(() => {
         server.close(() => {
           logger.info('[SHUTDOWN] Server closed');
           process.exit(0);
@@ -727,8 +734,12 @@ async function saveGameState(matchId: string, engine: RiftboundGameEngine): Prom
       })
       .promise();
   } catch (error) {
-    logger.error('[STATE-SAVE] Failed to save game state:', error);
-    // Don't throw - game continues in memory even if state save fails
+    logger.error('[STATE-SAVE] Failed to save game state:', {
+      error,
+      matchId,
+      table: STATE_TABLE
+    });
+    throw error;
   }
 }
 

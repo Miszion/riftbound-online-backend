@@ -5,6 +5,7 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import { Construct } from 'constructs';
 
@@ -17,11 +18,14 @@ export interface EcsStackProps extends cdk.StackProps {
   readonly matchHistoryTable: dynamodb.Table;
   readonly decklistsTable: dynamodb.Table;
   readonly matchmakingQueueTable: dynamodb.Table;
+  readonly rankedMatchmakingQueue: sqs.IQueue;
+  readonly quickPlayMatchmakingQueue: sqs.IQueue;
   readonly userPoolArn?: string;
   readonly containerImage?: string;
   readonly desiredCount?: number;
   readonly taskCpu?: string;
   readonly taskMemory?: string;
+  readonly matchServiceUrl?: string;
 }
 
 export class EcsStack extends cdk.Stack {
@@ -69,6 +73,17 @@ export class EcsStack extends cdk.Stack {
     props.matchHistoryTable.grantReadWriteData(taskRole);
     props.decklistsTable.grantReadWriteData(taskRole);
     props.matchmakingQueueTable.grantReadWriteData(taskRole);
+    props.rankedMatchmakingQueue.grantConsumeMessages(taskRole);
+    props.quickPlayMatchmakingQueue.grantConsumeMessages(taskRole);
+    props.rankedMatchmakingQueue.grantSendMessages(taskRole);
+    props.quickPlayMatchmakingQueue.grantSendMessages(taskRole);
+    const matchStateTableName = `riftbound-online-match-states-${props.environment}`;
+    const matchStateTable = dynamodb.Table.fromTableName(
+      this,
+      'MatchStateTableRef',
+      matchStateTableName
+    );
+    matchStateTable.grantReadWriteData(taskRole);
 
     if (props.userPoolArn) {
       taskRole.addToPrincipalPolicy(
@@ -129,10 +144,18 @@ export class EcsStack extends cdk.Stack {
         ENVIRONMENT: props.environment,
         USERS_TABLE: props.usersTable.tableName,
         MATCH_HISTORY_TABLE: props.matchHistoryTable.tableName,
+        STATE_TABLE: matchStateTableName,
+        MATCH_TABLE: props.matchHistoryTable.tableName,
         DECKLISTS_TABLE: props.decklistsTable.tableName,
         MATCHMAKING_QUEUE_TABLE: props.matchmakingQueueTable.tableName,
         AWS_REGION: this.region,
         REDEPLOY_TOKEN: process.env.REDEPLOY_TOKEN ?? '',
+        MATCH_SERVICE_HOST:
+          props.matchServiceUrl || process.env.MATCH_SERVICE_HOST || process.env.MATCH_SERVICE_BASE_URL || '',
+        MATCHMAKING_RANKED_QUEUE_URL: props.rankedMatchmakingQueue.queueUrl,
+        MATCHMAKING_RANKED_QUEUE_ARN: props.rankedMatchmakingQueue.queueArn,
+        MATCHMAKING_FREE_QUEUE_URL: props.quickPlayMatchmakingQueue.queueUrl,
+        MATCHMAKING_FREE_QUEUE_ARN: props.quickPlayMatchmakingQueue.queueArn,
       },
       portMappings: [
         {
@@ -159,10 +182,10 @@ export class EcsStack extends cdk.Stack {
       healthCheck: {
         path: '/health',
         healthyHttpCodes: '200',
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(3),
+        interval: cdk.Duration.seconds(300),
+        timeout: cdk.Duration.seconds(5),
         healthyThresholdCount: 2,
-        unhealthyThresholdCount: 2,
+        unhealthyThresholdCount: 5,
       },
     });
 

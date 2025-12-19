@@ -12,7 +12,6 @@ import {
   publishAttackDeclared,
   publishPhaseChange,
 } from './pubsub';
-import { RiftboundGameEngine } from '../game-engine';
 import {
   getCardCatalog,
   findCardById as findCatalogCardById,
@@ -20,48 +19,185 @@ import {
   getImageManifest,
   buildActivationStateIndex,
 } from '../card-catalog';
-import { serializeGameState, serializePlayerState, buildOpponentView } from '../game-state-serializer';
 import type { EnrichedCardRecord } from '../card-catalog';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || 'us-east-1'
 });
+const sqs = new AWS.SQS({
+  region: process.env.AWS_REGION || 'us-east-1'
+});
 
-// Store active games (in match-service context)
-const activeGames = new Map<string, RiftboundGameEngine>();
+const matchServiceHost =
+  process.env.MATCH_SERVICE_BASE_URL ||
+  process.env.MATCH_SERVICE_HOST ||
+  process.env.MATCH_SERVICE_URL ||
+  'http://localhost:4000';
+const matchServiceBaseUrl = matchServiceHost.startsWith('http')
+  ? matchServiceHost
+  : `http://${matchServiceHost}`;
 
-const initializeMatchEngine = async ({
+const MATCH_SERVICE_MAX_RETRIES = 5;
+const MATCH_SERVICE_RETRY_DELAY_MS = 500;
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+const defaultJsonHeaders = {
+  'Content-Type': 'application/json'
+};
+
+const wait = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const buildAuthHeaders = (authToken?: string | null): Record<string, string> => {
+  if (!authToken) {
+    return {};
+  }
+  return {
+    Authorization: `Bearer ${authToken}`,
+    'x-id-token': authToken
+  };
+};
+
+const matchServiceRequest = async <T>(
+  path: string,
+  init?: RequestInit,
+  authToken?: string | null
+): Promise<T> => {
+  let attempt = 0;
+  let lastError: any = null;
+  const authHeaders = buildAuthHeaders(authToken);
+  while (attempt < MATCH_SERVICE_MAX_RETRIES) {
+    try {
+      const initHeaders = (init?.headers as Record<string, string>) || {};
+      const response = await fetch(`${matchServiceBaseUrl}${path}`, {
+        ...init,
+        headers: {
+          ...defaultJsonHeaders,
+          ...authHeaders,
+          ...initHeaders
+        }
+      });
+      const rawBody = await response.text();
+      let parsed: any = null;
+      if (rawBody) {
+        try {
+          parsed = JSON.parse(rawBody);
+        } catch {
+          parsed = rawBody;
+        }
+      }
+      if (!response.ok) {
+        const message =
+          parsed?.error ||
+          parsed?.message ||
+          `Match service error (${response.status})`;
+        if (
+          RETRYABLE_STATUS.has(response.status) &&
+          attempt < MATCH_SERVICE_MAX_RETRIES - 1
+        ) {
+          await wait(MATCH_SERVICE_RETRY_DELAY_MS * (attempt + 1));
+          attempt += 1;
+          continue;
+        }
+        const error = new Error(message);
+        (error as any).statusCode = response.status;
+        throw error;
+      }
+      return parsed as T;
+    } catch (error) {
+      lastError = error;
+      const statusCode = (error as any)?.statusCode;
+      const shouldRetry =
+        (statusCode && RETRYABLE_STATUS.has(statusCode)) ||
+        (!statusCode && attempt < MATCH_SERVICE_MAX_RETRIES - 1);
+      if (shouldRetry && attempt < MATCH_SERVICE_MAX_RETRIES - 1) {
+        await wait(MATCH_SERVICE_RETRY_DELAY_MS * (attempt + 1));
+        attempt += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+};
+
+const fetchSpectatorState = (matchId: string, authToken?: string | null) =>
+  matchServiceRequest<any>(`/matches/${matchId}`, undefined, authToken);
+
+const fetchPlayerView = (matchId: string, playerId: string, authToken?: string | null) =>
+  matchServiceRequest<any>(`/matches/${matchId}/player/${playerId}`, undefined, authToken);
+
+const postMatchAction = (
+  matchId: string,
+  action: string,
+  body: Record<string, unknown>,
+  authToken?: string | null
+) =>
+  matchServiceRequest<any>(
+    `/matches/${matchId}/actions/${action}`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body)
+    },
+    authToken
+  );
+
+const syncMatchStateFromService = async (matchId: string, authToken?: string | null) => {
+  const spectatorState = await fetchSpectatorState(matchId, authToken);
+  publishGameStateChange(matchId, spectatorState);
+  const players = spectatorState?.players ?? [];
+  await Promise.all(
+    players.map(async (player: { playerId: string }) => {
+      try {
+        const playerView = await fetchPlayerView(matchId, player.playerId, authToken);
+        publishPlayerGameStateChange(matchId, player.playerId, playerView);
+      } catch (error) {
+        logger.warn('[MATCH-SYNC] Failed to publish player snapshot', {
+          matchId,
+          playerId: player.playerId,
+          error
+        });
+      }
+    })
+  );
+  return spectatorState;
+};
+
+const spawnMatchService = async ({
   matchId,
   player1,
   player2,
   decks,
+  authToken,
+  playerProfiles,
 }: {
   matchId: string;
   player1: string;
   player2: string;
   decks: any;
+  authToken?: string | null;
+  playerProfiles?: PlayerProfileMap;
 }) => {
-  if (activeGames.has(matchId)) {
-    throw new Error('Match already exists');
-  }
-
-  const engine = new RiftboundGameEngine(matchId, [player1, player2]);
-  engine.initializeGame(decks);
-
-  activeGames.set(matchId, engine);
-  await saveGameState(matchId, engine);
-
-  const gameState = engine.getGameState();
+  const payload = await matchServiceRequest<any>(
+    '/matches/init',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        matchId,
+        player1,
+        player2,
+        decks,
+        playerProfiles
+      })
+    },
+    authToken
+  );
 
   logger.info(`[MATCH-INIT] Match ${matchId} initialized between ${player1} and ${player2}`);
-
-  return {
-    matchId,
-    status: 'initialized',
-    players: [player1, player2],
-    gameState,
-  };
+  return payload;
 };
 
 interface LeaderboardEntry {
@@ -153,7 +289,10 @@ type DeckCardRecord = {
   cardSnapshot?: CardSnapshotRecord;
 };
 
-const decklistsTableName = process.env.DECKLISTS_TABLE || 'riftbound-online-decklists-dev';
+const decklistsTableName =
+  process.env.DECKLISTS_TABLE ||
+  process.env.DECKS_TABLE ||
+  'riftbound-online-decklists-dev';
 const deckIdIndexName = 'DeckIdIndex';
 const MIN_DECK_SIZE = 39;
 const MAX_DECK_SIZE = 39;
@@ -162,9 +301,24 @@ const MAX_RUNE_COPIES = 12;
 const MAX_RUNE_TOTAL = 12;
 const MAX_SIDE_DECK_CARDS = 8;
 const BATTLEFIELD_SLOTS = 3;
-const matchTableName = process.env.MATCH_TABLE || 'riftbound-online-matches-dev';
-
-type MatchMode = 'ranked' | 'free';
+const matchTableName =
+  process.env.MATCH_TABLE ||
+  process.env.MATCH_HISTORY_TABLE ||
+  'riftbound-online-matches-dev';
+export type MatchMode = 'ranked' | 'free';
+const rankedMatchmakingQueueUrl =
+  process.env.MATCHMAKING_RANKED_QUEUE_URL ||
+  process.env.MATCHMAKING_COMPETITIVE_QUEUE_URL ||
+  null;
+const quickPlayMatchmakingQueueUrl =
+  process.env.MATCHMAKING_FREE_QUEUE_URL ||
+  process.env.MATCHMAKING_NORMAL_QUEUE_URL ||
+  process.env.MATCHMAKING_QUICKPLAY_QUEUE_URL ||
+  null;
+const matchmakingQueueUrls: Record<MatchMode, string | null> = {
+  ranked: rankedMatchmakingQueueUrl,
+  free: quickPlayMatchmakingQueueUrl
+};
 const MATCHMAKING_QUEUE_TABLE =
   process.env.MATCHMAKING_QUEUE_TABLE || 'riftbound-online-matchmaking-queue-dev';
 const MATCHMAKING_MODES: MatchMode[] = ['ranked', 'free'];
@@ -173,8 +327,9 @@ const MATCHMAKING_STATE = {
   MATCHED: 'matched'
 } as const;
 
-interface ResolverContext {
+export interface ResolverContext {
   userId?: string | null;
+  authToken?: string | null;
 }
 
 const requireUser = (context: ResolverContext, targetUserId?: string | null): string => {
@@ -357,7 +512,7 @@ const getUserProfileSummary = async (
       .get({
         TableName: process.env.USERS_TABLE || 'riftbound-online-users-dev',
         Key: { UserId: userId },
-        ProjectionExpression: 'UserId, Username, Email'
+        ProjectionExpression: 'UserId, Username'
       })
       .promise();
     if (!result.Item) {
@@ -365,7 +520,7 @@ const getUserProfileSummary = async (
     }
     return {
       userId: result.Item.UserId,
-      username: result.Item.Username ?? result.Item.Email ?? null
+      username: result.Item.Username ?? null
     };
   } catch {
     return null;
@@ -380,12 +535,77 @@ const getUsernameForUser = async (userId?: string | null): Promise<string | null
   return profile?.username ?? null;
 };
 
+type PlayerProfileMap = Record<string, { username?: string | null }>;
+
+type MatchPlayerLike = {
+  playerId?: string | null;
+  name?: string | null;
+};
+
+const hydratePlayerName = async (player?: MatchPlayerLike) => {
+  if (!player?.playerId) {
+    return;
+  }
+  if (!player.name || player.name === player.playerId) {
+    const username = await getUsernameForUser(player.playerId);
+    if (username) {
+      player.name = username;
+    }
+  }
+};
+
+const buildPlayerProfileMap = async (playerIds: string[]): Promise<PlayerProfileMap> => {
+  const profiles: PlayerProfileMap = {};
+  await Promise.all(
+    playerIds.map(async (playerId) => {
+      const username = await getUsernameForUser(playerId);
+      profiles[playerId] = { username: username ?? null };
+    })
+  );
+  return profiles;
+};
+
 const queueKey = (mode: MatchMode, userId: string) => ({
   Mode: mode,
   UserId: userId
 });
 
 const queueTtlSeconds = () => Math.floor((Date.now() + 15 * 60 * 1000) / 1000);
+
+const emitMatchmakingQueueEvent = async (
+  mode: MatchMode,
+  event: Record<string, any>
+) => {
+  const queueUrl = matchmakingQueueUrls[mode];
+  if (!queueUrl) {
+    return;
+  }
+  try {
+    await sqs
+      .sendMessage({
+        QueueUrl: queueUrl,
+        MessageBody: JSON.stringify({
+          ...event,
+          mode,
+          timestamp: Date.now()
+        }),
+        MessageAttributes: {
+          Mode: { DataType: 'String', StringValue: mode },
+          EventType: {
+            DataType: 'String',
+            StringValue: event.type ?? 'unknown'
+          }
+        }
+      })
+      .promise();
+  } catch (error) {
+    logger.warn('[MATCHMAKING] Failed to publish matchmaking event', {
+      mode,
+      eventType: event.type,
+      error
+    });
+  }
+};
 
 const listQueuedEntries = async (mode: MatchMode) => {
   const result = await dynamodb
@@ -408,7 +628,8 @@ const listQueuedEntries = async (mode: MatchMode) => {
     deckId: item.DeckId ?? null,
     mmr: Number(item.MMR ?? defaultMmr),
     queuedAt: Number(item.QueuedAt ?? Date.now()),
-    state: item.State as string
+    state: item.State as string,
+    authToken: item.AuthToken ?? null
   }));
 };
 
@@ -439,7 +660,61 @@ const getQueueLength = async (mode: MatchMode): Promise<number> => {
       Select: 'COUNT'
     })
     .promise();
-  return result.Count ?? 0;
+  return Number(result.Count ?? 0);
+};
+
+const buildMatchmakingStatusPayload = async (userId: string, mode: MatchMode) => {
+  const entry = await getQueueEntry(mode, userId);
+  const queueLength = await getQueueLength(mode);
+  const estimatedWaitSeconds = getEstimatedWaitSeconds(mode, queueLength);
+
+  if (!entry) {
+    const mmr = await getUserMmr(userId);
+    return {
+      mode,
+      state: 'idle',
+      queued: false,
+      mmr,
+      queuedAt: null,
+      estimatedWaitSeconds,
+      matchId: null,
+      opponentId: null,
+      opponentName: null,
+    };
+  }
+
+  const opponentId = entry.OpponentId ?? null;
+  const opponentName = await getUsernameForUser(opponentId);
+
+  return {
+    mode,
+    state: entry.State || MATCHMAKING_STATE.QUEUED,
+    queued: entry.State === MATCHMAKING_STATE.QUEUED,
+    mmr: entry.MMR ?? (await getUserMmr(userId)),
+    queuedAt: entry.QueuedAt ? new Date(entry.QueuedAt) : null,
+    estimatedWaitSeconds,
+    matchId: entry.MatchId ?? null,
+    opponentId,
+    opponentName,
+  };
+};
+
+const publishMatchmakingStatusUpdate = async (userId: string, mode: MatchMode) => {
+  try {
+    const payload = await buildMatchmakingStatusPayload(userId, mode);
+    await pubSub.publish(
+      `${SubscriptionEvents.MATCHMAKING_STATUS_UPDATED}:${mode}:${userId}`,
+      {
+        matchmakingStatusUpdated: payload,
+      }
+    );
+  } catch (error) {
+    logger.warn('[MATCHMAKING] Failed to publish matchmaking status update', {
+      userId,
+      mode,
+      error,
+    });
+  }
 };
 
 const getMmrTolerance = (mode: MatchMode, waitMs: number): number => {
@@ -525,44 +800,147 @@ const attemptMatch = async (mode: MatchMode) => {
             })
             .promise();
           const playerIds = [a.userId, b.userId];
-          // Attempt to find decklists for the selected participants
-          const decksResult = await dynamodb
-            .scan({
-              TableName: decklistsTableName,
-              FilterExpression: 'UserId IN (:playerA, :playerB)',
-              ExpressionAttributeValues: {
-                ':playerA': a.userId,
-                ':playerB': b.userId
+          await Promise.all(
+            playerIds.map((playerId) => publishMatchmakingStatusUpdate(playerId, mode))
+          );
+          const requeuePlayers = async (reason: string) => {
+            const resetAt = Date.now();
+            await Promise.all(
+              playerIds.map(async (playerId) => {
+                try {
+                  await dynamodb
+                    .update({
+                      TableName: MATCHMAKING_QUEUE_TABLE,
+                      Key: queueKey(mode, playerId),
+                      ConditionExpression: '#state = :matched AND MatchId = :matchId',
+                      UpdateExpression:
+                        'SET #state = :queued, UpdatedAt = :now REMOVE MatchId, OpponentId',
+                      ExpressionAttributeNames: {
+                        '#state': 'State'
+                      },
+                      ExpressionAttributeValues: {
+                        ':matched': MATCHMAKING_STATE.MATCHED,
+                        ':queued': MATCHMAKING_STATE.QUEUED,
+                        ':matchId': matchId,
+                        ':now': resetAt
+                      }
+                    })
+                    .promise();
+                } catch (error) {
+                  logger.warn(
+                    `[MATCHMAKING] Failed to requeue player ${playerId} after ${reason}`,
+                    error
+                  );
+                }
+              })
+            );
+            await Promise.all(
+              playerIds.map((playerId) => publishMatchmakingStatusUpdate(playerId, mode))
+            );
+          };
+          const ejectPlayersFromQueue = async (reason: string) => {
+            await Promise.all(
+              playerIds.map(async (playerId) => {
+                try {
+                  await dynamodb
+                    .delete({
+                      TableName: MATCHMAKING_QUEUE_TABLE,
+                      Key: queueKey(mode, playerId)
+                    })
+                    .promise();
+                  await emitMatchmakingQueueEvent(mode, {
+                    type: 'exit_queue',
+                    userId: playerId,
+                    reason
+                  });
+                } catch (error) {
+                  logger.warn(
+                    `[MATCHMAKING] Failed to remove player ${playerId} for ${reason}`,
+                    error
+                  );
+                }
+              })
+            );
+            await Promise.all(
+              playerIds.map((playerId) => publishMatchmakingStatusUpdate(playerId, mode))
+            );
+          };
+
+          const decksByUser = new Map<string, any>();
+          await Promise.all(
+            playerIds.map(async (playerId) => {
+              const preferredDeckId =
+                playerId === a.userId ? a.deckId ?? null : playerId === b.userId ? b.deckId ?? null : null;
+              const deckResult = await dynamodb
+                .query({
+                  TableName: decklistsTableName,
+                  KeyConditionExpression: 'UserId = :userId',
+                  ExpressionAttributeValues: {
+                    ':userId': playerId
+                  }
+                })
+                .promise();
+              const userDecks = deckResult.Items || [];
+              if (!userDecks.length) {
+                return;
+              }
+              const chosenDeck =
+                (preferredDeckId
+                  ? userDecks.find((deck) => deck.DeckId === preferredDeckId)
+                  : undefined) || userDecks.find((deck) => deck.IsDefault) || userDecks[0];
+              if (!chosenDeck) {
+                return;
+              }
+              const mapped = mapDecklistItem(chosenDeck);
+              if (mapped) {
+                decksByUser.set(playerId, mapped);
               }
             })
-            .promise();
-          const decksByUser = new Map<string, any>();
-          (decksResult.Items || []).forEach((deck) => {
-            decksByUser.set(deck.UserId, deck);
-          });
-          let matchInitialized = false;
-          if (decksByUser.size === playerIds.length) {
-            const decksPayload: Record<string, any> = {};
-            playerIds.forEach((playerId) => {
-              decksPayload[playerId] = decksByUser.get(playerId);
-            });
-            try {
-              await initializeMatchEngine({
-                matchId,
-                player1: playerIds[0],
-                player2: playerIds[1],
-                decks: decksPayload
-              });
-              matchInitialized = true;
-            } catch (error) {
-              logger.error('[MATCHMAKING] Failed to init match', error);
-            }
-          } else {
+          );
+
+          if (decksByUser.size !== playerIds.length) {
             logger.warn(
               `[MATCHMAKING] Missing decklists for players ${playerIds.join(
                 ', '
               )}; deferring match initialization`
             );
+            await requeuePlayers('missing decklists');
+            continue;
+          }
+
+          const playerProfiles = await buildPlayerProfileMap(playerIds);
+          const decksPayload: Record<string, any> = {};
+          playerIds.forEach((playerId) => {
+            decksPayload[playerId] = decksByUser.get(playerId);
+          });
+
+          const authTokenForInit = a.authToken || b.authToken || null;
+          if (!authTokenForInit) {
+            logger.warn(
+              `[MATCHMAKING] Missing auth token for players ${playerIds.join(
+                ', '
+              )}; removing them from queue`
+            );
+            await ejectPlayersFromQueue('missing auth token');
+            continue;
+          }
+
+          try {
+            await spawnMatchService({
+              matchId,
+              player1: playerIds[0],
+              player2: playerIds[1],
+              decks: decksPayload,
+              authToken: authTokenForInit,
+              playerProfiles
+            });
+            await Promise.all(
+              playerIds.map((playerId) => publishMatchmakingStatusUpdate(playerId, mode))
+            );
+          } catch (error) {
+            logger.error('[MATCHMAKING] Failed to init match', error);
+            await requeuePlayers('match init failure');
+            continue;
           }
 
           return {
@@ -572,7 +950,7 @@ const attemptMatch = async (mode: MatchMode) => {
               { userId: a.userId, mmr: a.mmr, deckId: a.deckId },
               { userId: b.userId, mmr: b.mmr, deckId: b.deckId }
             ],
-            initialized: matchInitialized
+            initialized: true
           };
         } catch {
           // Entry might have been removed; continue searching
@@ -582,6 +960,14 @@ const attemptMatch = async (mode: MatchMode) => {
   }
 
   return null;
+};
+
+export const runMatchmakingSweep = async (mode: MatchMode) => {
+  let matched = false;
+  while (await attemptMatch(mode)) {
+    matched = true;
+  }
+  return matched;
 };
 
 const mapMatchReplayItem = (
@@ -678,47 +1064,28 @@ export const queryResolvers = {
   },
 
   // Match Queries
-  match(_parent: any, { matchId }: { matchId: string }) {
+  async match(_parent: any, { matchId }: { matchId: string }, context: ResolverContext) {
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
+      const state = await fetchSpectatorState(matchId, context.authToken);
+      if (state?.players?.length) {
+        await Promise.all(state.players.map((player: MatchPlayerLike) => hydratePlayerName(player)));
       }
-      return serializeGameState(engine.getGameState());
+      return state;
     } catch (error) {
       logger.error('Error fetching match:', error);
       throw error;
     }
   },
 
-  playerMatch(_parent: any, { matchId, playerId }: { matchId: string; playerId: string }) {
+  async playerMatch(
+    _parent: any,
+    { matchId, playerId }: { matchId: string; playerId: string },
+    context: ResolverContext
+  ) {
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
-
-      const playerState = engine.getPlayerState(playerId);
-      if (!playerState) {
-        throw new Error('Player not found in match');
-      }
-
-      const rawState = engine.getGameState();
-      const currentPlayer = serializePlayerState(playerState, 'self');
-      const opponentSummary = buildOpponentView(rawState, playerId);
-
-      return {
-        matchId,
-        currentPlayer,
-        opponent: opponentSummary,
-        gameState: {
-          matchId,
-          currentPhase: rawState.currentPhase,
-          turnNumber: rawState.turnNumber,
-          currentPlayerIndex: rawState.currentPlayerIndex,
-          canAct: engine.canPlayerAct(playerId),
-        },
-      };
+      const view = await fetchPlayerView(matchId, playerId, context.authToken);
+      await hydratePlayerName(view?.currentPlayer);
+      return view;
     } catch (error) {
       logger.error('Error fetching player match:', error);
       throw error;
@@ -847,39 +1214,7 @@ export const queryResolvers = {
     const targetUserId = userId || requireUser(context);
     requireUser(context, targetUserId);
     const normalizedMode = normalizeMatchMode(mode);
-    const entry = await getQueueEntry(normalizedMode, targetUserId);
-    const queueLength = await getQueueLength(normalizedMode);
-    const estimatedWaitSeconds = getEstimatedWaitSeconds(normalizedMode, queueLength);
-
-    if (!entry) {
-      const mmr = await getUserMmr(targetUserId);
-      return {
-        mode: normalizedMode,
-        state: 'idle',
-        queued: false,
-        mmr,
-        estimatedWaitSeconds,
-        opponentId: null,
-        opponentName: null,
-        matchId: null,
-        queuedAt: null
-      };
-    }
-
-    const opponentId = entry.OpponentId ?? null;
-    const opponentName = await getUsernameForUser(opponentId);
-
-    return {
-      mode: normalizedMode,
-      state: entry.State || MATCHMAKING_STATE.QUEUED,
-      queued: entry.State === MATCHMAKING_STATE.QUEUED,
-      mmr: entry.MMR ?? (await getUserMmr(targetUserId)),
-      queuedAt: entry.QueuedAt ? new Date(entry.QueuedAt) : null,
-      estimatedWaitSeconds,
-      matchId: entry.MatchId ?? null,
-      opponentId,
-      opponentName
-    };
+    return buildMatchmakingStatusPayload(targetUserId, normalizedMode);
   },
 
   async matchReplay(_parent: any, { matchId }: { matchId: string }) {
@@ -1067,10 +1402,19 @@ export const mutationResolvers = {
       player1: string;
       player2: string;
       decks: any;
-    }
+    },
+    context: ResolverContext
   ) {
     try {
-      return await initializeMatchEngine({ matchId, player1, player2, decks });
+      const playerProfiles = await buildPlayerProfileMap([player1, player2]);
+      return await spawnMatchService({
+        matchId,
+        player1,
+        player2,
+        decks,
+        authToken: context.authToken,
+        playerProfiles
+      });
     } catch (error) {
       logger.error('[MATCH-INIT] Error:', error);
       throw error;
@@ -1084,32 +1428,17 @@ export const mutationResolvers = {
   ) {
     const targetUser = requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
-
-      engine.submitInitiativeChoice(playerId, choice);
-      await saveGameState(matchId, engine);
-
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-      const currentPlayerSnapshot = serializePlayerState(engine.getPlayerState(playerId), 'self');
-      const opponentSummary = buildOpponentView(rawState, playerId);
-
-      publishGameStateChange(matchId, spectatorState);
-      publishPlayerGameStateChange(matchId, playerId, {
+      await postMatchAction(
         matchId,
-        currentPlayer: currentPlayerSnapshot,
-        opponent: opponentSummary,
-        gameState: {
-          matchId,
-          currentPhase: rawState.currentPhase,
-          turnNumber: rawState.turnNumber,
-          currentPlayerIndex: rawState.currentPlayerIndex,
-          canAct: engine.canPlayerAct(playerId)
-        }
-      });
+        'initiative',
+        {
+          playerId,
+          choice
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
 
       logger.info(
         `[INITIATIVE] Player ${playerId} (${targetUser}) locked initiative choice ${choice} for match ${matchId}`
@@ -1129,32 +1458,12 @@ export const mutationResolvers = {
   ) {
     const targetUser = requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
+      await postMatchAction(matchId, 'mulligan', {
+        playerId,
+        indices: Array.isArray(indices) ? indices : []
+      }, context.authToken);
 
-      engine.submitMulligan(playerId, indices ?? []);
-      await saveGameState(matchId, engine);
-
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-      const currentPlayerSnapshot = serializePlayerState(engine.getPlayerState(playerId), 'self');
-      const opponentSummary = buildOpponentView(rawState, playerId);
-
-      publishGameStateChange(matchId, spectatorState);
-      publishPlayerGameStateChange(matchId, playerId, {
-        matchId,
-        currentPlayer: currentPlayerSnapshot,
-        opponent: opponentSummary,
-        gameState: {
-          matchId,
-          currentPhase: rawState.currentPhase,
-          turnNumber: rawState.turnNumber,
-          currentPlayerIndex: rawState.currentPlayerIndex,
-          canAct: engine.canPlayerAct(playerId),
-        },
-      });
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
 
       logger.info(
         `[MULLIGAN] Player ${playerId} (${targetUser}) submitted mulligan for match ${matchId}`
@@ -1174,16 +1483,12 @@ export const mutationResolvers = {
   ) {
     const targetUser = requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
+      await postMatchAction(matchId, 'select-battlefield', {
+        playerId,
+        battlefieldId
+      }, context.authToken);
 
-      engine.selectBattlefield(playerId, battlefieldId);
-      await saveGameState(matchId, engine);
-
-      const spectatorState = serializeGameState(engine.getGameState());
-      publishGameStateChange(matchId, spectatorState);
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
 
       logger.info(
         `[BATTLEFIELD] Player ${playerId} (${targetUser}) selected battlefield ${battlefieldId} for match ${matchId}`
@@ -1208,53 +1513,45 @@ export const mutationResolvers = {
       playerId: string;
       cardIndex: number;
       targets?: string[];
-    }
+    },
+    context: ResolverContext
   ) {
+    requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
-
-      if (!engine.canPlayerAct(playerId)) {
-        throw new Error('Not your turn');
-      }
-
-      const playerView = engine.getPlayerState(playerId);
-      const selectedCard = playerView?.hand?.[cardIndex];
-      const cardSnapshot: PublishedCard | null = selectedCard
-        ? {
-            cardId: selectedCard.id,
-            name: selectedCard.name,
-            cost: selectedCard.energyCost ?? selectedCard.manaCost ?? 0,
-            power: selectedCard.power ?? 0,
-            toughness: selectedCard.toughness ?? 0,
-            type: selectedCard.type,
-          }
-        : null;
-
-      engine.playCard(playerId, cardIndex, targets);
-      await saveGameState(matchId, engine);
-
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-      const currentPlayerSnapshot = serializePlayerState(engine.getPlayerState(playerId), 'self');
-      const opponentSummary = buildOpponentView(rawState, playerId);
-
-      // Publish real-time update
-      publishGameStateChange(matchId, spectatorState);
-      publishPlayerGameStateChange(matchId, playerId, {
-        matchId,
-        currentPlayer: currentPlayerSnapshot,
-        opponent: opponentSummary,
-        gameState: {
+      let cardSnapshot: PublishedCard | null = null;
+      try {
+        const playerView = await fetchPlayerView(matchId, playerId, context.authToken);
+        const selectedCard = playerView?.currentPlayer?.hand?.[cardIndex];
+        cardSnapshot = selectedCard
+          ? {
+              cardId: selectedCard.cardId ?? selectedCard.id ?? null,
+              name: selectedCard.name ?? 'Card',
+              cost: selectedCard.cost ?? selectedCard.energyCost ?? 0,
+              power: selectedCard.power ?? 0,
+              toughness: selectedCard.toughness ?? 0,
+              type: selectedCard.type ?? 'Unknown',
+            }
+          : null;
+      } catch (error) {
+        logger.warn('[PLAY-CARD] Unable to snapshot card before action', {
           matchId,
-          currentPhase: rawState.currentPhase,
-          turnNumber: rawState.turnNumber,
-          currentPlayerIndex: rawState.currentPlayerIndex,
-          canAct: engine.canPlayerAct(playerId),
+          playerId,
+          error,
+        });
+      }
+
+      await postMatchAction(
+        matchId,
+        'play-card',
+        {
+          playerId,
+          cardIndex,
+          targets: targets ?? [],
         },
-      });
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
 
       if (cardSnapshot) {
         publishCardPlayed(matchId, {
@@ -1290,33 +1587,29 @@ export const mutationResolvers = {
       playerId: string;
       creatureInstanceId: string;
       destinationId: string;
-    }
+    },
+    context: ResolverContext
   ) {
+    requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
-
-      if (!engine.canPlayerAct(playerId)) {
-        throw new Error('Not your turn');
-      }
-
       if (!destinationId) {
         throw new Error('Battlefield destination required');
       }
-
       if (destinationId === 'base') {
         throw new Error('Use moveUnit to return to base');
       }
+      await postMatchAction(
+        matchId,
+        'attack',
+        {
+          playerId,
+          creatureInstanceId,
+          destinationId,
+        },
+        context.authToken
+      );
 
-      engine.moveUnit(playerId, creatureInstanceId, destinationId);
-      await saveGameState(matchId, engine);
-
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-
-      publishGameStateChange(matchId, spectatorState);
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
       publishAttackDeclared(matchId, {
         matchId,
         playerId,
@@ -1350,25 +1643,23 @@ export const mutationResolvers = {
       playerId: string;
       creatureInstanceId: string;
       destinationId: string;
-    }
+    },
+    context: ResolverContext
   ) {
+    requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
+      await postMatchAction(
+        matchId,
+        'move',
+        {
+          playerId,
+          creatureInstanceId,
+          destinationId,
+        },
+        context.authToken
+      );
 
-      if (!engine.canPlayerAct(playerId)) {
-        throw new Error('Not your turn');
-      }
-
-      engine.moveUnit(playerId, creatureInstanceId, destinationId);
-      await saveGameState(matchId, engine);
-
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-
-      publishGameStateChange(matchId, spectatorState);
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
 
       return {
         success: true,
@@ -1383,29 +1674,25 @@ export const mutationResolvers = {
 
   async nextPhase(
     _parent: any,
-    { matchId, playerId }: { matchId: string; playerId: string }
+    { matchId, playerId }: { matchId: string; playerId: string },
+    context: ResolverContext
   ) {
+    requireUser(context, playerId);
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
+      await postMatchAction(
+        matchId,
+        'next-phase',
+        {
+          playerId,
+        },
+        context.authToken
+      );
 
-      if (!engine.canPlayerAct(playerId)) {
-        throw new Error('Not your turn');
-      }
-
-      engine.proceedToNextPhase();
-      await saveGameState(matchId, engine);
-
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-
-      publishGameStateChange(matchId, spectatorState);
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
       publishPhaseChange(matchId, {
         matchId,
-        newPhase: rawState.currentPhase,
-        turnNumber: rawState.turnNumber,
+        newPhase: spectatorState.currentPhase,
+        turnNumber: spectatorState.turnNumber,
         timestamp: new Date(),
       });
 
@@ -1424,58 +1711,29 @@ export const mutationResolvers = {
 
   async reportMatchResult(
     _parent: any,
-    { matchId, winner, reason }: { matchId: string; winner: string; reason: string }
+    { matchId, winner, reason }: { matchId: string; winner: string; reason: string },
+    context: ResolverContext
   ) {
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
+      const response = await matchServiceRequest<{
+        success: boolean;
+        matchResult: any;
+      }>(
+        `/matches/${matchId}/result`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ winner, reason }),
+        },
+        context.authToken
+      );
 
-      const rawState = engine.getGameState();
-      const spectatorState = serializeGameState(rawState);
-      const matchResult = {
-        matchId,
-        winner,
-        loser: rawState.players.find((p: any) => p.playerId !== winner)?.playerId,
-        reason: reason || 'victory_points',
-        duration: Date.now() - rawState.timestamp,
-        turns: rawState.turnNumber,
-        moves: rawState.moveHistory || [],
-      };
-
-      const now = Date.now();
-
-      await dynamodb
-        .put({
-          TableName: matchTableName,
-          Item: {
-            MatchId: matchId,
-            Players: rawState.players.map((p: any) => p.playerId),
-            Winner: matchResult.winner,
-            Loser: matchResult.loser,
-            Reason: matchResult.reason,
-            Duration: matchResult.duration,
-            Turns: matchResult.turns,
-            MoveCount: matchResult.moves.length,
-            Moves: matchResult.moves,
-            FinalState: spectatorState,
-            CreatedAt: now,
-            Status: 'completed',
-          },
-        })
-        .promise();
-
-      activeGames.delete(matchId);
-
-      // Publish match completion
-      publishMatchCompletion(matchId, matchResult);
+      publishMatchCompletion(matchId, response.matchResult);
 
       logger.info(`[MATCH-COMPLETE] Match ${matchId} completed. Winner: ${winner}`);
 
       return {
-        success: true,
-        matchResult,
+        success: response.success,
+        matchResult: response.matchResult,
       };
     } catch (error) {
       logger.error('[RESULT] Error:', error);
@@ -1485,63 +1743,31 @@ export const mutationResolvers = {
 
   async concedeMatch(
     _parent: any,
-    { matchId, playerId }: { matchId: string; playerId: string }
+    { matchId, playerId }: { matchId: string; playerId: string },
+    context: ResolverContext
   ) {
     try {
-      const engine = activeGames.get(matchId);
-      if (!engine) {
-        throw new Error('Match not found');
-      }
+      const response = await matchServiceRequest<{
+        success: boolean;
+        matchResult: any;
+      }>(
+        `/matches/${matchId}/concede`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ playerId }),
+        },
+        context.authToken
+      );
 
-      const rawState = engine.getGameState();
-      const opponent = rawState.players.find((p: any) => p.playerId !== playerId);
-      if (!opponent) {
-        throw new Error('Opponent not found');
-      }
+      publishMatchCompletion(matchId, response.matchResult);
 
-      const matchResult = {
-        matchId,
-        winner: opponent.playerId,
-        loser: playerId,
-        reason: 'concede',
-        duration: Date.now() - rawState.timestamp,
-        turns: rawState.turnNumber,
-        moves: rawState.moveHistory || [],
-      };
-      const spectatorState = serializeGameState(rawState);
-
-      // Save to DynamoDB
-      const now = Date.now();
-      await dynamodb
-        .put({
-          TableName: matchTableName,
-          Item: {
-            MatchId: matchId,
-            Players: rawState.players.map((p: any) => p.playerId),
-            Winner: matchResult.winner,
-            Loser: matchResult.loser,
-            Reason: matchResult.reason,
-            Duration: matchResult.duration,
-            Turns: matchResult.turns,
-            MoveCount: matchResult.moves.length,
-            Moves: matchResult.moves,
-            FinalState: spectatorState,
-            CreatedAt: now,
-            Status: 'completed',
-          },
-        })
-        .promise();
-
-      activeGames.delete(matchId);
-
-      // Publish match completion
-      publishMatchCompletion(matchId, matchResult);
-
-      logger.info(`[MATCH-CONCEDE] Match ${matchId} ended. Winner: ${opponent.playerId}`);
+      logger.info(
+        `[MATCH-CONCEDE] Match ${matchId} ended. Winner: ${response.matchResult.winner}`
+      );
 
       return {
-        success: true,
-        matchResult,
+        success: response.success,
+        matchResult: response.matchResult,
       };
     } catch (error) {
       logger.error('[CONCEDE] Error:', error);
@@ -1761,25 +1987,33 @@ export const mutationResolvers = {
             MMR: mmr,
             QueuedAt: now,
             Ranked: normalizedMode === 'ranked',
+            AuthToken: context.authToken ?? null,
             ExpiresAt: queueTtlSeconds()
           }
         })
         .promise();
+      await emitMatchmakingQueueEvent(normalizedMode, {
+        type: 'join_queue',
+        userId,
+        deckId: input.deckId ?? null,
+        mmr,
+        queuedAt: now
+      });
+      await publishMatchmakingStatusUpdate(userId, normalizedMode);
 
-      const match = await attemptMatch(normalizedMode);
       const queueLength = await getQueueLength(normalizedMode);
       const estimatedWaitSeconds = getEstimatedWaitSeconds(normalizedMode, queueLength);
-      const participant = match?.players.find((player) => player.userId === userId);
-      const opponentId = participant
-        ? match?.players.find((player) => player.userId !== userId)?.userId ?? null
-        : null;
+      const entry = await getQueueEntry(normalizedMode, userId);
+      const state = entry?.State ?? MATCHMAKING_STATE.QUEUED;
+      const matchId = entry?.MatchId ?? null;
+      const opponentId = entry?.OpponentId ?? null;
       const opponentName = opponentId ? await getUsernameForUser(opponentId) : null;
 
       return {
         mode: normalizedMode,
-        queued: !participant,
-        matchFound: Boolean(participant),
-        matchId: participant ? match?.matchId ?? null : null,
+        queued: state === MATCHMAKING_STATE.QUEUED,
+        matchFound: state === MATCHMAKING_STATE.MATCHED,
+        matchId,
         opponentId,
         opponentName,
         mmr,
@@ -1805,6 +2039,11 @@ export const mutationResolvers = {
           Key: queueKey(normalizedMode, userId)
         })
         .promise();
+      await emitMatchmakingQueueEvent(normalizedMode, {
+        type: 'leave_queue',
+        userId
+      });
+      await publishMatchmakingStatusUpdate(userId, normalizedMode);
       return true;
     } catch (error) {
       logger.error('Error leaving matchmaking queue:', error);
@@ -1861,6 +2100,15 @@ export const subscriptionResolvers = {
       return pubSub.asyncIterator([`${SubscriptionEvents.PHASE_CHANGED}:${matchId}`]);
     },
   },
+
+  matchmakingStatusUpdated: {
+    subscribe: (_parent: any, { userId, mode }: { userId: string; mode: MatchMode }) => {
+      const normalizedMode = normalizeMatchMode(mode);
+      return pubSub.asyncIterator([
+        `${SubscriptionEvents.MATCHMAKING_STATUS_UPDATED}:${normalizedMode}:${userId}`,
+      ]);
+    },
+  },
 };
 
 // ============================================================================
@@ -1893,25 +2141,3 @@ async function broadcastLeaderboardUpdate(limit = 100): Promise<void> {
     logger.error('[LEADERBOARD] Failed to publish update:', error);
   }
 }
-
-async function saveGameState(matchId: string, engine: RiftboundGameEngine): Promise<void> {
-  try {
-    const gameState = serializeGameState(engine.getGameState());
-    await dynamodb.put({
-      TableName: process.env.STATE_TABLE || 'riftbound-online-match-states-dev',
-      Item: {
-        MatchId: matchId,
-        GameState: gameState,
-        Timestamp: Date.now(),
-        Status: gameState.status,
-        TurnNumber: gameState.turnNumber,
-        CurrentPhase: gameState.currentPhase,
-      },
-    }).promise();
-  } catch (error) {
-    logger.error('[STATE-SAVE] Failed to save game state:', error);
-  }
-}
-
-// Export active games map for use in server setup
-export { activeGames };

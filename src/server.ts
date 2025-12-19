@@ -8,6 +8,8 @@ import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
 import { typeDefs } from './graphql/schema';
 import { queryResolvers, mutationResolvers, subscriptionResolvers } from './graphql/resolvers';
+import { startMatchmakingQueueWorker } from './matchmaking-queue-worker';
+import { decodeJwtPayload, requireAuthenticatedUser } from './auth-utils';
 
 const awsRegion = process.env.AWS_REGION || 'us-east-1';
 const environment = process.env.ENVIRONMENT || 'dev';
@@ -28,6 +30,7 @@ const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID;
 const app: Express = express();
 const normalizedStage = environment.replace(/^\//, '').replace(/\/$/, '');
 const stagePrefix = normalizedStage ? `/${normalizedStage}` : '';
+const PUBLIC_ROUTES = new Set(['/health', '/auth/sign-in', '/auth/sign-up', '/auth/refresh']);
 
 const disableCors = process.env.DISABLE_CORS === 'true';
 
@@ -36,10 +39,18 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '*')
   .map((origin) => origin.trim())
   .filter((origin) => origin.length > 0);
 
+const allowedHeadersList = [
+  'Content-Type',
+  'Authorization',
+  'x-id-token',
+  'x-user-id',
+  'x-requested-with'
+];
+
 const baseCorsOptions: cors.CorsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: '*',
+  allowedHeaders: allowedHeadersList,
   exposedHeaders: ['Content-Type'],
 };
 
@@ -95,26 +106,10 @@ interface LeaderboardUser extends UserProfile {
 
 interface AuthedRequest extends Request {
   userId?: string;
+  authToken?: string | null;
 }
 
 const sanitizeEmail = (value: string): string => value.trim().toLowerCase();
-
-const decodeJwtPayload = (token?: string): Record<string, any> | null => {
-  if (!token) return null;
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) {
-      return null;
-    }
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
-    const json = Buffer.from(padded, 'base64').toString('utf-8');
-    return JSON.parse(json);
-  } catch (error) {
-    logger.warn('Failed to decode JWT payload:', error);
-    return null;
-  }
-};
 
 const getCognitoConfig = () => {
   if (!COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) {
@@ -232,16 +227,14 @@ if (stagePrefix) {
   });
 }
 
-app.use(express.json({ limit: '2mb' }));
-
-// Promote x-user-id header into request context for downstream handlers (GraphQL, REST)
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  const headerUserId = req.header('x-user-id');
-  if (headerUserId) {
-    (req as AuthedRequest).userId = headerUserId;
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (PUBLIC_ROUTES.has(req.path)) {
+    return next();
   }
-  next();
+  return requireAuthenticatedUser(req, res, next);
 });
+
+app.use(express.json({ limit: '2mb' }));
 
 // Detailed request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -307,15 +300,19 @@ async function startApolloServer() {
   graphqlPaths.forEach((path) => {
     const graphqlHandler = expressMiddleware(server, {
       context: async ({ req }) => ({
-        userId: (req as AuthedRequest).userId
+        userId: (req as AuthedRequest).userId,
+        authToken: (req as AuthedRequest).authToken || null
       })
     });
 
     app.use(path, async (req: Request, res: Response, next: NextFunction) => {
       const body: any = req.body;
-      logger.info('[GraphQL] Incoming operation', {
+      const operationName = body?.operationName;
+      const suppressLog = operationName === 'MatchmakingStatus';
+      const requestLogger = suppressLog ? logger.debug.bind(logger) : logger.info.bind(logger);
+      requestLogger('[GraphQL] Incoming operation', {
         path,
-        operationName: body?.operationName,
+        operationName,
         hasBody: Boolean(body),
         userId: (req as AuthedRequest).userId,
         headers: {
@@ -328,10 +325,11 @@ async function startApolloServer() {
       });
 
       res.on('finish', () => {
-        logger.info('[GraphQL] Response sent', {
+        const responseLogger = suppressLog ? logger.debug.bind(logger) : logger.info.bind(logger);
+        responseLogger('[GraphQL] Response sent', {
           path,
           statusCode: res.statusCode,
-          operationName: body?.operationName,
+          operationName,
         });
       });
 
@@ -351,11 +349,6 @@ async function startApolloServer() {
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response): void => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
-// Debug endpoint
-app.get('/debug', (_req: Request, res: Response): void => {
-  res.status(200).json({ message: 'Debug endpoint working', apolloStarted: true });
 });
 
 // Authentication endpoints (migrated from Lambda)
@@ -696,6 +689,7 @@ async function runServer() {
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info(`GraphQL endpoint available at http://localhost:${PORT}/graphql`);
+      startMatchmakingQueueWorker();
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

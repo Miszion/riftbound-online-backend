@@ -12,6 +12,7 @@ export enum SubscriptionEvents {
   CARD_PLAYED = 'CARD_PLAYED',
   ATTACK_DECLARED = 'ATTACK_DECLARED',
   PHASE_CHANGED = 'PHASE_CHANGED',
+  MATCHMAKING_STATUS_UPDATED = 'MATCHMAKING_STATUS_UPDATED',
 }
 
 // Helper functions to publish events

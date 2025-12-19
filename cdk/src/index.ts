@@ -5,6 +5,7 @@ import { NetworkingStack } from './networking-stack';
 import { EcsStack } from './ecs-stack';
 import { MatchServiceStack } from './match-service-stack';
 import { ApiGatewayStack } from './api-gateway-stack';
+import { MatchQueueStack } from './queues-stack';
 
 const app = new cdk.App();
 
@@ -35,30 +36,11 @@ const authStack = new AuthStack(app, `RiftboundAuth-${environment}`, {
   environment,
   description: `Authentication infrastructure for Riftbound Online ${environment}`,
 });
-const ecsStack = new EcsStack(app, `RiftboundEcs-${environment}`, {
-  environment,
-  vpc: networkingStack.vpc,
-  albSecurityGroup: networkingStack.albSecurityGroup,
-  ecsSecurityGroup: networkingStack.ecsSecurityGroup,
-  usersTable: databaseStack.usersTable,
-  matchHistoryTable: databaseStack.matchHistoryTable,
-  decklistsTable: databaseStack.decklistsTable,
-  matchmakingQueueTable: databaseStack.matchmakingQueueTable,
-  userPoolArn: authStack.userPool.userPoolArn,
-  containerImage,
-  desiredCount,
-  taskCpu,
-  taskMemory,
-  description: `ECS infrastructure for Riftbound Online ${environment}`,
-});
 
-const apiGatewayStack = new ApiGatewayStack(app, `RiftboundApi-${environment}`, {
+const queueStack = new MatchQueueStack(app, `RiftboundQueues-${environment}`, {
   environment,
-  loadBalancerDnsName: ecsStack.loadBalancer.loadBalancerDnsName,
-  allowedOrigins: corsOrigins,
-  description: `Public API Gateway for Riftbound Online ${environment}`,
+  description: `Matchmaking queues for Riftbound Online ${environment}`,
 });
-
 // Match Service Stack - One task per match
 const matchServiceStack = new MatchServiceStack(
   app,
@@ -72,11 +54,41 @@ const matchServiceStack = new MatchServiceStack(
   }
 );
 
+const ecsStack = new EcsStack(app, `RiftboundEcs-${environment}`, {
+  environment,
+  vpc: networkingStack.vpc,
+  albSecurityGroup: networkingStack.albSecurityGroup,
+  ecsSecurityGroup: networkingStack.ecsSecurityGroup,
+  usersTable: databaseStack.usersTable,
+  matchHistoryTable: databaseStack.matchHistoryTable,
+  decklistsTable: databaseStack.decklistsTable,
+  matchmakingQueueTable: databaseStack.matchmakingQueueTable,
+  rankedMatchmakingQueue: queueStack.rankedQueue,
+  quickPlayMatchmakingQueue: queueStack.quickPlayQueue,
+  userPoolArn: authStack.userPool.userPoolArn,
+  containerImage,
+  desiredCount,
+  taskCpu,
+  taskMemory,
+  matchServiceUrl: `http://${matchServiceStack.loadBalancer.loadBalancerDnsName}`,
+  description: `ECS infrastructure for Riftbound Online ${environment}`,
+});
+
+const apiGatewayStack = new ApiGatewayStack(app, `RiftboundApi-${environment}`, {
+  environment,
+  loadBalancerDnsName: ecsStack.loadBalancer.loadBalancerDnsName,
+  allowedOrigins: corsOrigins,
+  description: `Public API Gateway for Riftbound Online ${environment}`,
+});
+
 // Add dependencies
 ecsStack.addDependency(networkingStack);
 ecsStack.addDependency(databaseStack);
+ecsStack.addDependency(queueStack);
+ecsStack.addDependency(matchServiceStack);
 matchServiceStack.addDependency(networkingStack);
 matchServiceStack.addDependency(databaseStack);
+queueStack.addDependency(networkingStack);
 apiGatewayStack.addDependency(ecsStack);
 
 app.synth();

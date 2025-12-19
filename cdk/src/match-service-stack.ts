@@ -102,6 +102,7 @@ export class MatchServiceStack extends cdk.Stack {
       image: ecs.ContainerImage.fromRegistry(props.containerImage),
       memoryLimitMiB: 1024,
       cpu: 512,
+      command: ['node', 'dist/match-service.js'],
       logging: ecs.LogDriver.awsLogs({
         logGroup,
         streamPrefix: 'match-service'
@@ -119,15 +120,7 @@ export class MatchServiceStack extends cdk.Stack {
           containerPort: 4000,
           protocol: ecs.Protocol.TCP
         }
-      ],
-      // Health check to detect crashed matches
-      healthCheck: {
-        command: ['CMD-SHELL', 'curl -f http://localhost:4000/health || exit 1'],
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(5),
-        retries: 3,
-        startPeriod: cdk.Duration.seconds(60)
-      }
+      ]
     });
 
     // ========================================================================
@@ -162,6 +155,21 @@ export class MatchServiceStack extends cdk.Stack {
       );
     }
 
+    const executionRole = this.taskDefinition.executionRole;
+    if (executionRole) {
+      executionRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: [
+            'ecr:GetAuthorizationToken',
+            'ecr:BatchCheckLayerAvailability',
+            'ecr:GetDownloadUrlForLayer',
+            'ecr:BatchGetImage'
+          ],
+          resources: ['*']
+        })
+      );
+    }
+
     // ========================================================================
     // LOAD BALANCER
     // ========================================================================
@@ -187,10 +195,10 @@ export class MatchServiceStack extends cdk.Stack {
         targetGroupName: `riftbound-match-service-${environment}`,
         healthCheck: {
           path: '/health',
-          interval: cdk.Duration.seconds(30),
-          timeout: cdk.Duration.seconds(5),
+          interval: cdk.Duration.seconds(300),
+          timeout: cdk.Duration.seconds(10),
           healthyThresholdCount: 2,
-          unhealthyThresholdCount: 3
+          unhealthyThresholdCount: 5
         },
         deregistrationDelay: cdk.Duration.seconds(30) // Quick cleanup when match ends
       }
@@ -208,7 +216,7 @@ export class MatchServiceStack extends cdk.Stack {
     const service = new ecs.FargateService(this, 'MatchService', {
       cluster: this.cluster,
       taskDefinition: this.taskDefinition,
-      desiredCount: 0, // Start with no tasks - instantiate on-demand
+      desiredCount: 1, // Keep at least one listener ready for init requests
       serviceName: `riftbound-match-service-${environment}`,
       vpcSubnets: {
         subnets: props.vpc.privateSubnets
@@ -224,7 +232,7 @@ export class MatchServiceStack extends cdk.Stack {
     // ========================================================================
 
     const scaling = service.autoScaleTaskCount({
-      minCapacity: 0,
+      minCapacity: 1,
       maxCapacity: 100 // Max 100 concurrent matches
     });
 

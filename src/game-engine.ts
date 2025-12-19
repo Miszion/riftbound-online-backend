@@ -33,7 +33,8 @@ export enum CardType {
   CREATURE = 'creature',
   SPELL = 'spell',
   ARTIFACT = 'artifact',
-  ENCHANTMENT = 'enchantment'
+  ENCHANTMENT = 'enchantment',
+  RUNE = 'rune'
 }
 
 export enum CardRarity {
@@ -102,6 +103,14 @@ export interface RuneCard {
   powerValue?: number;
 }
 
+export type PlayerSeed =
+  | string
+  | {
+      playerId?: string;
+      id?: string;
+      name?: string | null;
+    };
+
 export type CardLocation =
   | {
       zone: 'base';
@@ -159,9 +168,15 @@ export interface ResourcePool {
 }
 
 export interface PlayerDeckConfig {
-  mainDeck: DeckCardEntry[];
-  runeDeck?: RuneCard[];
+  mainDeck?: DeckCardEntry[];
+  /**
+   * Some clients (e.g. the web UI) send the main deck as `cards`.
+   * Keep supporting that shape to avoid invalid deck errors.
+   */
+  cards?: DeckCardEntry[];
+  runeDeck?: (DeckCardEntry | RuneCard)[];
   battlefields?: DeckCardEntry[];
+  cardCount?: number;
 }
 
 export interface DeckCardReference {
@@ -285,6 +300,10 @@ export interface GameState {
   priorityWindow: PriorityWindow | null;
   snapshots: GameStateSnapshot[];
   battlefields: BattlefieldState[];
+  initiativeWinner?: string | null;
+  initiativeLoser?: string | null;
+  initiativeSelections?: Record<string, number>;
+  initiativeDecidedAt?: number | null;
 }
 
 export interface GameMove {
@@ -347,14 +366,29 @@ export class RiftboundGameEngine {
   private readonly catalogCardCache = new Map<string, Card>();
   private promptCounter = 0;
 
-  constructor(matchId: string, players: string[]) {
+  constructor(matchId: string, players: PlayerSeed[]) {
     if (players.length !== 2) {
       throw new Error('Riftbound requires exactly 2 players');
     }
+    const normalizedPlayers = players.map((entry) => {
+      if (typeof entry === 'string') {
+        return { playerId: entry, name: null };
+      }
+      const derivedId = entry.playerId ?? entry.id;
+      if (!derivedId) {
+        throw new Error('Invalid player descriptor');
+      }
+      return {
+        playerId: derivedId,
+        name: entry.name ?? null
+      };
+    });
 
     this.gameState = {
       matchId,
-      players: players.map((playerId) => this.createPlayerState(playerId)),
+      players: normalizedPlayers.map((player) =>
+        this.createPlayerState(player.playerId, player.name)
+      ),
       currentPlayerIndex: 0,
       currentPhase: GamePhase.BEGIN,
       turnNumber: 1,
@@ -366,7 +400,11 @@ export class RiftboundGameEngine {
       prompts: [],
       priorityWindow: null,
       snapshots: [],
-      battlefields: []
+      battlefields: [],
+      initiativeWinner: null,
+      initiativeLoser: null,
+      initiativeSelections: {},
+      initiativeDecidedAt: null
     };
   }
 
@@ -374,10 +412,14 @@ export class RiftboundGameEngine {
   // INITIALIZATION
   // ========================================================================
 
-  private createPlayerState(playerId: string): PlayerState {
+  private createPlayerState(playerId: string, displayName?: string | null): PlayerState {
+    const normalizedName =
+      typeof displayName === 'string' && displayName.trim().length > 0
+        ? displayName.trim()
+        : playerId;
     return {
       playerId,
-      name: playerId,
+      name: normalizedName,
       victoryPoints: 0,
       victoryScore: this.VICTORY_SCORE,
       mana: 0,
@@ -419,15 +461,21 @@ export class RiftboundGameEngine {
         throw new Error(`Missing deck for player ${player.playerId}`);
       }
 
-      const mainDeckInput = Array.isArray(deckConfig) ? deckConfig : deckConfig.mainDeck;
-      const normalizedMainDeck = this.buildDeckFromConfig(mainDeckInput);
-      if (!normalizedMainDeck || normalizedMainDeck.length < this.MIN_DECK_SIZE) {
-        throw new Error(`Invalid deck size for player ${player.playerId} (min ${this.MIN_DECK_SIZE})`);
+      const mainDeckEntries = Array.isArray(deckConfig)
+        ? deckConfig
+        : deckConfig.mainDeck ?? deckConfig.cards ?? [];
+      const normalizedMainDeck = this.buildDeckFromConfig(mainDeckEntries);
+      if (!normalizedMainDeck.length || normalizedMainDeck.length < this.MIN_DECK_SIZE) {
+        throw new Error(
+          `Invalid deck size for player ${player.playerId} (requires at least ${this.MIN_DECK_SIZE}, got ${normalizedMainDeck.length})`
+        );
       }
 
       const runeDeckConfig = Array.isArray(deckConfig) ? undefined : deckConfig.runeDeck;
-      const runeDeck =
-        runeDeckConfig && runeDeckConfig.length > 0 ? runeDeckConfig : this.generateFallbackRuneDeck();
+      const normalizedRuneDeck =
+        runeDeckConfig && runeDeckConfig.length > 0
+          ? this.normalizeRuneDeck(runeDeckConfig)
+          : this.generateFallbackRuneDeck();
 
       if (!Array.isArray(deckConfig) && deckConfig.battlefields?.length) {
         player.battlefieldPool = this.buildDeckFromConfig(deckConfig.battlefields);
@@ -437,12 +485,14 @@ export class RiftboundGameEngine {
         player.battlefieldPool = this.generateFallbackBattlefields(player.playerId);
       }
 
-      if (runeDeck.length < this.RUNE_DECK_SIZE) {
-        throw new Error(`Invalid rune deck for player ${player.playerId} (requires ${this.RUNE_DECK_SIZE})`);
+      if (normalizedRuneDeck.length < this.RUNE_DECK_SIZE) {
+        throw new Error(
+          `Invalid rune deck for player ${player.playerId} (requires ${this.RUNE_DECK_SIZE}, got ${normalizedRuneDeck.length})`
+        );
       }
 
       player.deck = [...normalizedMainDeck];
-      player.runeDeck = [...runeDeck];
+      player.runeDeck = [...normalizedRuneDeck];
       player.channeledRunes = [];
       this.shuffle(player.deck);
       this.shuffle(player.runeDeck);
@@ -456,6 +506,10 @@ export class RiftboundGameEngine {
 
   private startCoinFlipPhase(): void {
     this.gameState.prompts = this.gameState.prompts.filter((prompt) => prompt.type !== 'coin_flip');
+    this.gameState.initiativeWinner = null;
+    this.gameState.initiativeLoser = null;
+    this.gameState.initiativeSelections = {};
+    this.gameState.initiativeDecidedAt = null;
     for (const player of this.gameState.players) {
       this.enqueuePrompt('coin_flip', player.playerId, {
         options: INITIATIVE_CHOICES,
@@ -524,6 +578,15 @@ export class RiftboundGameEngine {
     const loserState = this.getPlayerById(loser.playerId);
     loserState.firstTurnRuneBoost = 1;
 
+    const selectionMap: Record<string, number> = {};
+    for (const selection of selections) {
+      selectionMap[selection.playerId] = selection.choice;
+    }
+    this.gameState.initiativeWinner = winner.playerId;
+    this.gameState.initiativeLoser = loser.playerId;
+    this.gameState.initiativeSelections = selectionMap;
+    this.gameState.initiativeDecidedAt = Date.now();
+
     this.gameState.prompts = this.gameState.prompts.filter((prompt) => prompt.type !== 'coin_flip');
     this.recordSnapshot('coin-flip');
     this.gameState.status = GameStatus.BATTLEFIELD_SELECTION;
@@ -542,11 +605,7 @@ export class RiftboundGameEngine {
         continue;
       }
       this.enqueuePrompt('battlefield', player.playerId, {
-        options: options.map((card) => ({
-          cardId: card.id,
-          slug: card.slug ?? null,
-          name: card.name
-        }))
+        options: options.map((card) => this.buildBattlefieldPromptOption(card))
       });
     }
     this.checkBattlefieldSelectionCompletion();
@@ -588,6 +647,26 @@ export class RiftboundGameEngine {
 
   private assignBattlefieldSelection(player: PlayerState, card: Card): void {
     player.selectedBattlefield = this.createBattlefieldStateFromCard(card, player.playerId);
+  }
+
+  private buildBattlefieldPromptOption(card: Card) {
+    return {
+      cardId: card.id,
+      slug: card.slug ?? null,
+      name: card.name,
+      description: card.text ?? null,
+      cardSnapshot: {
+        cardId: card.id,
+        slug: card.slug ?? null,
+        name: card.name,
+        type: card.type,
+        rarity: card.rarity ?? null,
+        colors: card.colors ?? [],
+        keywords: card.keywords ?? [],
+        effect: card.text ?? null,
+        assets: card.assets ?? null
+      }
+    };
   }
 
   private checkBattlefieldSelectionCompletion(): void {
@@ -1451,6 +1530,50 @@ export class RiftboundGameEngine {
     return cards;
   }
 
+  private normalizeRuneDeck(entries: (DeckCardEntry | RuneCard)[]): RuneCard[] {
+    if (!entries || entries.length === 0) {
+      return [];
+    }
+    const runes: RuneCard[] = [];
+    for (const entry of entries) {
+      if (this.isRuneCardEntry(entry)) {
+        runes.push({ ...entry });
+        continue;
+      }
+      const materialized = this.materializeDeckEntry(entry as DeckCardEntry);
+      materialized.forEach((card) => runes.push(this.toRuneCard(card)));
+    }
+    return runes;
+  }
+
+  private isRuneCardEntry(entry: DeckCardEntry | RuneCard): entry is RuneCard {
+    return (
+      typeof entry === 'object' &&
+      entry !== null &&
+      'id' in entry &&
+      'name' in entry &&
+      !('quantity' in entry)
+    );
+  }
+
+  private toRuneCard(card: Card): RuneCard {
+    if (card.type !== CardType.RUNE) {
+      throw new Error(`Card ${card.id} must be a rune when building rune decks`);
+    }
+    const resolvedPowerValue =
+      (card as any).powerValue ??
+      (card.powerCost
+        ? Object.values(card.powerCost).reduce((sum, value) => sum + (value ?? 0), 0)
+        : 1);
+    return {
+      id: card.id,
+      name: card.name,
+      domain: card.domain,
+      energyValue: (card as any).energyValue ?? card.energyCost ?? 1,
+      powerValue: resolvedPowerValue && resolvedPowerValue > 0 ? resolvedPowerValue : 1
+    };
+  }
+
   private materializeDeckEntry(entry: DeckCardEntry): Card[] {
     if (typeof entry === 'string') {
       return [this.lookupCatalogCard(entry)];
@@ -1591,6 +1714,8 @@ export class RiftboundGameEngine {
       case 'battlefield':
       case 'field':
         return CardType.ENCHANTMENT;
+      case 'rune':
+        return CardType.RUNE;
       default:
         return CardType.SPELL;
     }

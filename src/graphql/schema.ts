@@ -351,6 +351,10 @@ export const typeDefs = `#graphql
     currentPlayerIndex: Int!
     status: String!
     winner: ID
+    initiativeWinner: ID
+    initiativeLoser: ID
+    initiativeSelections: JSON
+    initiativeDecidedAt: DateTime
     moveHistory: [JSON!]
     timestamp: DateTime!
     victoryScore: Int!
@@ -607,6 +611,9 @@ export const typeDefs = `#graphql
 
     # Real-time phase change
     phaseChanged(matchId: ID!): PhaseChangeEvent!
+
+    # Matchmaking status updates for a specific user/mode
+    matchmakingStatusUpdated(userId: ID!, mode: MatchMode!): MatchmakingStatus!
   }
 
   # ============================================================================
