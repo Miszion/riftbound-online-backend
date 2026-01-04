@@ -7,7 +7,7 @@ This document is the single source of truth for the Riftbound Online backend inf
 | Area | Location | Highlights |
 |------|----------|------------|
 | **CDK App** | `cdk/src/*.ts` | Networking, database, auth, and ECS stacks wired together via `index.ts` |
-| **Deployment Scripts** | `cdk/deploy.sh`, `cdk/cleanup.sh`, `cdk/cdk.sh` | Deploy, destroy, or run ad-hoc CDK commands |
+| **Deployment Scripts** | `cdk/scripts/deploy.sh`, `cdk/scripts/cleanup.sh`, `cdk/cdk.sh` | Deploy, destroy, or run ad-hoc CDK commands |
 | **Application Code** | `src/server.js` + supporting files | Express API (REST + GraphQL) that runs on ECS and talks to DynamoDB |
 | **Docs that remain** | `CDK_MIGRATION_SUMMARY.md`, `QUICKSTART.md`, `cdk/README.md` | Migration notes, 5-min sandbox setup, CDK deep dive |
 | **Stacks** | `NetworkingStack`, `DatabaseStack`, `AuthStack`, `EcsStack` | Covered in detail below |
@@ -28,7 +28,7 @@ npm install
 cdk bootstrap aws://ACCOUNT-ID/us-east-1
 
 # 2. Deploy (development example)
-ENVIRONMENT=dev ./deploy.sh
+ENVIRONMENT=dev ./scripts/deploy.sh
 
 # 3. Smoke test authentication
 API=$(aws cloudformation describe-stacks \
@@ -46,8 +46,9 @@ curl -X POST "$API/sign-up" \
 riftbound-online-backend/
 ├── cdk/                      # AWS CDK app (TypeScript)
 │   ├── src/                  # Stack definitions (auth, db, networking, ecs)
-│   ├── deploy.sh             # Deploy helper (reads ENV vars)
-│   ├── cleanup.sh            # Destroy helper
+│   ├── scripts/              # Helper scripts
+│   │   ├── deploy.sh         # Deploy helper (reads ENV vars)
+│   │   └── cleanup.sh        # Destroy helper
 │   ├── cdk.sh                # Handy CDK commands
 │   ├── package.json, tsconfig.json, cdk.json
 │   └── README.md             # Additional CDK deep dive
@@ -89,7 +90,7 @@ riftbound-online-backend/
 ### Development
 ```bash
 # Deploy
-ENVIRONMENT=dev ./cdk/deploy.sh
+ENVIRONMENT=dev ./cdk/scripts/deploy.sh
 
 # Tweak stack configuration locally
 cd cdk && npm run diff
@@ -112,7 +113,7 @@ CONTAINER_IMAGE=$IMAGE \
 DESIRED_COUNT=4 \
 TASK_CPU=2048 \
 TASK_MEMORY=4096 \
-./cdk/deploy.sh
+./cdk/scripts/deploy.sh
 ```
 
 ### Operational Shortcuts
@@ -121,7 +122,7 @@ cd cdk
 npm run list      # Show stacks
 npm run synth     # Produce CloudFormation templates
 npm run diff      # Review changes
-./cleanup.sh      # Destroy all stacks (use with care)
+./scripts/cleanup.sh      # Destroy all stacks (use with care)
 ```
 
 ## Stack Reference
@@ -185,7 +186,7 @@ NetworkingStack
         └─> AuthStack
               └─> EcsStack
 ```
-Deploying via `./deploy.sh` handles this order automatically.
+Deploying via `./scripts/deploy.sh` handles this order automatically.
 
 ## API Surface (same ECS service)
 
@@ -212,7 +213,7 @@ All protected routes expect `Authorization: Bearer <accessToken>` headers source
   1. `cdk diff` to confirm synthesized changes before deploying.
   2. Check CloudFormation stack events when deployments fail.
   3. Use `aws ecs describe-services --cluster <name> --services <svc>` for health.
-  4. Destroy/redeploy with `./cleanup.sh` only when you intentionally want a fresh environment.
+  4. Destroy/redeploy with `./scripts/cleanup.sh` only when you intentionally want a fresh environment.
 
 ## Security Summary
 
@@ -239,13 +240,13 @@ All protected routes expect `Authorization: Bearer <accessToken>` headers source
 # Update container image & redeploy
 docker build -t myapp:latest .
 docker push <account>.dkr.ecr.us-east-1.amazonaws.com/riftbound-online:latest
-CONTAINER_IMAGE=<account>.dkr.ecr.us-east-1.amazonaws.com/riftbound-online:latest ./cdk/deploy.sh
+CONTAINER_IMAGE=<account>.dkr.ecr.us-east-1.amazonaws.com/riftbound-online:latest ./cdk/scripts/deploy.sh
 
 # View stack outputs
 cd cdk && cdk list
 
 # Destroy everything (avoid accidental charges)
-cd cdk && ./cleanup.sh
+cd cdk && ./scripts/cleanup.sh
 ```
 
 ## Additional Resources
@@ -257,4 +258,4 @@ cd cdk && ./cleanup.sh
 
 ---
 
-You now have a single, consolidated guide for infrastructure architecture, deployment workflows, stack internals, and operational playbooks. Deploy with `cd cdk && ./deploy.sh`, keep an eye on CloudWatch, and iterate with confidence. 🚀
+You now have a single, consolidated guide for infrastructure architecture, deployment workflows, stack internals, and operational playbooks. Deploy with `cd cdk && ./scripts/deploy.sh`, keep an eye on CloudWatch, and iterate with confidence. 🚀

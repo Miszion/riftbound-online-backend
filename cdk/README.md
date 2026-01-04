@@ -22,8 +22,9 @@ cdk/
 │   └── ecs-stack.ts          # ECS Fargate cluster and service
 ├── cdk.json                  # CDK configuration
 ├── cdk.sh                    # Quick reference commands
-├── deploy.sh                 # Deployment script
-├── cleanup.sh                # Cleanup/destroy script
+├── scripts/
+│   ├── deploy.sh             # Deployment script
+│   └── cleanup.sh            # Cleanup/destroy script
 ├── package.json              # Dependencies
 └── tsconfig.json             # TypeScript configuration
 ```
@@ -81,7 +82,7 @@ cdk synth
 
 ### 4. Deploy Infrastructure
 ```bash
-./deploy.sh
+./scripts/deploy.sh
 # or
 ENVIRONMENT=dev npm run deploy
 ```
@@ -115,7 +116,7 @@ export TASK_MEMORY=2048   # 512-30720 in 1GB increments
 
 ```bash
 # Development environment with minimal resources
-ENVIRONMENT=dev CONTAINER_IMAGE=nginx:latest ./deploy.sh
+ENVIRONMENT=dev CONTAINER_IMAGE=nginx:latest ./scripts/deploy.sh
 
 # Production with high availability
 ENVIRONMENT=prod \
@@ -123,13 +124,13 @@ ENVIRONMENT=prod \
   DESIRED_COUNT=4 \
   TASK_CPU=2048 \
   TASK_MEMORY=4096 \
-  ./deploy.sh
+  ./scripts/deploy.sh
 
 # Staging environment
 ENVIRONMENT=staging \
   CONTAINER_IMAGE=myapp:latest \
   DESIRED_COUNT=2 \
-  ./deploy.sh
+  ./scripts/deploy.sh
 ```
 
 ## Stack Overview
@@ -257,7 +258,7 @@ cdk destroy RiftboundAuth-dev
 ```bash
 # Quick deployment
 cd cdk
-chmod +x deploy.sh cleanup.sh cdk.sh
+chmod +x scripts/deploy.sh scripts/cleanup.sh cdk.sh
 ./cdk.sh deploy
 
 # Or with custom environment
@@ -402,7 +403,7 @@ Increase ECS task resources:
 ENVIRONMENT=dev \
   TASK_CPU=2048 \
   TASK_MEMORY=4096 \
-  ./deploy.sh
+  ./scripts/deploy.sh
 ```
 
 ### Horizontal Scaling
@@ -410,7 +411,7 @@ Increase desired task count:
 ```bash
 ENVIRONMENT=dev \
   DESIRED_COUNT=4 \
-  ./deploy.sh
+  ./scripts/deploy.sh
 ```
 
 Auto-scaling is pre-configured:
@@ -472,7 +473,7 @@ Switch to provisioned mode or increase on-demand limits in AWS Console.
 
 1. **Deploy the infrastructure**
    ```bash
-   ./deploy.sh
+   ./scripts/deploy.sh
    ```
 
 2. **Build and push container image**
@@ -485,7 +486,7 @@ Switch to provisioned mode or increase on-demand limits in AWS Console.
 
 3. **Update container image in deployment**
    ```bash
-   CONTAINER_IMAGE=ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/riftbound-online:latest ./deploy.sh
+   CONTAINER_IMAGE=ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/riftbound-online:latest ./scripts/deploy.sh
    ```
 
 4. **Test authentication API**

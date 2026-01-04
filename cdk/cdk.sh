@@ -8,11 +8,11 @@ cd "$SCRIPT_DIR"
 case "${1:-help}" in
   deploy)
     echo "Deploying all stacks..."
-    bash deploy.sh
+    ./scripts/deploy.sh
     ;;
   destroy)
     echo "Destroying all stacks..."
-    bash cleanup.sh
+    ./scripts/cleanup.sh
     ;;
   synth)
     echo "Synthesizing CloudFormation template..."
