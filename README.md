@@ -15,11 +15,10 @@ Get up and running in minutes:
 
 All documentation is organized in the `docs/` directory:
 
-- **[docs/INDEX.md](./docs/INDEX.md)** - Central documentation hub
 - **[docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md)** - Riftbound TCG rules reference
-- **docs/guides/** - Match service and integration guides
-- **docs/infrastructure/** - AWS architecture and CDK documentation
-- **docs/RIFTBOUND_RULES.md** - Complete Riftbound Core Rules (v1.2)
+- **[docs/GAME_RULES_IMPLEMENTATION.md](./docs/GAME_RULES_IMPLEMENTATION.md)** - Rules-to-code implementation map
+- **[docs/RIFTBOUND_GAME_ENGINE_GUIDE.md](./docs/RIFTBOUND_GAME_ENGINE_GUIDE.md)** - Match flow & engine expectations
+- **[docs/INFRASTRUCTURE_OVERVIEW.md](./docs/INFRASTRUCTURE_OVERVIEW.md)** - Unified AWS infrastructure guide
 
 ## 🏗️ Project Structure
 
@@ -195,11 +194,10 @@ All gameplay endpoints now live inside the same service/process as the public AP
 
 ### I want to...
 
-- **Deploy the system** → [QUICKSTART.md](./QUICKSTART.md) → [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](./docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)
 - **Understand the game** → [docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md)
 - **Work on game logic** → `src/game-engine.ts` → [docs/GAME_RULES_IMPLEMENTATION.md](./docs/GAME_RULES_IMPLEMENTATION.md)
-- **Integrate services** → [docs/GRAPHQL_MIGRATION.md](./docs/GRAPHQL_MIGRATION.md)
-- **Work with the match engine** → [docs/riftbound-engine-guide.md](./docs/riftbound-engine-guide.md)
+- **Integrate services** → [docs/INFRASTRUCTURE_OVERVIEW.md](./docs/INFRASTRUCTURE_OVERVIEW.md)
+- **Work with the match engine** → [docs/RIFTBOUND_GAME_ENGINE_GUIDE.md](./docs/RIFTBOUND_GAME_ENGINE_GUIDE.md)
 
 ## 📋 Status
 
@@ -215,8 +213,7 @@ All gameplay endpoints now live inside the same service/process as the public AP
 
 All documentation is in Markdown format located in:
 - **Root level**: Project overview and quickstart
-- **docs/**: Comprehensive guides and specifications
-- **docs/guides/**: Implementation and integration guides  
-- **docs/infrastructure/**: AWS architecture and deployment
+- **docs/**: Rules references, infrastructure guide, and engine workflows
+- **cdk/**: CDK-specific documentation
 
 Last updated: December 2024
