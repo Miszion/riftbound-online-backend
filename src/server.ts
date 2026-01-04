@@ -10,6 +10,7 @@ import { typeDefs } from './graphql/schema';
 import { queryResolvers, mutationResolvers, subscriptionResolvers } from './graphql/resolvers';
 import { startMatchmakingQueueWorker } from './matchmaking-queue-worker';
 import { decodeJwtPayload, requireAuthenticatedUser } from './auth-utils';
+import { registerMatchRoutes } from './match-routes';
 
 const awsRegion = process.env.AWS_REGION || 'us-east-1';
 const environment = process.env.ENVIRONMENT || 'dev';
@@ -669,6 +670,7 @@ const PORT = process.env.PORT || 3000;
 async function runServer() {
   try {
     await startApolloServer();
+    registerMatchRoutes(app);
 
     // 404 handler (registered after GraphQL middleware to avoid intercepting it)
     app.use((_req: Request, res: Response): void => {

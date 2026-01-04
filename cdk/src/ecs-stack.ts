@@ -25,7 +25,6 @@ export interface EcsStackProps extends cdk.StackProps {
   readonly desiredCount?: number;
   readonly taskCpu?: string;
   readonly taskMemory?: string;
-  readonly matchServiceUrl?: string;
 }
 
 export class EcsStack extends cdk.Stack {
@@ -150,8 +149,6 @@ export class EcsStack extends cdk.Stack {
         MATCHMAKING_QUEUE_TABLE: props.matchmakingQueueTable.tableName,
         AWS_REGION: this.region,
         REDEPLOY_TOKEN: process.env.REDEPLOY_TOKEN ?? '',
-        MATCH_SERVICE_HOST:
-          props.matchServiceUrl || process.env.MATCH_SERVICE_HOST || process.env.MATCH_SERVICE_BASE_URL || '',
         MATCHMAKING_RANKED_QUEUE_URL: props.rankedMatchmakingQueue.queueUrl,
         MATCHMAKING_RANKED_QUEUE_ARN: props.rankedMatchmakingQueue.queueArn,
         MATCHMAKING_FREE_QUEUE_URL: props.quickPlayMatchmakingQueue.queueUrl,
@@ -197,12 +194,15 @@ export class EcsStack extends cdk.Stack {
     });
 
     // Create Fargate Service
+    const enableExecuteCommand = props.environment === 'dev';
+
     this.service = new ecs.FargateService(this, 'Service', {
       serviceName: `riftbound-${props.environment}-service`,
       cluster: this.cluster,
       taskDefinition: taskDefinition,
       desiredCount: desiredCount,
       assignPublicIp: false,
+      enableExecuteCommand,
       vpcSubnets: {
         subnets: props.vpc.privateSubnets,
       },

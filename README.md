@@ -1,6 +1,6 @@
 # Riftbound Online Backend
 
-Welcome to the Riftbound Online Backend repository. This is a complete TypeScript-based game server for the Riftbound Trading Card Game, featuring AWS infrastructure, real-time match service, and comprehensive game logic implementation.
+Welcome to the Riftbound Online Backend repository. This is a complete TypeScript-based game server for the Riftbound Trading Card Game, featuring AWS infrastructure, a real-time match engine, and comprehensive game logic implementation.
 
 ## 🚀 Quick Start
 
@@ -8,7 +8,7 @@ Get up and running in minutes:
 
 1. **New to the project?** → Read [QUICKSTART.md](./QUICKSTART.md)
 2. **Full documentation** → Visit [docs/INDEX.md](./docs/INDEX.md)
-3. **Deploy match service?** → See [docs/guides/MATCH_SERVICE_QUICKSTART.md](./docs/guides/MATCH_SERVICE_QUICKSTART.md)
+3. **Need match engine internals?** → See [docs/GAME_RULES_IMPLEMENTATION.md](./docs/GAME_RULES_IMPLEMENTATION.md)
 4. **Understand the rules?** → Check [docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md)
 
 ## 📚 Documentation
@@ -26,7 +26,7 @@ All documentation is organized in the `docs/` directory:
 ```
 src/
   ├── game-engine.ts       # Complete game logic (1000+ lines)
-  ├── match-service.ts     # Match service REST API
+  ├── match-routes.ts      # Integrated match engine REST routes
   ├── logger.ts            # Logging utilities
   └── README.md            # Source code documentation
 
@@ -44,8 +44,8 @@ docs/
 ## 🎮 Key Features
 
 - **Complete Game Logic**: Full Riftbound TCG rules implementation in single auditable file
-- **Match Service**: Standalone ECS service managing individual match instances
-- **Scalable Architecture**: One ECS task per active match
+- **Integrated Match Engine**: Core gameplay logic exposed directly from this service
+- **Scalable Architecture**: Single ECS service with auto scaling app + match containers
 - **Real-time State Management**: DynamoDB persistence with in-memory state
 - **Spectator & Replay Support**: Move history + final states recorded for post-game viewing
 - **TypeScript**: Full type safety across entire codebase
@@ -66,7 +66,7 @@ docs/
 
 ## 🧩 Card Catalog & Assets
 
-- Run `npm run generate:cards` to transform `champion-dump.json` into `data/cards.enriched.json` and `data/card-images.json`.
+- Run `npm run generate:cards` to download the champion dump directly and emit `data/cards.enriched.json` plus `data/card-images.json`.
 - `src/card-catalog.ts` loads the enriched data, provides lookup helpers, activation-state seeds, and drives the `cardCatalog` GraphQL queries.
 - The match engine now hydrates decklists from catalog IDs/slugs and tracks activation state per permanent so stateful abilities persist correctly.
 - Use the `cardImageManifest` GraphQL query (or the `data/card-images.json` file) to fetch remote artwork. Example download script:
@@ -123,7 +123,6 @@ npm run test         # Run tests
 # Deployment
 npm run deploy:stacks  # Build TS, publish amd64 image, inject a redeploy token, then deploy all CDK stacks
 cdk deploy           # Deploy infrastructure (manual control)
-npm run deploy:match-service  # Deploy match service
 
 # Docker
 docker build -t riftbound .
@@ -149,7 +148,7 @@ Follow this sequence whenever you need to roll out the backend plus supporting d
    npm install
    npx cdk synth
    npx cdk deploy DatabaseStack-${ENVIRONMENT}
-   npx cdk deploy MatchServiceStack-${ENVIRONMENT}
+   npx cdk deploy RiftboundEcs-${ENVIRONMENT}
    ```
    (Add any other stacks—API Gateway, auth, etc.—that you need for the feature set you're touching.)
 3. **Publish latest application build**
@@ -182,34 +181,32 @@ See [docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md) for full rules reference.
 ## 🔄 Architecture Overview
 
 ```
-Main Server (Lambda + API Gateway)
-    ↓
-Cognito (Authentication)
-    ↓
-Match Service (ECS Fargate)
-    ├── Game Engine (game-engine.ts)
-    ├── Match Service API (match-service.ts)
-    └── DynamoDB (State Persistence)
+API Gateway
+   ↓
+Single ECS Fargate Service (port 3000)
+   • REST + GraphQL API (server.ts)
+   • Integrated match engine + state snapshots (match-routes.ts, game-engine.ts)
+   • Cognito + matchmaking queues + chat/duel logs
 ```
 
-Each active match runs in its own ECS task, isolated and scalable.
+All gameplay endpoints now live inside the same service/process as the public API, so no internal HTTP hops or extra containers are required.
 
 ## 📖 Learning Paths
 
 ### I want to...
 
-- **Deploy the system** → [QUICKSTART.md](./QUICKSTART.md) → [docs/infrastructure/CDK_README.md](./docs/infrastructure/CDK_README.md)
+- **Deploy the system** → [QUICKSTART.md](./QUICKSTART.md) → [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](./docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)
 - **Understand the game** → [docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md)
-- **Work on game logic** → `src/game-engine.ts` → [docs/guides/MATCH_SERVICE_IMPLEMENTATION.md](./docs/guides/MATCH_SERVICE_IMPLEMENTATION.md)
-- **Integrate services** → [docs/guides/MATCH_SERVICE_INTEGRATION.md](./docs/guides/MATCH_SERVICE_INTEGRATION.md)
-- **Deploy match service** → [docs/guides/MATCH_SERVICE_QUICKSTART.md](./docs/guides/MATCH_SERVICE_QUICKSTART.md)
+- **Work on game logic** → `src/game-engine.ts` → [docs/GAME_RULES_IMPLEMENTATION.md](./docs/GAME_RULES_IMPLEMENTATION.md)
+- **Integrate services** → [docs/GRAPHQL_MIGRATION.md](./docs/GRAPHQL_MIGRATION.md)
+- **Work with the match engine** → [docs/riftbound-engine-guide.md](./docs/riftbound-engine-guide.md)
 
 ## 📋 Status
 
 **Production Ready** ✅
 
 - Core game engine complete
-- Match service fully functional  
+- Integrated match engine fully functional  
 - Infrastructure deployment tested
 - Full documentation provided
 - TypeScript with strict type checking

@@ -12,12 +12,14 @@
     "test:watch": "jest --watch",
     "lint": "eslint src/",
     "format": "prettier --write src/",
-    "generate:cards": "node transformChampionDump.js",
-    "generate:taxonomy": "ts-node scripts/buildEffectIndex.ts",
-    "upload:cards": "ts-node scripts/uploadCardCatalog.ts",
-    "sync:cards": "npm run generate:cards && npm run generate:taxonomy && npm run upload:cards",
-    "docker:publish": "bash scripts/publish-ecr.sh",
-    "deploy:stacks": "bash scripts/deploy-stacks.sh"
+    "generate:cards": "ts-node scripts/data/transformChampionDump.ts",
+    "scrape:piltover": "ts-node scripts/data/scrapePiltover.ts",
+    "apply:piltover-costs": "ts-node scripts/data/applyPiltoverCosts.ts",
+    "generate:taxonomy": "ts-node scripts/data/buildEffectIndex.ts",
+    "upload:cards": "ts-node scripts/data/uploadCardCatalog.ts",
+    "sync:cards": "npm run generate:cards && npm run scrape:piltover && npm run apply:piltover-costs && npm run generate:taxonomy && npm run upload:cards",
+    "docker:publish": "bash scripts/deploy/publish-ecr.sh",
+    "deploy:stacks": "bash scripts/deploy/deploy-stacks.sh"
   },
   "keywords": [
     "game",
@@ -38,9 +40,10 @@
     "graphql-subscriptions": "^2.0.0",
     "graphql-ws": "^5.14.0",
     "helmet": "^7.0.0",
+    "playwright": "^1.57.0",
     "uuid": "^9.0.0",
-    "ws": "^8.15.0",
-    "winston": "^3.8.2"
+    "winston": "^3.8.2",
+    "ws": "^8.15.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

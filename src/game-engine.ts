@@ -2,6 +2,7 @@ import {
   ActivationProfile,
   CardActivationState,
   CardAssetInfo,
+  CardCostProfile,
   EffectOperation,
   EffectProfile,
   EnrichedCardRecord,
@@ -82,6 +83,7 @@ export interface Card {
   text: string;
   flavorText?: string | null;
   effectProfile?: EffectProfile;
+  instanceId?: string;
 }
 
 export interface CardAbility {
@@ -101,6 +103,10 @@ export interface RuneCard {
   domain?: Domain;
   energyValue?: number;
   powerValue?: number;
+  slug?: string;
+  assets?: CardAssetInfo | null;
+  isTapped?: boolean;
+  cardSnapshot?: Card | null;
 }
 
 export type PlayerSeed =
@@ -159,6 +165,8 @@ export interface PlayerState {
   battlefieldPool: Card[];
   selectedBattlefield?: BattlefieldState;
   firstTurnRuneBoost: number;
+  championLegend?: Card | null;
+  championLeader?: Card | null;
 }
 
 export interface ResourcePool {
@@ -177,6 +185,8 @@ export interface PlayerDeckConfig {
   runeDeck?: (DeckCardEntry | RuneCard)[];
   battlefields?: DeckCardEntry[];
   cardCount?: number;
+  championLegend?: DeckCardEntry | null;
+  championLeader?: DeckCardEntry | null;
 }
 
 export interface DeckCardReference {
@@ -263,6 +273,25 @@ export interface ScoreEvent {
   timestamp: number;
 }
 
+export type DuelLogTone = 'info' | 'success' | 'warning' | 'error';
+
+export interface DuelLogEntry {
+  id: string;
+  message: string;
+  tone: DuelLogTone;
+  timestamp: number;
+  playerId?: string | null;
+  actorName?: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  playerId?: string | null;
+  playerName?: string | null;
+  message: string;
+  timestamp: number;
+}
+
 export enum GamePhase {
   BEGIN = 'begin',
   MAIN_1 = 'main_1',
@@ -282,6 +311,15 @@ export enum GameStatus {
   WINNER_DETERMINED = 'winner_determined',
   COMPLETED = 'completed'
 }
+
+export type TurnSequenceStep = 'awaken' | 'begin' | 'channel' | 'draw' | 'main';
+const TURN_SEQUENCE_LABELS: Record<TurnSequenceStep, string> = {
+  awaken: 'Awaken step',
+  begin: 'Begin step',
+  channel: 'Channel step',
+  draw: 'Draw step',
+  main: 'Main Phase 1'
+};
 
 export interface GameState {
   matchId: string;
@@ -304,6 +342,10 @@ export interface GameState {
   initiativeLoser?: string | null;
   initiativeSelections?: Record<string, number>;
   initiativeDecidedAt?: number | null;
+  duelLog: DuelLogEntry[];
+  chatLog: ChatMessage[];
+  pendingMainPhaseEntry: boolean;
+  turnSequenceStep: TurnSequenceStep | null;
 }
 
 export interface GameMove {
@@ -336,6 +378,7 @@ export interface BattlefieldState {
   contestedBy: string[];
   lastConqueredTurn?: number;
   lastHoldTurn?: number;
+  lastCombatTurn?: number;
 }
 
 const INITIATIVE_CHOICES = [
@@ -355,6 +398,8 @@ const INITIATIVE_BEATS: Record<number, number> = {
 // ============================================================================
 
 export class RiftboundGameEngine {
+  private static readonly MAX_DUEL_LOG_ENTRIES = 200;
+  private static readonly MAX_CHAT_LOG_ENTRIES = 200;
   private gameState: GameState;
   private readonly INITIAL_HAND_SIZE = 4;
   private readonly VICTORY_SCORE = 8;
@@ -365,6 +410,7 @@ export class RiftboundGameEngine {
   private readonly cardActivationTemplates = buildActivationStateIndex();
   private readonly catalogCardCache = new Map<string, Card>();
   private promptCounter = 0;
+  private cardInstanceCounter = 0;
 
   constructor(matchId: string, players: PlayerSeed[]) {
     if (players.length !== 2) {
@@ -404,8 +450,33 @@ export class RiftboundGameEngine {
       initiativeWinner: null,
       initiativeLoser: null,
       initiativeSelections: {},
-      initiativeDecidedAt: null
+      initiativeDecidedAt: null,
+      duelLog: [],
+      chatLog: [],
+      pendingMainPhaseEntry: false,
+      turnSequenceStep: null
     };
+  }
+
+  private static cloneGameState(state: GameState): GameState {
+    return JSON.parse(JSON.stringify(state)) as GameState;
+  }
+
+  public static fromSerializedState(state: GameState): RiftboundGameEngine {
+    const players = state.players.map((player) => ({
+      playerId: player.playerId,
+      name: player.name ?? null
+    }));
+    const engine = new RiftboundGameEngine(state.matchId, players);
+    engine.gameState = RiftboundGameEngine.cloneGameState(state);
+    engine.promptCounter = engine.gameState.prompts.length;
+    if (typeof engine.gameState.pendingMainPhaseEntry !== 'boolean') {
+      engine.gameState.pendingMainPhaseEntry = false;
+    }
+    if (!engine.gameState.turnSequenceStep) {
+      engine.gameState.turnSequenceStep = null;
+    }
+    return engine;
   }
 
   // ========================================================================
@@ -443,8 +514,15 @@ export class RiftboundGameEngine {
       },
       temporaryEffects: [],
       battlefieldPool: [],
-      firstTurnRuneBoost: 0
+      firstTurnRuneBoost: 0,
+      championLegend: null,
+      championLeader: null
     };
+  }
+
+  private nextCardInstanceId(cardId: string): string {
+    const counter = this.cardInstanceCounter++;
+    return `${cardId}_${Date.now()}_${counter}`;
   }
 
   /**
@@ -483,6 +561,14 @@ export class RiftboundGameEngine {
         player.battlefieldPool = this.generateFallbackBattlefields(player.playerId);
       } else {
         player.battlefieldPool = this.generateFallbackBattlefields(player.playerId);
+      }
+
+      if (!Array.isArray(deckConfig)) {
+        player.championLegend = this.resolveChampionCard(deckConfig.championLegend ?? null);
+        player.championLeader = this.resolveChampionCard(deckConfig.championLeader ?? null);
+      } else {
+        player.championLegend = null;
+        player.championLeader = null;
       }
 
       if (normalizedRuneDeck.length < this.RUNE_DECK_SIZE) {
@@ -713,8 +799,8 @@ export class RiftboundGameEngine {
       }
     }
 
-    this.drawCards(player, setAside.length);
     this.recycleCards(player, setAside);
+    this.drawCards(player, setAside.length);
 
     this.resolvePrompt(prompt, {
       replaced: setAside.length
@@ -743,26 +829,37 @@ export class RiftboundGameEngine {
   public beginTurn(): void {
     const currentPlayer = this.getCurrentPlayer();
     this.closePriorityWindow();
+    this.gameState.pendingMainPhaseEntry = true;
+    this.currentPhase = GamePhase.BEGIN;
 
-    // Channel runes to generate resources
+    // A — Awaken
+    this.updateTurnSequenceStep('awaken', currentPlayer, 'turn-awaken');
+    this.untapAllPermanents(currentPlayer);
+    this.untapRunes(currentPlayer);
+    this.readySummonedCreatures(currentPlayer);
+
+    // B — Begin phase triggers
+    this.updateTurnSequenceStep('begin', currentPlayer, 'turn-begin-step');
+    this.resolveTemporaryEffects(currentPlayer);
+
+    // C — Channel
+    this.updateTurnSequenceStep('channel', currentPlayer, 'turn-channel');
     const bonusRunes = currentPlayer.firstTurnRuneBoost > 0 ? currentPlayer.firstTurnRuneBoost : 0;
     const runesToChannel = this.RUNES_PER_TURN + bonusRunes;
     this.channelRunes(currentPlayer, runesToChannel);
     currentPlayer.firstTurnRuneBoost = 0;
 
-    // Draw a card
+    // D — Draw
+    this.updateTurnSequenceStep('draw', currentPlayer, 'turn-draw');
     this.drawCards(currentPlayer, 1);
 
-    // Untap all permanents
-    this.untapAllPermanents(currentPlayer);
-    this.readySummonedCreatures(currentPlayer);
+    if (this.hasBlockingBeginPhaseActivity()) {
+      this.openPriorityWindow('main', currentPlayer.playerId, 'begin-phase');
+      this.recordSnapshot('begin-phase-blocked');
+      return;
+    }
 
-    // Resolve temporary effects that expire at turn start
-    this.resolveTemporaryEffects(currentPlayer);
-
-    this.currentPhase = GamePhase.MAIN_1;
-    this.openPriorityWindow('main', currentPlayer.playerId, 'turn-start');
-    this.recordSnapshot('turn-begin');
+    this.promoteBeginPhaseToMainPhase(currentPlayer);
   }
 
   private channelRunes(player: PlayerState, maxRunes: number): void {
@@ -776,35 +873,299 @@ export class RiftboundGameEngine {
         break;
       }
 
+      rune.isTapped = false;
       player.channeledRunes.push(rune);
+    }
+    this.recalculateResources(player);
+  }
 
-      const energyValue = rune.energyValue ?? 1;
-      player.resources.energy += energyValue;
+  public addDuelLogEntry(entry: {
+    id?: string | null;
+    playerId?: string | null;
+    actorName?: string | null;
+    message: string;
+    tone?: string | null;
+  }): DuelLogEntry {
+    const trimmed = (entry.message ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Log message is required');
+    }
+    const tone = this.normalizeLogTone(entry.tone);
+    const identifier =
+      (entry.id ?? '').trim() || `log_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const existing = this.gameState.duelLog.find((log) => log.id === identifier);
+    if (existing) {
+      return existing;
+    }
+    const resolvedName = entry.actorName ?? this.resolvePlayerName(entry.playerId);
+    const newEntry: DuelLogEntry = {
+      id: identifier,
+      message: trimmed.slice(0, 500),
+      tone,
+      timestamp: Date.now(),
+      playerId: entry.playerId ?? null,
+      actorName: resolvedName ?? null
+    };
+    this.gameState.duelLog.push(newEntry);
+    this.trimLogCollection(this.gameState.duelLog, RiftboundGameEngine.MAX_DUEL_LOG_ENTRIES);
+    return newEntry;
+  }
 
-      if (rune.domain) {
-        const powerGain = rune.powerValue ?? 1;
-        player.resources.power[rune.domain] += powerGain;
-      } else {
-        player.resources.universalPower += rune.powerValue ?? 1;
+  public addChatMessage(entry: {
+    id?: string | null;
+    playerId?: string | null;
+    playerName?: string | null;
+    message: string;
+  }): ChatMessage {
+    const trimmed = (entry.message ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Chat message cannot be empty');
+    }
+    const identifier =
+      (entry.id ?? '').trim() || `chat_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const existing = this.gameState.chatLog.find((message) => message.id === identifier);
+    if (existing) {
+      return existing;
+    }
+    const resolvedName =
+      entry.playerName ?? this.resolvePlayerName(entry.playerId) ?? undefined;
+    const message: ChatMessage = {
+      id: identifier,
+      playerId: entry.playerId ?? null,
+      playerName: resolvedName ?? null,
+      message: trimmed.slice(0, 1000),
+      timestamp: Date.now()
+    };
+    this.gameState.chatLog.push(message);
+    this.trimLogCollection(this.gameState.chatLog, RiftboundGameEngine.MAX_CHAT_LOG_ENTRIES);
+    return message;
+  }
+
+  private resolvePlayerName(playerId?: string | null): string | null {
+    if (!playerId) {
+      return null;
+    }
+    const player = this.gameState.players.find((entry) => entry.playerId === playerId);
+    return player?.name ?? null;
+  }
+
+  private normalizeLogTone(tone?: string | null): DuelLogTone {
+    const normalized = (tone ?? '').toLowerCase();
+    if (normalized === 'success' || normalized === 'warning' || normalized === 'error') {
+      return normalized;
+    }
+    return 'info';
+  }
+
+  private trimLogCollection<T>(collection: T[], limit: number): void {
+    if (collection.length <= limit) {
+      return;
+    }
+    const excess = collection.length - limit;
+    collection.splice(0, excess);
+  }
+
+  private exhaustRunes(player: PlayerState, count: number): void {
+    if (count <= 0) {
+      return;
+    }
+    let remaining = count;
+    for (const rune of player.channeledRunes) {
+      if (remaining <= 0) {
+        break;
+      }
+      if (!rune.isTapped) {
+        rune.isTapped = true;
+        remaining--;
       }
     }
+    this.recalculateResources(player);
+  }
+
+  private untapRunes(player: PlayerState): void {
+    let changed = false;
+    for (const rune of player.channeledRunes) {
+      if (rune.isTapped) {
+        rune.isTapped = false;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.recalculateResources(player);
+    }
+  }
+
+  private recalculateResources(player: PlayerState): void {
+    const untappedRunes = player.channeledRunes.filter((rune) => !rune.isTapped);
+    const energy = untappedRunes.length;
+    let universal = 0;
+    const powerPool = this.createEmptyPowerPool();
+    for (const rune of untappedRunes) {
+      const contribution = Math.max(1, rune.powerValue ?? 1);
+      const domain = rune.domain ?? null;
+      if (domain && powerPool[domain] !== undefined) {
+        powerPool[domain] += contribution;
+      } else {
+        universal += contribution;
+      }
+    }
+    player.resources.energy = energy;
+    player.resources.power = powerPool;
+    player.resources.universalPower = universal;
     this.syncLegacyMana(player);
   }
 
-  /**
-   * Proceed to next phase
-   */
-  public proceedToNextPhase(): void {
+  private tryAllocateRunesForCost(player: PlayerState, cost: CardCost, commit: boolean): boolean {
+    const energyRequirement = Math.max(0, cost.energy ?? 0);
+    const powerRequirement = cost.power ?? {};
+    const totalPowerRequired = Object.values(powerRequirement).reduce(
+      (sum, value) => sum + Math.max(0, Math.ceil(value ?? 0)),
+      0
+    );
+    if (energyRequirement <= 0 && totalPowerRequired <= 0) {
+      return true;
+    }
+
+    const availableEntries = player.channeledRunes.map((rune, index) => ({ rune, index }));
+    const reserved = new Set<number>();
+    const energySelections: Array<{ rune: RuneCard; index: number }> = [];
+    const powerSelections: Array<{ rune: RuneCard; index: number }> = [];
+    const powerAssigned = new Set<number>();
+    const validDomains = new Set<string>(Object.values(Domain));
+    const domainDemand = new Map<Domain, number>();
+    for (const [domainKey, rawValue] of Object.entries(powerRequirement)) {
+      if (!validDomains.has(domainKey)) {
+        continue;
+      }
+      const normalizedDomain = domainKey as Domain;
+      const requirement = Math.max(0, Math.ceil(rawValue ?? 0));
+      if (requirement > 0) {
+        domainDemand.set(normalizedDomain, requirement);
+      }
+    }
+
+    const claimEntry = (
+      predicate: (entry: { rune: RuneCard; index: number }) => boolean,
+      options?: { allowTapped?: boolean }
+    ): { rune: RuneCard; index: number } | null => {
+      const allowTapped = Boolean(options?.allowTapped);
+      for (const entry of availableEntries) {
+        if (reserved.has(entry.index)) {
+          continue;
+        }
+        if (!allowTapped && entry.rune.isTapped) {
+          continue;
+        }
+        if (predicate(entry)) {
+          reserved.add(entry.index);
+          return entry;
+        }
+      }
+      return null;
+    };
+
+    const useEnergySelectionForPower = (domain: Domain) => {
+      for (const entry of energySelections) {
+        if (powerAssigned.has(entry.index)) {
+          continue;
+        }
+        if (entry.rune.domain === domain && (entry.rune.powerValue ?? 1) > 0) {
+          powerAssigned.add(entry.index);
+          return entry;
+        }
+      }
+      for (const entry of energySelections) {
+        if (powerAssigned.has(entry.index)) {
+          continue;
+        }
+        if (!entry.rune.domain && (entry.rune.powerValue ?? 1) > 0) {
+          powerAssigned.add(entry.index);
+          return entry;
+        }
+      }
+      return null;
+    };
+
+    let energyRemaining = energyRequirement;
+    while (energyRemaining > 0) {
+      const selection =
+        claimEntry((entry) => {
+          const domainKey = entry.rune.domain as Domain | undefined;
+          return Boolean(domainKey && (domainDemand.get(domainKey) ?? 0) > 0);
+        }) ??
+        claimEntry((entry) => !entry.rune.domain) ??
+        claimEntry((_entry) => true);
+      if (!selection) {
+        return false;
+      }
+      energySelections.push(selection);
+      energyRemaining -= 1;
+    }
+
+    for (const [normalizedDomain, requirement] of domainDemand.entries()) {
+      let remaining = requirement;
+      while (remaining > 0) {
+        let selection = useEnergySelectionForPower(normalizedDomain);
+        if (!selection) {
+          selection = claimEntry(
+            (entry) =>
+              entry.rune.domain === normalizedDomain &&
+              (entry.rune.powerValue ?? 1) > 0,
+            { allowTapped: true }
+          );
+          if (!selection) {
+            selection = claimEntry(
+              (entry) => !entry.rune.domain && (entry.rune.powerValue ?? 1) > 0,
+              { allowTapped: true }
+            );
+          }
+          if (!selection) {
+            return false;
+          }
+          energySelections.push(selection);
+          powerAssigned.add(selection.index);
+        }
+        powerSelections.push(selection);
+        remaining -= selection.rune.powerValue ?? 1;
+      }
+    }
+
+    if (commit) {
+      energySelections.forEach(({ rune }) => {
+        rune.isTapped = true;
+      });
+      powerSelections.forEach(({ rune }) => {
+        this.recycleRune(player, rune);
+      });
+      this.recalculateResources(player);
+    }
+
+    return true;
+  }
+
+  private enterCombatPhase(autoRecord = false): void {
+    if (this.currentPhase === GamePhase.COMBAT) {
+      return;
+    }
+    this.currentPhase = GamePhase.COMBAT;
+    const opponent = this.getOtherPlayer(this.getCurrentPlayer());
+    this.openPriorityWindow('showdown', opponent.playerId, 'combat-open');
+    if (autoRecord) {
+      this.recordSnapshot('phase-combat');
+    }
+  }
+
+  private advancePhaseOnce(): void {
     switch (this.currentPhase) {
       case GamePhase.BEGIN:
-        this.beginTurn();
+        if (this.gameState.pendingMainPhaseEntry) {
+          this.tryAutoAdvanceFromBeginPhase();
+        } else {
+          this.beginTurn();
+        }
         break;
       case GamePhase.MAIN_1:
-        this.currentPhase = GamePhase.COMBAT;
-        {
-          const opponent = this.getOtherPlayer(this.getCurrentPlayer());
-          this.openPriorityWindow('showdown', opponent.playerId, 'combat-open');
-        }
+        this.enterCombatPhase();
         break;
       case GamePhase.COMBAT:
         this.currentPhase = GamePhase.MAIN_2;
@@ -829,6 +1190,114 @@ export class RiftboundGameEngine {
     this.recordSnapshot(`phase-${this.currentPhase}`);
   }
 
+  private hasBlockingEndStepActivity(): boolean {
+    return this.gameState.prompts.some((prompt) => !prompt.resolved);
+  }
+
+  private hasBlockingBeginPhaseActivity(): boolean {
+    return this.gameState.prompts.some((prompt) => !prompt.resolved);
+  }
+
+  private shouldAutoAdvancePhase(previousPhase: GamePhase): boolean {
+    if (this.currentPhase === GamePhase.END) {
+      if (this.hasBlockingEndStepActivity()) {
+        return false;
+      }
+      if (this.gameState.priorityWindow?.event === 'end-step') {
+        this.closePriorityWindow();
+      }
+      return true;
+    }
+    if (previousPhase === GamePhase.END && this.currentPhase === GamePhase.BEGIN) {
+      return true;
+    }
+    return false;
+  }
+
+  private promoteBeginPhaseToMainPhase(
+    player: PlayerState,
+    reason: string = 'turn-begin'
+  ): void {
+    this.gameState.pendingMainPhaseEntry = false;
+    this.updateTurnSequenceStep('main', player, reason);
+    this.currentPhase = GamePhase.MAIN_1;
+    this.openPriorityWindow('main', player.playerId, 'turn-start');
+  }
+
+  private tryAutoAdvanceFromBeginPhase(): void {
+    if (this.currentPhase !== GamePhase.BEGIN) {
+      return;
+    }
+    if (!this.gameState.pendingMainPhaseEntry) {
+      return;
+    }
+    if (this.hasBlockingBeginPhaseActivity()) {
+      return;
+    }
+    const currentPlayer = this.getCurrentPlayer();
+    this.promoteBeginPhaseToMainPhase(currentPlayer, 'turn-begin-effects-resolved');
+  }
+
+  private updateTurnSequenceStep(step: TurnSequenceStep, player: PlayerState, snapshotReason?: string): void {
+    this.gameState.turnSequenceStep = step;
+    const label = TURN_SEQUENCE_LABELS[step];
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      actorName: player.name ?? player.playerId,
+      message: `${label} for ${player.name ?? player.playerId}`,
+      tone: 'info'
+    });
+    if (snapshotReason) {
+      this.recordSnapshot(snapshotReason);
+    }
+  }
+
+  /**
+   * Proceed to next phase
+   */
+  public proceedToNextPhase(): void {
+    const startedInEndPhase = this.currentPhase === GamePhase.END;
+    if (!startedInEndPhase) {
+      let safetyCounter = 0;
+      const MAX_PHASE_ADVANCES = 10;
+      while (safetyCounter < MAX_PHASE_ADVANCES) {
+        const phaseBeforeAdvance: GamePhase = this.currentPhase;
+        if (phaseBeforeAdvance === GamePhase.END) {
+          this.handleAutoAdvanceAfterPhase(phaseBeforeAdvance);
+          return;
+        }
+        this.advancePhaseOnce();
+        safetyCounter += 1;
+        const phaseAfterAdvance: GamePhase = this.currentPhase;
+        if (phaseAfterAdvance === phaseBeforeAdvance) {
+          return;
+        }
+        if (phaseAfterAdvance === GamePhase.END) {
+          this.handleAutoAdvanceAfterPhase(phaseBeforeAdvance);
+          return;
+        }
+      }
+      this.handleAutoAdvanceAfterPhase(this.currentPhase);
+      return;
+    }
+    const phaseBeforeAdvance: GamePhase = this.currentPhase;
+    this.advancePhaseOnce();
+    this.handleAutoAdvanceAfterPhase(phaseBeforeAdvance);
+  }
+
+  private handleAutoAdvanceAfterPhase(phaseBeforeAdvance: GamePhase): void {
+    let continueAdvancing = this.shouldAutoAdvancePhase(phaseBeforeAdvance);
+    let previousPhase = phaseBeforeAdvance;
+    while (continueAdvancing) {
+      this.advancePhaseOnce();
+      previousPhase = this.currentPhase;
+      continueAdvancing = this.shouldAutoAdvancePhase(previousPhase);
+    }
+    if (this.currentPhase === GamePhase.BEGIN && !this.gameState.pendingMainPhaseEntry) {
+      this.advancePhaseOnce();
+    }
+  }
+
   /**
    * End the current turn and switch to the next player
    */
@@ -839,6 +1308,7 @@ export class RiftboundGameEngine {
     }
     this.currentPlayerIndex = nextPlayerIndex;
     this.currentPhase = GamePhase.BEGIN;
+    this.gameState.pendingMainPhaseEntry = false;
   }
 
   // ========================================================================
@@ -848,7 +1318,12 @@ export class RiftboundGameEngine {
   /**
    * Play a card from hand to board
    */
-  public playCard(playerId: string, cardIndex: number, targets?: string[]): void {
+  public playCard(
+    playerId: string,
+    cardIndex: number,
+    targets?: string[],
+    destinationId?: string | null
+  ): void {
     const player = this.getPlayerById(playerId);
     if (player.playerId !== this.getCurrentPlayer().playerId) {
       throw new Error('Not your turn');
@@ -877,8 +1352,17 @@ export class RiftboundGameEngine {
 
     // Place on board based on card type
     const boardCard = this.createBoardCard(card);
-    switch (card.type) {
+    const cardType = (card.type ?? '').toLowerCase() as CardType;
+    const entersZoneTapped =
+      cardType === CardType.CREATURE ||
+      cardType === CardType.ARTIFACT ||
+      cardType === CardType.ENCHANTMENT;
+    if (entersZoneTapped) {
+      boardCard.isTapped = !this.cardEntersUntapped(card);
+    }
+    switch (cardType) {
       case CardType.CREATURE:
+        boardCard.location = this.resolveDeploymentLocation(player, destinationId);
         player.board.creatures.push(boardCard);
         this.logRuleUsage(boardCard, 'enter-play');
         this.triggerAbilities(boardCard, 'play', player, targets);
@@ -888,18 +1372,22 @@ export class RiftboundGameEngine {
         player.graveyard.push(card);
         break;
       case CardType.ARTIFACT:
+        boardCard.location = { zone: 'base' };
         player.board.artifacts.push(boardCard);
         this.logRuleUsage(boardCard, 'enter-play');
         this.triggerAbilities(boardCard, 'play', player, targets);
         break;
       case CardType.ENCHANTMENT:
+        boardCard.location = { zone: 'base' };
         player.board.enchantments.push(boardCard);
         this.logRuleUsage(boardCard, 'enter-play');
         this.triggerAbilities(boardCard, 'play', player, targets);
         break;
+      default:
+        throw new Error(`Unsupported card type: ${card.type}`);
     }
 
-    this.recordMove('play_card', card.id, targets?.[0]);
+    this.recordMove('play_card', card.id, destinationId ?? targets?.[0]);
   }
 
   /**
@@ -927,68 +1415,36 @@ export class RiftboundGameEngine {
 
   private getCardCost(card: Card): CardCost {
     const energy = card.energyCost ?? card.manaCost ?? 0;
-    const power =
-      card.powerCost ??
-      (card.domain
-        ? {
-            [card.domain]: 1
-          }
-        : {});
-
+    const power = this.normalizePowerCost(card.powerCost);
     return {
       energy,
       power
     };
   }
 
+  private normalizePowerCost(cost?: DomainCost): DomainCost {
+    if (!cost) {
+      return {};
+    }
+    return Object.entries(cost).reduce<DomainCost>((acc, [domainKey, value]) => {
+      const normalizedValue =
+        typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+      if (normalizedValue > 0) {
+        acc[domainKey as Domain] = normalizedValue;
+      }
+      return acc;
+    }, {});
+  }
+
   private canPayCost(player: PlayerState, cost: CardCost): boolean {
-    if (player.resources.energy < cost.energy) {
-      return false;
-    }
-
-    let universal = player.resources.universalPower;
-    for (const domainKey of Object.keys(cost.power) as Domain[]) {
-      const required = cost.power[domainKey] ?? 0;
-      if (required === 0) {
-        continue;
-      }
-      const available = player.resources.power[domainKey] ?? 0;
-      if (available >= required) {
-        continue;
-      }
-      const deficit = required - available;
-      universal -= deficit;
-      if (universal < 0) {
-        return false;
-      }
-    }
-
-    return true;
+    return this.tryAllocateRunesForCost(player, cost, false);
   }
 
   private payCardCost(player: PlayerState, cost: CardCost): void {
-    player.resources.energy = Math.max(0, player.resources.energy - cost.energy);
-
-    let universal = player.resources.universalPower;
-    for (const domainKey of Object.keys(cost.power) as Domain[]) {
-      let required = cost.power[domainKey] ?? 0;
-      if (required === 0) {
-        continue;
-      }
-
-      const available = player.resources.power[domainKey] ?? 0;
-      const spendFromDomain = Math.min(available, required);
-      player.resources.power[domainKey] = available - spendFromDomain;
-      required -= spendFromDomain;
-
-      if (required > 0) {
-        universal -= required;
-        required = 0;
-      }
+    const paid = this.tryAllocateRunesForCost(player, cost, true);
+    if (!paid) {
+      throw new Error('Insufficient runes');
     }
-
-    player.resources.universalPower = Math.max(0, universal);
-    this.syncLegacyMana(player);
   }
 
   // ========================================================================
@@ -1044,11 +1500,35 @@ export class RiftboundGameEngine {
     }
 
     if (this.currentPhase !== GamePhase.COMBAT) {
-      throw new Error('Units can only enter battlefields during the combat phase');
+      if (this.currentPhase === GamePhase.MAIN_1) {
+        this.enterCombatPhase(true);
+      } else {
+        throw new Error('Units can only enter battlefields during the combat phase');
+      }
     }
 
     this.moveUnitToBattlefield(player, creature, battlefield);
     this.recordMove('move', creature.id, battlefield.battlefieldId);
+  }
+
+  private resolveDeploymentLocation(
+    player: PlayerState,
+    destinationId?: string | null
+  ): CardLocation {
+    if (!destinationId || destinationId === 'base') {
+      return { zone: 'base' };
+    }
+    const battlefield = this.findBattlefieldState(destinationId);
+    if (!battlefield) {
+      throw new Error('Battlefield not found');
+    }
+    if (battlefield.controller !== player.playerId) {
+      throw new Error('You must control a battlefield to deploy there');
+    }
+    return {
+      zone: 'battlefield',
+      battlefieldId: battlefield.battlefieldId
+    };
   }
 
   /**
@@ -1084,14 +1564,20 @@ export class RiftboundGameEngine {
       throw new Error('Battlefield not found for combat resolution');
     }
 
+    if (inferredBattlefield.lastCombatTurn === this.turnNumber) {
+      return;
+    }
+
     if (!blocked) {
       this.applyBattlefieldControl(attackerController, inferredBattlefield, 'combat', {
         sourceCardId: attacker.id
       });
+      this.markBattlefieldEngagement(inferredBattlefield);
       return;
     }
 
     this.markBattlefieldContested(inferredBattlefield, attackerController.playerId);
+    this.markBattlefieldEngagement(inferredBattlefield);
   }
 
   private awardVictoryPoints(
@@ -1304,8 +1790,13 @@ export class RiftboundGameEngine {
         }
         case 'gain_resource': {
           const amount = operation.magnitudeHint ?? 1;
-          caster.resources.energy += amount;
-          this.syncLegacyMana(caster);
+          if (amount > 0) {
+            const normalized = Math.max(1, Math.round(amount));
+            this.channelRunes(caster, normalized);
+          } else if (amount < 0) {
+            const normalized = Math.max(1, Math.round(Math.abs(amount)));
+            this.exhaustRunes(caster, normalized);
+          }
           break;
         }
         case 'shield': {
@@ -1525,9 +2016,27 @@ export class RiftboundGameEngine {
     const cards: Card[] = [];
     for (const entry of entries) {
       const materialized = this.materializeDeckEntry(entry);
-      materialized.forEach((card) => cards.push(this.cloneCard(card)));
+      materialized.forEach((card) => {
+        const cloned = this.cloneCard(card);
+        if (!cloned.instanceId) {
+          cloned.instanceId = this.nextCardInstanceId(cloned.id);
+        }
+        cards.push(cloned);
+      });
     }
     return cards;
+  }
+
+  private normalizeRuneIdentifier(value?: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+    const trimmed = value.trim();
+    const legacyMatch = trimmed.match(/^([A-Z]+-\d+)[A-Za-z]$/i);
+    if (legacyMatch) {
+      return legacyMatch[1];
+    }
+    return trimmed;
   }
 
   private normalizeRuneDeck(entries: (DeckCardEntry | RuneCard)[]): RuneCard[] {
@@ -1537,13 +2046,61 @@ export class RiftboundGameEngine {
     const runes: RuneCard[] = [];
     for (const entry of entries) {
       if (this.isRuneCardEntry(entry)) {
-        runes.push({ ...entry });
+        runes.push(this.hydrateRuneEntry(entry));
         continue;
       }
       const materialized = this.materializeDeckEntry(entry as DeckCardEntry);
       materialized.forEach((card) => runes.push(this.toRuneCard(card)));
     }
     return runes;
+  }
+
+  private hydrateRuneEntry(entry: RuneCard): RuneCard {
+    if (entry.cardSnapshot) {
+      return {
+        ...entry,
+        slug: entry.slug ?? entry.cardSnapshot.slug ?? undefined,
+        assets: entry.assets ?? entry.cardSnapshot.assets ?? null,
+        cardSnapshot: this.cloneCard(entry.cardSnapshot)
+      };
+    }
+    const legacyId = (entry as any).runeId as string | undefined;
+    const resolvedId = entry.id ?? legacyId ?? null;
+    const normalizedId = this.normalizeRuneIdentifier(resolvedId);
+    const identifier = entry.slug ?? normalizedId ?? undefined;
+    let catalogCard: Card | null = null;
+    if (identifier) {
+      try {
+        catalogCard = this.lookupCatalogCard(identifier);
+      } catch {
+        catalogCard = null;
+      }
+    }
+    if (!catalogCard && normalizedId && normalizedId !== identifier) {
+      try {
+        catalogCard = this.lookupCatalogCard(normalizedId);
+      } catch {
+        catalogCard = null;
+      }
+    }
+    if (catalogCard) {
+      const resolved = this.toRuneCard(catalogCard);
+      return {
+        ...resolved,
+        id: normalizedId ?? resolved.id,
+        name: entry.name ?? resolved.name,
+        domain: entry.domain ?? resolved.domain,
+        energyValue: entry.energyValue ?? resolved.energyValue,
+        powerValue: entry.powerValue ?? resolved.powerValue,
+        slug: entry.slug ?? resolved.slug,
+        assets: entry.assets ?? resolved.assets ?? null,
+        cardSnapshot: resolved.cardSnapshot ?? this.cloneCard(catalogCard)
+      };
+    }
+    return {
+      ...entry,
+      cardSnapshot: null
+    };
   }
 
   private isRuneCardEntry(entry: DeckCardEntry | RuneCard): entry is RuneCard {
@@ -1570,8 +2127,23 @@ export class RiftboundGameEngine {
       name: card.name,
       domain: card.domain,
       energyValue: (card as any).energyValue ?? card.energyCost ?? 1,
-      powerValue: resolvedPowerValue && resolvedPowerValue > 0 ? resolvedPowerValue : 1
+      powerValue: resolvedPowerValue && resolvedPowerValue > 0 ? resolvedPowerValue : 1,
+      slug: card.slug,
+      assets: card.assets ?? null,
+      cardSnapshot: this.cloneCard(card)
     };
+  }
+
+  private resolveChampionCard(entry?: DeckCardEntry | null): Card | null {
+    if (!entry) {
+      return null;
+    }
+    try {
+      const [card] = this.materializeDeckEntry(entry);
+      return card ? this.cloneCard(card) : null;
+    } catch {
+      return null;
+    }
   }
 
   private materializeDeckEntry(entry: DeckCardEntry): Card[] {
@@ -1627,6 +2199,7 @@ export class RiftboundGameEngine {
 
   private convertRecordToCard(record: EnrichedCardRecord): Card {
     const domain = this.mapDomain(record.colors[0]);
+    const powerCost = this.resolvePowerCost(record.cost);
     return {
       id: record.id,
       slug: record.slug,
@@ -1639,7 +2212,7 @@ export class RiftboundGameEngine {
       keywords: record.keywords,
       manaCost: record.cost.energy ?? undefined,
       energyCost: record.cost.energy ?? undefined,
-      powerCost: this.mapPowerSymbols(record.cost.powerSymbols),
+      powerCost,
       domain,
       power: record.might ?? undefined,
       toughness: record.might ?? undefined,
@@ -1648,7 +2221,8 @@ export class RiftboundGameEngine {
       assets: record.assets,
       metadata: {
         setName: record.setName,
-        rarity: record.rarity
+        rarity: record.rarity,
+        ...(record.behaviorHints ?? {})
       },
       text: record.effect,
       flavorText: record.flavor,
@@ -1659,6 +2233,7 @@ export class RiftboundGameEngine {
   private cloneCard(card: Card): Card {
     return {
       ...card,
+      instanceId: card.instanceId,
       powerCost: card.powerCost ? { ...card.powerCost } : undefined,
       abilities: card.abilities ? card.abilities.map((ability) => ({ ...ability })) : undefined,
       keywords: card.keywords ? [...card.keywords] : undefined,
@@ -1792,6 +2367,7 @@ export class RiftboundGameEngine {
     prompt.resolved = true;
     prompt.resolution = resolution;
     prompt.resolvedAt = Date.now();
+    this.tryAutoAdvanceFromBeginPhase();
   }
 
   private promptsResolved(type?: PromptType): boolean {
@@ -1851,14 +2427,49 @@ export class RiftboundGameEngine {
     }
   }
 
+  private recycleRune(player: PlayerState, rune: RuneCard): void {
+    const index = player.channeledRunes.indexOf(rune);
+    if (index >= 0) {
+      const [removed] = player.channeledRunes.splice(index, 1);
+      removed.isTapped = false;
+      player.runeDeck.push(removed);
+      return;
+    }
+    player.runeDeck.push({
+      ...rune,
+      isTapped: false
+    });
+  }
+
+  private resolvePowerCost(cost?: CardCostProfile): DomainCost | undefined {
+    if (cost?.powerCost && cost.powerType && cost.powerCost > 0) {
+      const domain = this.mapDomain(cost.powerType);
+      if (domain) {
+        return { [domain]: cost.powerCost };
+      }
+    }
+    if (cost?.powerSymbols && cost.powerSymbols.length > 0) {
+      const resolved = this.mapPowerSymbols(cost.powerSymbols);
+      return this.hasDomainCostEntries(resolved) ? resolved : undefined;
+    }
+    return undefined;
+  }
+
   private mapPowerSymbols(symbols: string[]): DomainCost {
-    return symbols.reduce<DomainCost>((acc, symbol) => {
+    return (symbols || []).reduce<DomainCost>((acc, symbol) => {
       const domain = this.symbolToDomain(symbol);
       if (domain) {
         acc[domain] = (acc[domain] ?? 0) + 1;
       }
       return acc;
     }, {});
+  }
+
+  private hasDomainCostEntries(cost: DomainCost): boolean {
+    return Object.values(cost).some((value) => {
+      const numeric = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      return numeric > 0;
+    });
   }
 
   private symbolToDomain(symbol: string): Domain | undefined {
@@ -1970,9 +2581,12 @@ export class RiftboundGameEngine {
     const activationTemplate = this.cardActivationTemplates[card.id];
     const initialActive = activationTemplate?.isStateful ?? Boolean(card.activationProfile?.stateful);
     const timestamp = Date.now();
+    const resolvedInstanceId = card.instanceId ?? this.nextCardInstanceId(card.id);
+    const cloned = this.cloneCard(card);
+    cloned.instanceId = resolvedInstanceId;
     return {
-      ...this.cloneCard(card),
-      instanceId: `${card.id}_${timestamp}_${Math.random()}`,
+      ...cloned,
+      instanceId: resolvedInstanceId,
       currentToughness: card.toughness || 0,
       isTapped: false,
       summoned: true,
@@ -1995,6 +2609,38 @@ export class RiftboundGameEngine {
         zone: 'base'
       }
     };
+  }
+
+  private cardEntersUntapped(card: Card): boolean {
+    const metadata = (card.metadata ?? {}) as Record<string, unknown>;
+    if (metadata.enterUntapped === true || metadata.enterReady === true) {
+      return true;
+    }
+    const keywords = (card.keywords ?? []).map((kw) => kw?.toLowerCase().trim());
+    if (keywords.some((kw) => kw === 'untapped' || kw === 'ready' || kw === 'enter untapped')) {
+      return true;
+    }
+    const textFragments: string[] = [];
+    if (card.text) {
+      textFragments.push(card.text);
+    }
+    if (card.rules) {
+      card.rules.forEach((rule) => {
+        if (rule?.text) {
+          textFragments.push(rule.text);
+        }
+      });
+    }
+    if (card.abilities) {
+      card.abilities.forEach((ability) => {
+        if (ability?.description) {
+          textFragments.push(ability.description);
+        }
+      });
+    }
+    const untappedPattern =
+      /\b(enters?|enter)\b[^.]*\b(untapped|ready)\b/i;
+    return textFragments.some((text) => untappedPattern.test(text));
   }
 
   private shuffle<T>(items: T[]): void {
@@ -2069,7 +2715,8 @@ export class RiftboundGameEngine {
       card: this.cloneCard(card),
       ownerId,
       controller: undefined,
-      contestedBy: []
+      contestedBy: [],
+      lastCombatTurn: undefined
     };
   }
 
@@ -2083,7 +2730,8 @@ export class RiftboundGameEngine {
       controller: state.controller,
       contestedBy: [...state.contestedBy],
       lastConqueredTurn: state.lastConqueredTurn,
-      lastHoldTurn: state.lastHoldTurn
+      lastHoldTurn: state.lastHoldTurn,
+      lastCombatTurn: state.lastCombatTurn
     };
   }
 
@@ -2140,6 +2788,10 @@ export class RiftboundGameEngine {
     if (!battlefield.contestedBy.includes(contestantId)) {
       battlefield.contestedBy.push(contestantId);
     }
+  }
+
+  private markBattlefieldEngagement(battlefield: BattlefieldState): void {
+    battlefield.lastCombatTurn = this.turnNumber;
   }
 
   private removeContestant(battlefieldId: string, contestantId: string): void {

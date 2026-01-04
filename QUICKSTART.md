@@ -195,6 +195,24 @@ ENVIRONMENT=dev \
   ./deploy.sh
 ```
 
+### Refresh Card Catalog
+
+To regenerate the DynamoDB card catalog with the latest Piltover Archive cost data:
+
+```bash
+# From the repository root
+npm install
+npm run sync:cards
+```
+
+This runs the following pipeline automatically:
+
+1. `generate:cards` – fetches the champion dump API and emits `data/cards.enriched.json`
+2. `scrape:piltover` – scrapes Piltover Archive into `data/piltover-archive.json`
+3. `apply:piltover-costs` – merges Piltover energy/power costs into the enriched data
+4. `generate:taxonomy` – rebuilds the effect taxonomy index
+5. `upload:cards` – uploads the enriched catalog to DynamoDB
+
 ### Cleanup
 
 ```bash
@@ -234,7 +252,7 @@ Running this for a month costs approximately:
 - **$90-120 USD** for dev environment
 - **$200-500 USD** for production environment
 
-See [cdk/README.md](../cdk/README.md) for detailed cost breakdown.
+See [cdk/README.md](./cdk/README.md) for detailed cost breakdown.
 
 ## Next Steps
 
@@ -248,8 +266,8 @@ See [cdk/README.md](../cdk/README.md) for detailed cost breakdown.
 ## Help
 
 For more details:
-- See [cdk/README.md](../cdk/README.md) for detailed documentation
-- See [../CDK_README.md](../CDK_README.md) for overview
+- See [cdk/README.md](./cdk/README.md) for detailed documentation
+- See [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](./docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md) for the consolidated overview
 - Check AWS CloudFormation console for stack details
 - View CloudWatch Logs for application logs
 

@@ -1,6 +1,6 @@
 # Riftbound Engine Automation Guide
 
-This document consolidates the automation expectations captured from `RIFTBOUND_RULES_FLAT.txt`, `RIFTBOUND_RULES_PARSED.json`, and the current champion dump. Use it as the canonical reference when wiring the backend driven game loop.
+This document consolidates the automation expectations captured from `RIFTBOUND_RULES_FLAT.txt`, `RIFTBOUND_RULES_PARSED.json`, and the current champion dump feed. Use it as the canonical reference when wiring the backend driven game loop.
 
 ## Phase & Priority Responsibilities
 
@@ -25,7 +25,7 @@ Per-turn loop (repeats until a player wins):
 
 ## Effect Taxonomy Overview
 
-Running the classifier across `champion-dump.json` produced the following deterministic classes. Each class drives a default operation that the engine can use for automation and prompt generation.
+Running the classifier across the latest champion dump payload produced the following deterministic classes. Each class drives a default operation that the engine can use for automation and prompt generation.
 
 | Class ID | Description | Default Operation | Rule Refs |
 | --- | --- | --- | --- |

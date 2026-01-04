@@ -20,8 +20,7 @@ riftbound-online-backend/
 │   └── cdk.sh                                Quick reference commands
 │   │
 │   └── 📚 Documentation
-│       ├── README.md                         Complete CDK documentation
-│       └── STACKS_REFERENCE.md               Stack API reference guide
+│       └── README.md                         Complete CDK documentation
 │
 ├── 📂 src/                                    Game Server (Node.js + Express)
 │   ├── server.js                             Express API server (~150 lines)
@@ -44,9 +43,8 @@ riftbound-online-backend/
 ├── 📚 DOCUMENTATION
 │   ├── DELIVERY_SUMMARY.md                   ⭐ This document - complete overview
 │   ├── QUICKSTART.md                         Get running in 5 minutes
-│   ├── CDK_README.md                         CDK infrastructure overview
 │   ├── CDK_MIGRATION_SUMMARY.md              Terraform → CDK migration guide
-│   ├── INFRASTRUCTURE_OVERVIEW.md            Architecture & features
+│   ├── docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md Consolidated infrastructure & architecture guide
 │   ├── Documentation_Index.md                Documentation navigation
 │   └── FILE_TREE.txt                         This file listing
 │

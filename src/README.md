@@ -368,5 +368,4 @@ All files have been converted from JavaScript to TypeScript:
 
 See the main documentation:
 - `QUICKSTART.md` - Getting started guide
-- `CDK_README.md` - Infrastructure documentation
-- `INFRASTRUCTURE_OVERVIEW.md` - Architecture overview
+- `docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md` - Infrastructure + architecture guide

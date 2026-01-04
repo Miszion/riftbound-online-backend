@@ -47,3 +47,5 @@ build/
 *.d.ts.map
 cdk/cdk.out/
 .container-image
+raw/
+data/

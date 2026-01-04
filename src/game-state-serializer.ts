@@ -3,6 +3,8 @@ import type {
   BoardCard,
   Card,
   CardLocation,
+  ChatMessage,
+  DuelLogEntry,
   GamePrompt,
   GameState,
   GameStateSnapshot,
@@ -80,13 +82,16 @@ const serializeActivationState = (card: BoardCard) => {
 };
 
 const serializeCardSnapshot = (card: Card | BoardCard) => {
+  const resolvedInstanceId =
+    (isBoardCard(card) ? card.instanceId : (card as Card).instanceId) ?? null;
   const base = {
     cardId: card.id,
-    instanceId: isBoardCard(card) ? card.instanceId : null,
+    instanceId: resolvedInstanceId,
     name: card.name,
     type: card.type,
     rarity: card.rarity ?? null,
     cost: card.energyCost ?? card.manaCost ?? null,
+    powerCost: card.powerCost ?? null,
     power: card.power ?? null,
     toughness: card.toughness ?? null,
     currentToughness: isBoardCard(card) ? card.currentToughness ?? card.toughness ?? null : card.toughness ?? null,
@@ -96,13 +101,14 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
     text: card.text ?? null,
     assets: card.assets ?? null,
     metadata: card.metadata ?? null,
-    location: null as ReturnType<typeof serializeLocation>
+    location: null as ReturnType<typeof serializeLocation>,
+    isTapped: null as boolean | null,
+    tapped: null as boolean | null
   };
 
   if (!isBoardCard(card)) {
     return {
       ...base,
-      isTapped: null,
       summoned: null,
       counters: null,
       activationState: null,
@@ -110,9 +116,11 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
     };
   }
 
+  const permanentTapped = card.isTapped === true;
   return {
     ...base,
-    isTapped: card.isTapped,
+    isTapped: permanentTapped,
+    tapped: permanentTapped,
     summoned: card.summoned,
     counters: card.counters ?? null,
     activationState: serializeActivationState(card),
@@ -137,16 +145,30 @@ const serializeBattlefieldState = (battlefield: BattlefieldState) => ({
   contestedBy: battlefield.contestedBy,
   lastConqueredTurn: battlefield.lastConqueredTurn ?? null,
   lastHoldTurn: battlefield.lastHoldTurn ?? null,
+  lastCombatTurn: battlefield.lastCombatTurn ?? null,
   card: battlefield.card ? serializeCardSnapshot(battlefield.card) : null
 });
 
-const serializeRuneCard = (rune: RuneCard) => ({
-  runeId: rune.id,
-  name: rune.name,
-  domain: rune.domain ?? null,
-  energyValue: rune.energyValue ?? null,
-  powerValue: rune.powerValue ?? null
-});
+const resolveRuneSnapshot = (rune: RuneCard): Card | null => {
+  return rune.cardSnapshot ?? null;
+};
+
+const serializeRuneCard = (rune: RuneCard) => {
+  const snapshot = resolveRuneSnapshot(rune);
+  const tapped = rune.isTapped === true;
+  return {
+    runeId: rune.id,
+    name: rune.name,
+    domain: rune.domain ?? null,
+    energyValue: rune.energyValue ?? null,
+    powerValue: rune.powerValue ?? null,
+    slug: rune.slug ?? null,
+    assets: rune.assets ?? null,
+    isTapped: tapped,
+    tapped,
+    cardSnapshot: snapshot ? serializeCardSnapshot(snapshot) : null
+  };
+};
 
 const serializeTemporaryEffect = (effect: TemporaryEffect) => ({
   id: effect.id,
@@ -192,6 +214,23 @@ const serializeSnapshot = (snapshot: GameStateSnapshot) => ({
   summary: snapshot.summary
 });
 
+const serializeDuelLogEntry = (entry: DuelLogEntry) => ({
+  id: entry.id,
+  message: entry.message,
+  tone: entry.tone,
+  playerId: entry.playerId ?? null,
+  actorName: entry.actorName ?? null,
+  timestamp: toDate(entry.timestamp)
+});
+
+const serializeChatMessage = (entry: ChatMessage) => ({
+  id: entry.id,
+  playerId: entry.playerId ?? null,
+  playerName: entry.playerName ?? null,
+  message: entry.message,
+  timestamp: toDate(entry.timestamp)
+});
+
 export const serializePlayerState = (player: PlayerState, visibility: PlayerVisibility) => {
   const hideHand = visibility === 'opponent';
   const hideRuneDeck = visibility === 'opponent';
@@ -217,12 +256,16 @@ export const serializePlayerState = (player: PlayerState, visibility: PlayerVisi
     },
     channeledRunes: player.channeledRunes.map(serializeRuneCard),
     runeDeck: hideRuneDeck ? [] : player.runeDeck.map(serializeRuneCard),
-    temporaryEffects: player.temporaryEffects.map(serializeTemporaryEffect)
+    temporaryEffects: player.temporaryEffects.map(serializeTemporaryEffect),
+    championLegend: player.championLegend ? serializeCardSnapshot(player.championLegend) : null,
+    championLeader: player.championLeader ? serializeCardSnapshot(player.championLeader) : null
   };
 };
 
 export const serializeGameState = (state: GameState, options?: SerializeGameStateOptions) => {
   const viewerId = options?.viewerId ?? null;
+  const duelLogEntries = Array.isArray(state.duelLog) ? state.duelLog : [];
+  const chatLogEntries = Array.isArray(state.chatLog) ? state.chatLog : [];
   return {
     matchId: state.matchId,
     players: state.players.map((player) =>
@@ -254,11 +297,14 @@ export const serializeGameState = (state: GameState, options?: SerializeGameStat
       sourceCardId: entry.sourceCardId ?? null,
       timestamp: toDate(entry.timestamp)
     })),
+    turnSequenceStep: state.turnSequenceStep ?? null,
     endReason: state.endReason ?? null,
     prompts: state.prompts.map(serializePrompt),
     priorityWindow: serializePriorityWindow(state.priorityWindow),
     snapshots: state.snapshots.map(serializeSnapshot),
-    battlefields: state.battlefields.map(serializeBattlefieldState)
+    battlefields: state.battlefields.map(serializeBattlefieldState),
+    duelLog: duelLogEntries.map(serializeDuelLogEntry),
+    chatLog: chatLogEntries.map(serializeChatMessage)
   };
 };
 
@@ -270,6 +316,7 @@ export const buildOpponentView = (state: GameState, playerId: string) => {
       victoryPoints: 0,
       victoryScore: state.victoryScore,
       handSize: 0,
+      runeDeckSize: 0,
       board: {
         creatures: [],
         artifacts: [],
@@ -284,10 +331,13 @@ export const buildOpponentView = (state: GameState, playerId: string) => {
     victoryPoints: opponent.victoryPoints,
     victoryScore: opponent.victoryScore ?? state.victoryScore,
     handSize: opponent.hand?.length || 0,
+    runeDeckSize: snapshot.runeDeckSize ?? opponent.runeDeck?.length ?? 0,
     board: snapshot.board || {
       creatures: [],
       artifacts: [],
       enchantments: []
-    }
+    },
+    championLegend: snapshot.championLegend ?? null,
+    championLeader: snapshot.championLeader ?? null
   };
 };

@@ -44,6 +44,7 @@ export const typeDefs = `#graphql
     type: String!
     rarity: String
     cost: Int
+    powerCost: JSON
     power: Int
     toughness: Int
     currentToughness: Int
@@ -71,6 +72,8 @@ export const typeDefs = `#graphql
     energy: Int
     powerSymbols: [String!]!
     raw: String
+    powerCost: Int
+    powerType: String
   }
 
   type ActivationProfile {
@@ -114,6 +117,7 @@ export const typeDefs = `#graphql
     contestedBy: [ID!]!
     lastConqueredTurn: Int
     lastHoldTurn: Int
+    lastCombatTurn: Int
     card: CardSnapshot
   }
 
@@ -260,6 +264,10 @@ export const typeDefs = `#graphql
     domain: String
     energyValue: Int
     powerValue: Int
+    slug: String
+    assets: CardAssetInfo
+    isTapped: Boolean
+    cardSnapshot: CardSnapshot
   }
 
   type PlayerBoardState {
@@ -272,6 +280,13 @@ export const typeDefs = `#graphql
     energy: Int!
     universalPower: Int!
     power: JSON!
+  }
+
+  type RunePaymentSummary {
+    energySpent: Int!
+    powerSpent: JSON!
+    tappedRunes: Int!
+    recycledRunes: Int!
   }
 
   type TemporaryEffectState {
@@ -333,6 +348,8 @@ export const typeDefs = `#graphql
     runeDeck: [RuneCardState!]!
     resources: ResourcePoolState!
     temporaryEffects: [TemporaryEffectState!]!
+    championLegend: CardSnapshot
+    championLeader: CardSnapshot
   }
 
   type ScoreEvent {
@@ -343,12 +360,30 @@ export const typeDefs = `#graphql
     timestamp: DateTime!
   }
 
+  type DuelLogEntry {
+    id: ID!
+    message: String!
+    tone: String!
+    playerId: ID
+    actorName: String
+    timestamp: DateTime!
+  }
+
+  type ChatMessage {
+    id: ID!
+    playerId: ID
+    playerName: String
+    message: String!
+    timestamp: DateTime!
+  }
+
   type GameState {
     matchId: ID!
     players: [PlayerState!]!
     currentPhase: String!
     turnNumber: Int!
     currentPlayerIndex: Int!
+    turnSequenceStep: String
     status: String!
     winner: ID
     initiativeWinner: ID
@@ -364,6 +399,8 @@ export const typeDefs = `#graphql
     priorityWindow: PriorityWindow
     snapshots: [GameStateSnapshot!]!
     battlefields: [BattlefieldState!]!
+    duelLog: [DuelLogEntry!]!
+    chatLog: [ChatMessage!]!
   }
 
   type MatchResult {
@@ -388,7 +425,10 @@ export const typeDefs = `#graphql
     victoryPoints: Int
     victoryScore: Int
     handSize: Int
+    runeDeckSize: Int
     board: PlayerBoardState
+    championLegend: CardSnapshot
+    championLeader: CardSnapshot
   }
 
   type GameStateView {
@@ -397,6 +437,7 @@ export const typeDefs = `#graphql
     turnNumber: Int!
     currentPlayerIndex: Int!
     canAct: Boolean!
+    turnSequenceStep: String
   }
 
   # ============================================================================
@@ -543,6 +584,7 @@ export const typeDefs = `#graphql
       playerId: ID!
       cardIndex: Int!
       targets: [String!]
+      destinationId: String
     ): ActionResponse!
 
     attack(
@@ -557,6 +599,21 @@ export const typeDefs = `#graphql
       playerId: ID!
       creatureInstanceId: String!
       destinationId: String!
+    ): ActionResponse!
+
+    recordDuelLogEntry(
+      matchId: ID!
+      playerId: ID
+      message: String!
+      tone: String
+      entryId: ID
+      actorName: String
+    ): ActionResponse!
+
+    sendChatMessage(
+      matchId: ID!
+      playerId: ID!
+      message: String!
     ): ActionResponse!
 
     nextPhase(
@@ -630,6 +687,8 @@ export const typeDefs = `#graphql
     success: Boolean!
     gameState: GameState!
     currentPhase: String!
+    playerView: PlayerView
+    runePayment: RunePaymentSummary
   }
 
   type MatchResultResponse {
@@ -642,6 +701,8 @@ export const typeDefs = `#graphql
     playerId: ID!
     card: Card!
     timestamp: DateTime!
+    playerView: PlayerView
+    runePayment: RunePaymentSummary
   }
 
   type AttackEvent {

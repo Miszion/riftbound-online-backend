@@ -1,5 +1,6 @@
 import AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
+import { GraphQLError } from 'graphql';
 import logger from '../logger';
 import {
   pubSub,
@@ -29,17 +30,14 @@ const sqs = new AWS.SQS({
   region: process.env.AWS_REGION || 'us-east-1'
 });
 
-const matchServiceHost =
-  process.env.MATCH_SERVICE_BASE_URL ||
-  process.env.MATCH_SERVICE_HOST ||
-  process.env.MATCH_SERVICE_URL ||
-  'http://localhost:4000';
-const matchServiceBaseUrl = matchServiceHost.startsWith('http')
-  ? matchServiceHost
-  : `http://${matchServiceHost}`;
+const internalApiHost =
+  process.env.INTERNAL_API_BASE_URL ||
+  process.env.API_BASE_URL ||
+  `http://localhost:${process.env.PORT || 3000}`;
+const internalApiBaseUrl = internalApiHost.startsWith('http') ? internalApiHost : `http://${internalApiHost}`;
 
-const MATCH_SERVICE_MAX_RETRIES = 5;
-const MATCH_SERVICE_RETRY_DELAY_MS = 500;
+const INTERNAL_API_MAX_RETRIES = 5;
+const INTERNAL_API_RETRY_DELAY_MS = 500;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 
 const defaultJsonHeaders = {
@@ -61,7 +59,7 @@ const buildAuthHeaders = (authToken?: string | null): Record<string, string> => 
   };
 };
 
-const matchServiceRequest = async <T>(
+const internalApiRequest = async <T>(
   path: string,
   init?: RequestInit,
   authToken?: string | null
@@ -69,10 +67,10 @@ const matchServiceRequest = async <T>(
   let attempt = 0;
   let lastError: any = null;
   const authHeaders = buildAuthHeaders(authToken);
-  while (attempt < MATCH_SERVICE_MAX_RETRIES) {
+  while (attempt < INTERNAL_API_MAX_RETRIES) {
     try {
       const initHeaders = (init?.headers as Record<string, string>) || {};
-      const response = await fetch(`${matchServiceBaseUrl}${path}`, {
+      const response = await fetch(`${internalApiBaseUrl}${path}`, {
         ...init,
         headers: {
           ...defaultJsonHeaders,
@@ -93,12 +91,12 @@ const matchServiceRequest = async <T>(
         const message =
           parsed?.error ||
           parsed?.message ||
-          `Match service error (${response.status})`;
+          `Game API error (${response.status})`;
         if (
           RETRYABLE_STATUS.has(response.status) &&
-          attempt < MATCH_SERVICE_MAX_RETRIES - 1
+          attempt < INTERNAL_API_MAX_RETRIES - 1
         ) {
-          await wait(MATCH_SERVICE_RETRY_DELAY_MS * (attempt + 1));
+          await wait(INTERNAL_API_RETRY_DELAY_MS * (attempt + 1));
           attempt += 1;
           continue;
         }
@@ -112,9 +110,9 @@ const matchServiceRequest = async <T>(
       const statusCode = (error as any)?.statusCode;
       const shouldRetry =
         (statusCode && RETRYABLE_STATUS.has(statusCode)) ||
-        (!statusCode && attempt < MATCH_SERVICE_MAX_RETRIES - 1);
-      if (shouldRetry && attempt < MATCH_SERVICE_MAX_RETRIES - 1) {
-        await wait(MATCH_SERVICE_RETRY_DELAY_MS * (attempt + 1));
+        (!statusCode && attempt < INTERNAL_API_MAX_RETRIES - 1);
+      if (shouldRetry && attempt < INTERNAL_API_MAX_RETRIES - 1) {
+        await wait(INTERNAL_API_RETRY_DELAY_MS * (attempt + 1));
         attempt += 1;
         continue;
       }
@@ -124,11 +122,26 @@ const matchServiceRequest = async <T>(
   throw lastError;
 };
 
-const fetchSpectatorState = (matchId: string, authToken?: string | null) =>
-  matchServiceRequest<any>(`/matches/${matchId}`, undefined, authToken);
+const ensureGameStateDefaults = (state: any) => {
+  if (!state || typeof state !== 'object') {
+    return state;
+  }
+  if (!Array.isArray(state.duelLog)) {
+    state.duelLog = [];
+  }
+  if (!Array.isArray(state.chatLog)) {
+    state.chatLog = [];
+  }
+  return state;
+};
+
+const fetchSpectatorState = async (matchId: string, authToken?: string | null) => {
+  const state = await internalApiRequest<any>(`/matches/${matchId}`, undefined, authToken);
+  return ensureGameStateDefaults(state);
+};
 
 const fetchPlayerView = (matchId: string, playerId: string, authToken?: string | null) =>
-  matchServiceRequest<any>(`/matches/${matchId}/player/${playerId}`, undefined, authToken);
+  internalApiRequest<any>(`/matches/${matchId}/player/${playerId}`, undefined, authToken);
 
 const postMatchAction = (
   matchId: string,
@@ -136,7 +149,7 @@ const postMatchAction = (
   body: Record<string, unknown>,
   authToken?: string | null
 ) =>
-  matchServiceRequest<any>(
+  internalApiRequest<any>(
     `/matches/${matchId}/actions/${action}`,
     {
       method: 'POST',
@@ -144,6 +157,28 @@ const postMatchAction = (
     },
     authToken
   );
+
+const postChatMessage = async (
+  matchId: string,
+  payload: { playerId: string; message: string; playerName?: string | null },
+  authToken?: string | null
+) => {
+  try {
+    return await postMatchAction(matchId, 'chat', payload, authToken);
+  } catch (error: any) {
+    if (error?.statusCode === 404) {
+      return internalApiRequest(
+        `/matches/${matchId}/chat`,
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        },
+        authToken
+      );
+    }
+    throw error;
+  }
+};
 
 const syncMatchStateFromService = async (matchId: string, authToken?: string | null) => {
   const spectatorState = await fetchSpectatorState(matchId, authToken);
@@ -181,7 +216,7 @@ const spawnMatchService = async ({
   authToken?: string | null;
   playerProfiles?: PlayerProfileMap;
 }) => {
-  const payload = await matchServiceRequest<any>(
+  const payload = await internalApiRequest<any>(
     '/matches/init',
     {
       method: 'POST',
@@ -198,6 +233,20 @@ const spawnMatchService = async ({
 
   logger.info(`[MATCH-INIT] Match ${matchId} initialized between ${player1} and ${player2}`);
   return payload;
+};
+
+const rethrowGraphQLError = (error: unknown, fallbackMessage: string) => {
+  const statusCode = (error as any)?.statusCode;
+  const message = error instanceof Error ? error.message : fallbackMessage;
+  if (statusCode && statusCode >= 400 && statusCode < 500) {
+    throw new GraphQLError(message, {
+      extensions: {
+        code: 'BAD_USER_INPUT',
+        http: { status: statusCode }
+      }
+    });
+  }
+  throw error instanceof Error ? error : new Error(fallbackMessage);
 };
 
 interface LeaderboardEntry {
@@ -836,8 +885,9 @@ const attemptMatch = async (mode: MatchMode) => {
             );
             await Promise.all(
               playerIds.map((playerId) => publishMatchmakingStatusUpdate(playerId, mode))
-            );
-          };
+  );
+};
+
           const ejectPlayersFromQueue = async (reason: string) => {
             await Promise.all(
               playerIds.map(async (playerId) => {
@@ -1497,7 +1547,7 @@ export const mutationResolvers = {
       return spectatorState;
     } catch (error) {
       logger.error('[SELECT-BATTLEFIELD] Error:', error);
-      throw error;
+      rethrowGraphQLError(error, 'Unable to lock battlefield selection.');
     }
   },
 
@@ -1508,11 +1558,13 @@ export const mutationResolvers = {
       playerId,
       cardIndex,
       targets,
+      destinationId,
     }: {
       matchId: string;
       playerId: string;
       cardIndex: number;
       targets?: string[];
+      destinationId?: string | null;
     },
     context: ResolverContext
   ) {
@@ -1540,18 +1592,21 @@ export const mutationResolvers = {
         });
       }
 
-      await postMatchAction(
+      const actionResult = await postMatchAction(
         matchId,
         'play-card',
         {
           playerId,
           cardIndex,
           targets: targets ?? [],
+          destinationId,
         },
         context.authToken
       );
 
       const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+      const playerView = actionResult?.playerView ?? null;
+      const runePayment = actionResult?.runePayment ?? null;
 
       if (cardSnapshot) {
         publishCardPlayed(matchId, {
@@ -1559,6 +1614,8 @@ export const mutationResolvers = {
           playerId,
           card: cardSnapshot,
           timestamp: new Date(),
+          playerView,
+          runePayment,
         });
       }
 
@@ -1568,6 +1625,8 @@ export const mutationResolvers = {
         success: true,
         gameState: spectatorState,
         currentPhase: spectatorState.currentPhase,
+        playerView,
+        runePayment,
       };
     } catch (error: any) {
       logger.error('[PLAY-CARD] Error:', error);
@@ -1672,6 +1731,98 @@ export const mutationResolvers = {
     }
   },
 
+  async recordDuelLogEntry(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      message,
+      tone,
+      entryId,
+      actorName,
+    }: {
+      matchId: string;
+      playerId: string;
+      message: string;
+      tone?: string | null;
+      entryId?: string | null;
+      actorName?: string | null;
+    },
+    context: ResolverContext
+  ) {
+    const normalizedMessage = (message ?? '').trim();
+    if (!normalizedMessage) {
+      throw new GraphQLError('Log message is required.');
+    }
+    requireUser(context);
+    try {
+      await postMatchAction(
+        matchId,
+        'duel-log',
+        {
+          playerId,
+          message: normalizedMessage,
+          tone,
+          entryId,
+          actorName
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase
+      };
+    } catch (error: any) {
+      logger.error('[DUEL-LOG] Error:', error);
+      throw error;
+    }
+  },
+
+  async sendChatMessage(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      message,
+    }: {
+      matchId: string;
+      playerId: string;
+      message: string;
+    },
+    context: ResolverContext
+  ) {
+    const normalizedMessage = (message ?? '').trim();
+    if (!normalizedMessage) {
+      throw new GraphQLError('Message cannot be empty.');
+    }
+    requireUser(context, playerId);
+    try {
+      await postChatMessage(
+        matchId,
+        {
+          playerId,
+          message: normalizedMessage
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase
+      };
+    } catch (error: any) {
+      logger.error('[CHAT] Error:', error);
+      throw error;
+    }
+  },
+
   async nextPhase(
     _parent: any,
     { matchId, playerId }: { matchId: string; playerId: string },
@@ -1715,7 +1866,7 @@ export const mutationResolvers = {
     context: ResolverContext
   ) {
     try {
-      const response = await matchServiceRequest<{
+      const response = await internalApiRequest<{
         success: boolean;
         matchResult: any;
       }>(
@@ -1747,7 +1898,7 @@ export const mutationResolvers = {
     context: ResolverContext
   ) {
     try {
-      const response = await matchServiceRequest<{
+      const response = await internalApiRequest<{
         success: boolean;
         matchResult: any;
       }>(

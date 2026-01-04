@@ -94,6 +94,8 @@ export interface CardCostProfile {
   energy: number | null;
   powerSymbols: string[];
   raw: string | null;
+  powerCost?: number | null;
+  powerType?: string | null;
 }
 
 export interface RuleClause {
@@ -116,6 +118,12 @@ export interface ActivationProfile {
 export interface CardAssetInfo {
   remote: string | null;
   localPath: string;
+}
+
+export interface CardBehaviorHints {
+  entersUntapped?: boolean;
+  entersTapped?: boolean;
+  ruleWarnings?: string[];
 }
 
 export interface EnrichedCardRecord {
@@ -145,6 +153,7 @@ export interface EnrichedCardRecord {
     marketUrl: string | null;
     source: string;
   };
+  behaviorHints?: CardBehaviorHints;
 }
 
 type StoredCardRecord = Omit<EnrichedCardRecord, 'effectProfile' | 'activation'> & {
@@ -166,9 +175,9 @@ export interface CardActivationState {
   lastChangedAt?: number;
 }
 
-type RawDumpValue = string | number | string[] | null;
+export type RawDumpValue = string | number | string[] | null;
 
-interface RawDump {
+export interface RawDump {
   names: string[];
   data: RawDumpValue[][];
 }
@@ -469,10 +478,17 @@ export const buildEffectProfile = (
 ): EffectProfile => {
   const text = effect || '';
   const classes = matchEffectClasses(text, activation);
-  const operations = classes.map((definition) => ({
-    ...definition.operation,
-    ruleRefs: definition.ruleRefs
-  }));
+  const operations = classes.map((definition) => {
+    const operation = {
+      ...definition.operation,
+      ruleRefs: definition.ruleRefs
+    };
+    const magnitude = extractMagnitudeFromEffect(text, operation.type);
+    if (magnitude !== null) {
+      operation.magnitudeHint = magnitude;
+    }
+    return operation;
+  });
   const references = Array.from(new Set(classes.flatMap((definition) => definition.ruleRefs)));
   const targeting: TargetingProfile = {
     mode: detectTargetMode(text, activation.requiresTarget),
@@ -491,7 +507,34 @@ export const buildEffectProfile = (
   };
 };
 const ENRICHED_DATA_PATH = path.resolve(process.cwd(), 'data', 'cards.enriched.json');
-const RAW_DUMP_PATH = path.resolve(process.cwd(), 'champion-dump.json');
+
+const DOMAIN_SYMBOL_BY_COLOR: Record<string, string> = {
+  fury: 'R',
+  calm: 'G',
+  mind: 'B',
+  body: 'O',
+  chaos: 'P',
+  order: 'Y'
+};
+
+const ACTION_PREFIX_CARD_TYPES = new Set<string>(['spell', 'action']);
+const UNTAPPED_PATTERN = /\b(enters?|enter)\b[^.]*\b(untapped|ready|stand)\b/i;
+const TAPPED_PATTERN = /\b(enters?|enter)\b[^.]*\b(tapped|exhausted)\b/i;
+const WORD_NUMBER_REGEX = 'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve';
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12
+};
 
 const normalize = (value: unknown): string => {
   if (value === null || value === undefined) return '';
@@ -518,21 +561,187 @@ const listify = (value: unknown): string[] => {
     .filter(Boolean);
 };
 
-const parseCost = (raw: unknown): CardCostProfile => {
-  const normalized = normalize(raw);
-  if (!normalized) return { energy: null, powerSymbols: [], raw: null };
+const deriveDomainSymbolsFromColors = (colors: string[]): string[] => {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  colors.forEach((color) => {
+    const symbol = DOMAIN_SYMBOL_BY_COLOR[color?.toLowerCase()];
+    if (symbol && !seen.has(symbol)) {
+      seen.add(symbol);
+      resolved.push(symbol);
+    }
+  });
+  return resolved;
+};
 
-  const digits = normalized.match(/\d+/g);
+const parseCost = (raw: unknown, colors: string[]): CardCostProfile => {
+  const normalized = normalize(raw);
+  const digits = normalized ? normalized.match(/\d+/g) : null;
   const energy = digits ? Number(digits.join('')) : null;
-  const powerSymbols = Array.from(
-    new Set((normalized.match(/\[[A-Z]\]/g) || []).map((symbol) => symbol.replace(/\[|\]/g, '')))
-  );
+  const bracketMatches = normalized ? normalized.match(/\[[A-Za-z]+\]/g) : null;
+  const explicitSymbols = bracketMatches
+    ? bracketMatches
+        .map((symbol) => symbol.replace(/\[|\]/g, '').trim())
+        .filter(Boolean)
+        .map((symbol) => symbol[0]?.toUpperCase() ?? '')
+        .filter(Boolean)
+    : [];
+  const fallbackSymbols =
+    explicitSymbols.length > 0 ? explicitSymbols : deriveDomainSymbolsFromColors(colors);
 
   return {
     energy: Number.isFinite(energy) ? energy : null,
-    powerSymbols,
-    raw: normalized
+    powerSymbols: fallbackSymbols,
+    raw: normalized || null
   };
+};
+
+const buildWordNumberRegex = () => WORD_NUMBER_REGEX;
+
+const parseQuantityToken = (token?: string | null): number | null => {
+  if (!token) {
+    return null;
+  }
+  const numericMatch = token.match(/-?\d+/);
+  if (numericMatch) {
+    const value = Number(numericMatch[0]);
+    if (Number.isFinite(value)) {
+      return Math.abs(value);
+    }
+  }
+  const normalized = token.toLowerCase();
+  return NUMBER_WORDS[normalized] ?? null;
+};
+
+const OPERATION_QUANTITY_PATTERNS: Partial<Record<EffectOperationType, RegExp[]>> = {
+  draw_cards: [
+    new RegExp(`draw\\s+(?:up to\\s+)?(\\d+)`, 'i'),
+    new RegExp(`draw\\s+(?:up to\\s+)?(${buildWordNumberRegex()})`, 'i')
+  ],
+  discard_cards: [
+    new RegExp(`discard\\s+(\\d+)`, 'i'),
+    new RegExp(`discard\\s+(${buildWordNumberRegex()})`, 'i')
+  ],
+  gain_resource: [
+    new RegExp(`gain\\s+(?:\\[)?(\\d+)(?:\\])?`, 'i'),
+    new RegExp(`gain\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`add\\s+(?:\\[)?(\\d+)(?:\\])?`, 'i')
+  ],
+  channel_rune: [
+    new RegExp(`channel\\s+(?:\\[)?(\\d+)(?:\\])?`, 'i'),
+    new RegExp(`channel\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`add\\s+(?:\\[)?(\\d+)(?:\\])?\\s+rune`, 'i')
+  ],
+  modify_stats: [
+    /\+(\d+)/i,
+    new RegExp(`plus\\s+(${buildWordNumberRegex()})`, 'i'),
+    /-(\d+)/i
+  ],
+  deal_damage: [
+    new RegExp(`deal\\s+(\\d+)`, 'i'),
+    new RegExp(`deal\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`deal[^\\d]*(\\d+)`, 'i')
+  ],
+  heal: [
+    new RegExp(`heal\\s+(\\d+)`, 'i'),
+    new RegExp(`heal\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`restore\\s+(\\d+)`, 'i')
+  ],
+  summon_unit: [
+    new RegExp(`summon\\s+(\\d+)`, 'i'),
+    new RegExp(`summon\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`play\\s+(\\d+)`, 'i'),
+    new RegExp(`create\\s+(\\d+)`, 'i')
+  ],
+  create_token: [
+    new RegExp(`create\\s+(\\d+)`, 'i'),
+    new RegExp(`create\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`put\\s+(\\d+)`, 'i')
+  ],
+  shield: [
+    new RegExp(`prevent\\s+(\\d+)`, 'i'),
+    new RegExp(`prevent\\s+(${buildWordNumberRegex()})`, 'i'),
+    new RegExp(`shield\\s+(\\d+)`, 'i')
+  ],
+  recycle_card: [
+    new RegExp(`recycle\\s+(\\d+)`, 'i'),
+    new RegExp(`recycle\\s+(${buildWordNumberRegex()})`, 'i')
+  ],
+  search_deck: [
+    new RegExp(`search\\s+(\\d+)`, 'i'),
+    new RegExp(`search\\s+(${buildWordNumberRegex()})`, 'i')
+  ]
+};
+
+const extractMagnitudeFromEffect = (
+  effectText: string,
+  operationType: EffectOperationType
+): number | null => {
+  const patterns = OPERATION_QUANTITY_PATTERNS[operationType];
+  if (!patterns) {
+    return null;
+  }
+  for (const pattern of patterns) {
+    const match = pattern.exec(effectText);
+    if (match && match[1]) {
+      const value = parseQuantityToken(match[1]);
+      if (value !== null) {
+        return value;
+      }
+    }
+  }
+  return null;
+};
+
+const ensureRulesCompliantEffect = (effect: string, rawType: unknown) => {
+  const warnings: string[] = [];
+  let text = effect.trim();
+  if (!text) {
+    warnings.push('missing-effect-text');
+    text = 'No effect text provided.';
+  }
+  const normalizedType = normalize(rawType).toLowerCase();
+  if (
+    ACTION_PREFIX_CARD_TYPES.has(normalizedType) &&
+    !/^(ACTION|REACTION|SHOWDOWN)\b/i.test(text)
+  ) {
+    warnings.push('action-prefix-added');
+    text = `ACTION — ${text}`;
+  }
+  if (!/[.!?]\s*$/.test(text)) {
+    text = `${text}.`;
+  }
+  return { text, warnings };
+};
+
+const buildBehaviorHints = (effectText: string, warnings: string[]): CardBehaviorHints => {
+  const hints: CardBehaviorHints = {};
+  if (UNTAPPED_PATTERN.test(effectText)) {
+    hints.entersUntapped = true;
+  }
+  if (TAPPED_PATTERN.test(effectText)) {
+    hints.entersTapped = true;
+  }
+  if (warnings.length > 0) {
+    hints.ruleWarnings = warnings;
+  }
+  return hints;
+};
+
+const shouldDefaultTapped = (rawType: unknown): boolean => {
+  const normalized = normalize(rawType).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes('unit') ||
+    normalized.includes('creature') ||
+    normalized.includes('champion') ||
+    normalized.includes('legend') ||
+    normalized.includes('artifact') ||
+    normalized.includes('enchantment') ||
+    normalized.includes('gear')
+  );
 };
 
 const deriveKeywords = (effect: string, baseKeywords: string[]): string[] => {
@@ -614,7 +823,7 @@ const buildActivation = (effect: string): ActivationProfile => {
   };
 };
 
-const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
+export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
   return raw.data.map((row) => {
     const record: Record<string, RawDumpValue> = {};
     raw.names.forEach((field, index) => {
@@ -624,14 +833,19 @@ const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
     const id = normalize(record.id);
     const slug = normalize(record.slug) || id;
     const effect = normalize(record.effect);
+    const { text: normalizedEffect, warnings } = ensureRulesCompliantEffect(effect, record.type);
     const colors = listify(record.color);
     const tags = listify(record.tags);
-    const keywords = deriveKeywords(effect, [...colors, ...tags]);
-    const rules = deriveClauses(id, effect);
-    const activation = buildActivation(effect);
-    const effectProfile = buildEffectProfile(effect, activation);
+    const keywords = deriveKeywords(normalizedEffect, [...colors, ...tags]);
+    const rules = deriveClauses(id, normalizedEffect);
+    const activation = buildActivation(normalizedEffect);
+    const effectProfile = buildEffectProfile(normalizedEffect, activation);
+    const behaviorHints = buildBehaviorHints(normalizedEffect, warnings);
+    if (shouldDefaultTapped(record.type) && !behaviorHints.entersUntapped) {
+      behaviorHints.entersTapped = true;
+    }
 
-    return {
+    const cardRecord: EnrichedCardRecord = {
       id,
       slug,
       name: normalize(record.name),
@@ -639,10 +853,10 @@ const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       rarity: normalize(record.rarity) || null,
       setName: normalize(record.set_name) || null,
       colors,
-      cost: parseCost(record.cost),
+      cost: parseCost(record.cost, colors),
       might: toNumber(record.might),
       tags,
-      effect,
+      effect: normalizedEffect,
       flavor: normalize(record.flavor) || null,
       keywords,
       effectProfile,
@@ -659,9 +873,15 @@ const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       },
       references: {
         marketUrl: normalize(record.cmurl) || null,
-        source: 'champion-dump.json'
+        source: 'champion-dump-api'
       }
     };
+
+    if (Object.keys(behaviorHints).length > 0) {
+      cardRecord.behaviorHints = behaviorHints;
+    }
+
+    return cardRecord;
   });
 };
 
@@ -695,17 +915,19 @@ const loadFromEnrichedFile = (): EnrichedCardRecord[] | null => {
   return null;
 };
 
-const loadFromChampionDump = (): EnrichedCardRecord[] => {
-  if (!fs.existsSync(RAW_DUMP_PATH)) {
-    throw new Error(`Unable to locate champion dump at ${RAW_DUMP_PATH}`);
+const requireEnrichedCatalog = (): EnrichedCardRecord[] => {
+  const enriched = loadFromEnrichedFile();
+  if (!enriched) {
+    throw new Error(
+      `Unable to load card catalog. Expected ${ENRICHED_DATA_PATH}. Run "npm run generate:cards" first.`
+    );
   }
-  const rawDump = JSON.parse(fs.readFileSync(RAW_DUMP_PATH, 'utf-8')) as RawDump;
-  return reshapeDump(rawDump);
+  return enriched;
 };
 
 const getCachedCatalog = (): EnrichedCardRecord[] => {
   if (!cachedCards) {
-    cachedCards = loadFromEnrichedFile() ?? loadFromChampionDump();
+    cachedCards = requireEnrichedCatalog();
   }
   return cachedCards;
 };

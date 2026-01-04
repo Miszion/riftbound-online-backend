@@ -4,12 +4,11 @@ Complete guide to all documentation files.
 
 ## 🚀 Start Here
 
-**First time?** Start in this order:
+**First time?** Review in this order:
 
-1. **[QUICKSTART.md](QUICKSTART.md)** (5 min) - Get running immediately
-2. **[INFRASTRUCTURE_OVERVIEW.md](INFRASTRUCTURE_OVERVIEW.md)** (10 min) - Understand architecture
-3. **[CDK_README.md](CDK_README.md)** (20 min) - CDK concepts and features
-4. **[cdk/README.md](cdk/README.md)** (deep dive) - Complete reference
+1. **[QUICKSTART.md](QUICKSTART.md)** (5 min) – Deploy immediately
+2. **[docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)** (15 min) – Architecture + operational overview
+3. **[cdk/README.md](cdk/README.md)** (deep dive) – CDK configuration, context, troubleshooting
 
 ## 📖 Documentation Files
 
@@ -17,24 +16,23 @@ Complete guide to all documentation files.
 
 | File | Time | Purpose |
 |------|------|---------|
-| **[QUICKSTART.md](QUICKSTART.md)** | 5 min | Deploy in 5 minutes |
-| **[INFRASTRUCTURE_OVERVIEW.md](INFRASTRUCTURE_OVERVIEW.md)** | 10 min | Architecture overview |
-| **[CDK_README.md](CDK_README.md)** | 20 min | CDK introduction |
+| **[QUICKSTART.md](QUICKSTART.md)** | 5 min | Bootstrap dev env + smoke test APIs |
+| **[docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)** | 15 min | Unified infrastructure guide |
 
 ### Reference
 
 | File | Purpose |
 |------|---------|
-| **[cdk/README.md](cdk/README.md)** | Complete CDK documentation |
-| **[cdk/STACKS_REFERENCE.md](cdk/STACKS_REFERENCE.md)** | Stack API reference |
-| **[CDK_MIGRATION_SUMMARY.md](CDK_MIGRATION_SUMMARY.md)** | What changed from Terraform |
+| **[cdk/README.md](cdk/README.md)** | Complete CDK documentation + troubleshooting |
+| **[CDK_MIGRATION_SUMMARY.md](CDK_MIGRATION_SUMMARY.md)** | Terraform → CDK rationale |
+| **[docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)** | Stack reference, API surface, workflows |
 
 ### Application
 
 | File | Purpose |
 |------|---------|
-| **[src/server.js](src/server.js)** | Express game server |
-| **[Dockerfile](Dockerfile)** | Container definition |
+| **[src/server.js](src/server.js)** | Express + GraphQL server |
+| **[Dockerfile](Dockerfile)** | Container definition for ECS |
 | **[package.json](package.json)** | App dependencies |
 
 ## 🎯 By Use Case
@@ -46,10 +44,10 @@ cd cdk && ./deploy.sh
 ```
 
 ### "I want to understand the architecture"
-→ Read: [INFRASTRUCTURE_OVERVIEW.md](INFRASTRUCTURE_OVERVIEW.md)
+→ Read: [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)
 
 ### "I need to modify the infrastructure"
-→ Read: [cdk/README.md](cdk/README.md) → [cdk/STACKS_REFERENCE.md](cdk/STACKS_REFERENCE.md)
+→ Read: [cdk/README.md](cdk/README.md) (context) + [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#stack-reference)
 
 ### "I want to customize the game server"
 → Edit: [src/server.js](src/server.js)
@@ -65,15 +63,13 @@ cd cdk && ./deploy.sh
 ```
 riftbound-online-backend/
 ├── 📄 QUICKSTART.md                    ← Start here!
-├── 📄 INFRASTRUCTURE_OVERVIEW.md       ← Architecture
-├── 📄 CDK_README.md                    ← CDK overview
+├── 📄 docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md ← Unified infra guide
 ├── 📄 CDK_MIGRATION_SUMMARY.md         ← What changed
 ├── 📄 README.md                        ← Main readme
 ├── 📄 Documentation_Index.md           ← This file
 │
 ├── cdk/                                ← Infrastructure Code
 │   ├── 📄 README.md                    ← CDK documentation
-│   ├── 📄 STACKS_REFERENCE.md          ← Stack API
 │   ├── src/
 │   │   ├── index.ts                    ← Main entry point
 │   │   ├── auth-stack.ts               ← Authentication
@@ -96,95 +92,82 @@ riftbound-online-backend/
 ### By Topic
 
 **Authentication**
-- [CDK_README.md → API Endpoints](CDK_README.md#api-endpoints)
-- [cdk/README.md → Auth API](cdk/README.md#api-endpoints)
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → API Surface](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#api-surface-same-ecs-service)
+- [cdk/README.md → Auth Section](cdk/README.md#authentication)
 - [QUICKSTART.md → Test Sign-Up](QUICKSTART.md#step-6-test-sign-up)
 
 **Deployment**
 - [QUICKSTART.md](QUICKSTART.md)
-- [CDK_README.md → Deployment](CDK_README.md#deployment-workflow)
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Deployment & Operations](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#deployment--operations-workflows)
 - [cdk/README.md → Common Commands](cdk/README.md#common-commands)
 
 **Database**
-- [INFRASTRUCTURE_OVERVIEW.md → Database](INFRASTRUCTURE_OVERVIEW.md#key-features)
-- [cdk/README.md → Database Schema](cdk/README.md#dynamodb-schema)
-- [cdk/STACKS_REFERENCE.md → DatabaseStack](cdk/STACKS_REFERENCE.md#databasestack)
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Stack Reference](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#stack-reference)
+- [cdk/README.md → DynamoDB Schema](cdk/README.md#dynamodb-schema)
 
 **Monitoring**
-- [CDK_README.md → Monitoring](CDK_README.md#monitoring--observability)
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Monitoring & Troubleshooting](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#monitoring--troubleshooting)
 - [cdk/README.md → CloudWatch](cdk/README.md#cloudwatch-logs)
 - [QUICKSTART.md → View Logs](QUICKSTART.md#view-logs)
 
 **Scaling**
-- [INFRASTRUCTURE_OVERVIEW.md → Scale Up](INFRASTRUCTURE_OVERVIEW.md#scale-up)
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Deployment & Operations](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#deployment--operations-workflows)
 - [cdk/README.md → Scaling](cdk/README.md#scaling)
-- [CDK_README.md → Common Tasks](CDK_README.md#scale-up)
 
 **Costs**
-- [INFRASTRUCTURE_OVERVIEW.md → Cost Summary](INFRASTRUCTURE_OVERVIEW.md#cost-summary)
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Cost & Checklist](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#cost--checklist)
 - [cdk/README.md → Cost Estimation](cdk/README.md#cost-estimation)
-- [CDK_README.md → Cost Optimization](CDK_README.md#cost-optimization)
 
 **Troubleshooting**
+- [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Monitoring & Troubleshooting](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#monitoring--troubleshooting)
 - [cdk/README.md → Troubleshooting](cdk/README.md#troubleshooting)
 - [QUICKSTART.md → Troubleshooting](QUICKSTART.md#troubleshooting)
-- [CDK_README.md → FAQ](CDK_README.md#faq)
 
 ### By Audience
 
 **DevOps/Infrastructure**
-1. [INFRASTRUCTURE_OVERVIEW.md](INFRASTRUCTURE_OVERVIEW.md)
+1. [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md)
 2. [cdk/README.md](cdk/README.md)
-3. [cdk/STACKS_REFERENCE.md](cdk/STACKS_REFERENCE.md)
+3. CDK source files under `cdk/src/`
 
 **Backend Developer**
-1. [CDK_README.md](CDK_README.md)
+1. [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → API Surface](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#api-surface-same-ecs-service)
 2. [src/server.js](src/server.js)
-3. [cdk/README.md → API Endpoints](cdk/README.md#api-endpoints)
+3. [cdk/README.md](cdk/README.md)
 
 **Ops/SRE**
-1. [cdk/README.md → Monitoring](cdk/README.md#monitoring--observability)
-2. [cdk/README.md → Scaling](cdk/README.md#scaling)
-3. [cdk/README.md → Troubleshooting](cdk/README.md#troubleshooting)
+1. [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Monitoring & Troubleshooting](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#monitoring--troubleshooting)
+2. [cdk/README.md → Monitoring](cdk/README.md#monitoring--observability)
+3. [QUICKSTART.md → View Logs](QUICKSTART.md#view-logs)
 
 **Frontend Developer**
-1. [cdk/README.md → API Endpoints](cdk/README.md#api-endpoints)
-2. [CDK_README.md → API Endpoints](CDK_README.md#api-endpoints)
-3. [QUICKSTART.md → Test](QUICKSTART.md#step-6-test-sign-up)
+1. [docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → API Surface](docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md#api-surface-same-ecs-service)
+2. [QUICKSTART.md → Test APIs](QUICKSTART.md#step-6-test-sign-up)
 
 ## 🎓 Learning Path
 
 ### Beginner
 1. QUICKSTART.md
-2. INFRASTRUCTURE_OVERVIEW.md
-3. Try deploying: `cd cdk && ./deploy.sh`
+2. docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md
+3. Deploy with `cd cdk && ./deploy.sh`
 
 ### Intermediate
-1. CDK_README.md
+1. docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Stack Reference
 2. cdk/README.md
-3. Modify game server: src/server.js
+3. Modify CDK stacks under `cdk/src/`
 
 ### Advanced
-1. cdk/STACKS_REFERENCE.md
-2. Read CDK TypeScript files in cdk/src/
-3. Extend infrastructure with new stacks
+1. Dive into `cdk/src/*.ts`
+2. Extend infrastructure (new stacks, alarms, etc.)
+3. Document updates back in docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md
 
 ## 🔗 External Resources
 
-### AWS Documentation
 - [AWS CDK Docs](https://docs.aws.amazon.com/cdk/)
 - [Cognito Docs](https://docs.aws.amazon.com/cognito/)
 - [ECS Docs](https://docs.aws.amazon.com/ecs/)
 - [DynamoDB Docs](https://docs.aws.amazon.com/dynamodb/)
-
-### CDK Examples
-- [AWS CDK Examples](https://github.com/aws-samples/aws-cdk-examples)
-- [CDK Patterns](https://cdkpatterns.com/)
-
-### Tools
 - [AWS CLI Reference](https://docs.aws.amazon.com/cli/)
-- [CloudFormation Console](https://console.aws.amazon.com/cloudformation/)
-- [AWS CloudWatch](https://console.aws.amazon.com/cloudwatch/)
 
 ## ✅ Recommended Reading Order
 
@@ -192,120 +175,79 @@ riftbound-online-backend/
 ```
 1. QUICKSTART.md (5 min)
    ↓
-2. INFRASTRUCTURE_OVERVIEW.md (10 min)
+2. docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md (15 min)
    ↓
-3. CDK_README.md (20 min)
+3. cdk/README.md (deep dive)
    ↓
-4. Deploy! → cd cdk && ./deploy.sh
-   ↓
-5. Test API → QUICKSTART.md examples
-   ↓
-6. Deep dive → cdk/README.md + cdk/STACKS_REFERENCE.md
+4. Deploy → cd cdk && ./deploy.sh
 ```
 
 **For Infrastructure Changes:**
 ```
-1. cdk/STACKS_REFERENCE.md (understand current stack)
+1. docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → Stack Reference
    ↓
 2. Edit cdk/src/*.ts files
    ↓
 3. npm run build
    ↓
-4. npm run diff (preview)
+4. npm run diff
    ↓
 5. npm run deploy
 ```
 
 **For Game Development:**
 ```
-1. CDK_README.md (understand API)
+1. docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md → API Surface
    ↓
-2. QUICKSTART.md (test APIs)
+2. QUICKSTART.md → Test APIs
    ↓
-3. Edit src/server.js (add game logic)
+3. Edit src/server.js (game logic)
    ↓
-4. Dockerfile (containerize)
+4. Build/push Docker image
    ↓
-5. Deploy with new image
+5. Redeploy via deploy.sh
 ```
 
 ## 🎯 Navigation Tips
 
 ### From Any File
-- `QUICKSTART.md` - How to deploy
-- `cdk/README.md` - Complete reference
-- `cdk/STACKS_REFERENCE.md` - Modify stacks
-- `CDK_MIGRATION_SUMMARY.md` - What's new
+- `QUICKSTART.md` – How to deploy & test
+- `docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md` – Architecture + operations
+- `cdk/README.md` – Deep-dive reference
+- `CDK_MIGRATION_SUMMARY.md` – Background info
 
 ### Using Grep
 ```bash
-# Find all mentions of a service
+# Find service references
 grep -r "DynamoDB" .
 
-# Find all API endpoints
-grep -r "POST\|GET\|PUT" cdk/README.md
-
-# Find configuration options
-grep -r "ENVIRONMENT\|CONTAINER_IMAGE" cdk/
+# List all markdown headings
+grep -n "^#" docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md
 ```
 
 ### Using Find
 ```bash
-# Find all TypeScript files
 find cdk/src -name "*.ts"
-
-# Find all documentation
-find . -name "*.md"
-
-# Find specific section
-grep -n "^## " cdk/README.md
+find docs -name "*.md"
 ```
 
 ## 📊 Documentation Statistics
 
-- **Total Files**: 20+
-- **Total Lines**: 10,000+
-- **Code Examples**: 50+
-- **Diagrams**: 10+
-- **Command Examples**: 30+
+- **Total Markdown Guides**: 15+
+- **Architecture diagrams**: 5+
+- **Command snippets**: 30+
 
 ## 🔄 How to Use This Index
 
-1. **Find what you need** → Search in "By Topic" or "By Use Case"
-2. **Follow recommended order** → See "Learning Path"
-3. **Get specific help** → Use "Quick Search"
-4. **Go deep** → Read full documents in order
+1. Locate the scenario under "By Use Case" or "Quick Search".
+2. Jump into the linked document/section.
+3. Follow the recommended commands.
+4. Keep docs updated if you change behavior.
 
 ## 💬 Questions?
 
-**General questions about deployment?**
-→ QUICKSTART.md
+- **Deployment issues?** → QUICKSTART.md or cdk/README.md → Troubleshooting
+- **Need stack context?** → docs/infrastructure/INFRASTRUCTURE_OVERVIEW.md
+- **Want raw CDK details?** → cdk/README.md + `cdk/src/*`
 
-**Specific CDK questions?**
-→ cdk/README.md
-
-**Want to modify infrastructure?**
-→ cdk/STACKS_REFERENCE.md
-
-**Need API documentation?**
-→ cdk/README.md → API Endpoints
-
-**Trouble deploying?**
-→ cdk/README.md → Troubleshooting
-
----
-
-**Need something not listed?** Check the directory structure and grep for keywords:
-
-```bash
-# Find all occurrences of a term
-grep -r "your-search-term" .
-
-# Search in documentation only
-grep -r "your-search-term" . --include="*.md"
-
-# Search in code only
-grep -r "your-search-term" cdk/src --include="*.ts"
-```
-
-**Happy deploying!** 🚀
+Happy deploying! 🚀
