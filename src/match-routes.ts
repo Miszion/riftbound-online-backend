@@ -9,6 +9,7 @@ import {
   CardType,
   PlayerState,
   BoardCard,
+  MatchResult,
 } from './game-engine';
 import { serializeGameState, serializePlayerState, buildOpponentView } from './game-state-serializer';
 
@@ -20,6 +21,8 @@ const MATCH_TABLE =
   process.env.MATCH_TABLE ||
   process.env.MATCH_HISTORY_TABLE ||
   'riftbound-online-matches-dev';
+const MATCH_HISTORY_TABLE =
+  process.env.MATCH_HISTORY_TABLE || 'riftbound-online-match-history-dev';
 const STATE_TABLE =
   process.env.STATE_TABLE ||
   process.env.MATCH_STATE_TABLE ||
@@ -28,6 +31,70 @@ const STATE_TABLE =
 const dynamodb = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || 'us-east-1'
 });
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const recordMatchHistoryEntries = async (
+  matchId: string,
+  players: PlayerState[],
+  matchResult: MatchResult
+) => {
+  try {
+    if (!players.length) {
+      return;
+    }
+    const baseTimestamp = Date.now();
+    const playerIds = players.map((player) => player.playerId);
+    const moveCount = Array.isArray(matchResult.moves) ? matchResult.moves.length : 0;
+    type WriteRequest = AWS.DynamoDB.DocumentClient.WriteRequest;
+    const requests: WriteRequest[] = players.map(
+      (player, index) => ({
+        PutRequest: {
+          Item: {
+            MatchId: matchId,
+            Timestamp: baseTimestamp + index,
+            CreatedAt: baseTimestamp + index,
+            UserId: player.playerId,
+            Players: playerIds,
+            Winner: matchResult.winner,
+            Loser: matchResult.loser,
+            OpponentId: playerIds.find((id) => id !== player.playerId) ?? null,
+            Result: player.playerId === matchResult.winner ? 'win' : 'loss',
+            Duration: matchResult.duration,
+            Turns: matchResult.turns,
+            MoveCount: moveCount,
+            Reason: matchResult.reason,
+            Status: 'completed'
+          }
+        }
+      })
+    );
+
+    let pending: WriteRequest[] = requests.slice();
+    while (pending.length) {
+      const chunk = pending.slice(0, 25);
+      pending = pending.slice(25);
+      const response = await dynamodb
+        .batchWrite({
+          RequestItems: {
+            [MATCH_HISTORY_TABLE]: chunk
+          }
+        })
+        .promise();
+      const unprocessed = (response.UnprocessedItems?.[MATCH_HISTORY_TABLE] ??
+        []) as WriteRequest[];
+      if (unprocessed.length) {
+        pending = unprocessed.concat(pending);
+        await sleep(50);
+      }
+    }
+  } catch (error) {
+    logger.error('[MATCH-HISTORY] Failed to cache match history entry', {
+      error,
+      matchId
+    });
+  }
+};
 
 const summarizeLocation = (location?: BoardCard['location']) => {
   if (!location) {
@@ -61,6 +128,18 @@ const summarizePlayerResources = (player: PlayerState) => ({
   totalRunes: player.channeledRunes.length
 });
 
+const summarizeCombatContext = (state: GameState) => {
+  const context = state.combatContext;
+  if (!context) {
+    return null;
+  }
+  return {
+    battlefieldId: context.battlefieldId,
+    initiatedBy: context.initiatedBy,
+    priorityStage: context.priorityStage
+  };
+};
+
 const buildPlayerViewSnapshot = (
   engine: RiftboundGameEngine,
   snapshot: GameState,
@@ -80,7 +159,9 @@ const buildPlayerViewSnapshot = (
       turnNumber: snapshot.turnNumber,
       currentPlayerIndex: snapshot.currentPlayerIndex,
       canAct: engine.canPlayerAct(playerId),
-      turnSequenceStep: snapshot.turnSequenceStep ?? null
+      turnSequenceStep: snapshot.turnSequenceStep ?? null,
+      focusPlayerId: snapshot.focusPlayerId ?? null,
+      combatContext: summarizeCombatContext(snapshot)
     }
   };
 };
@@ -210,6 +291,16 @@ const respondWithStateUnavailable = (
 
 const matchRouter = express.Router();
 
+const serializeError = (error: unknown) => {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      stack: error.stack
+    };
+  }
+  return error;
+};
+
 matchRouter.use((req: Request, _res: Response, next: NextFunction) => {
   if (!(req as AuthedRequest).requestId) {
     (req as AuthedRequest).requestId = randomUUID();
@@ -259,7 +350,20 @@ matchRouter.post('/matches/init', async (req: Request, res: Response): Promise<v
 
     // Create and initialize game engine
     const engine = new RiftboundGameEngine(matchId, playerMetadata);
-    engine.initializeGame(decks);
+    try {
+      engine.initializeGame(decks);
+    } catch (error) {
+      logger.error('[MATCH-INIT] Engine initialization failed', {
+        matchId,
+        player1,
+        player2,
+        error: serializeError(error),
+        requestId
+      });
+      const message = error instanceof Error ? error.message : 'Invalid deck configuration';
+      res.status(400).json({ error: message });
+      return;
+    }
 
     // Save initial state to DynamoDB
     await saveGameState(matchId, engine);
@@ -279,7 +383,10 @@ matchRouter.post('/matches/init', async (req: Request, res: Response): Promise<v
     });
   } catch (error) {
     logger.error('[MATCH-INIT] Error:', {
-      error,
+      matchId: req.body?.matchId ?? null,
+      player1: req.body?.player1 ?? null,
+      player2: req.body?.player2 ?? null,
+      error: serializeError(error),
       requestId: (req as AuthedRequest).requestId ?? null
     });
     res.status(500).json({ error: 'Failed to initialize match' });
@@ -901,6 +1008,119 @@ matchRouter.post('/matches/:matchId/actions/move', async (req: Request, res: Res
 });
 
 /**
+ * Activate champion legend/leader ability
+ * POST /matches/:matchId/actions/activate-legend
+ * Body: { playerId, target, destinationId }
+ */
+matchRouter.post('/matches/:matchId/actions/activate-legend', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, target, destinationId } = req.body;
+
+    if (!playerId) {
+      res.status(400).json({ error: 'playerId is required' });
+      return;
+    }
+
+    const { engine } = await loadEngineState(matchId, context);
+    const normalizedTarget = target === 'leader' ? 'leader' : 'legend';
+
+    engine.activateChampionAbility(playerId, normalizedTarget, destinationId ?? null);
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Champion ability activated', {
+      matchId,
+      playerId,
+      target: normalizedTarget,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState,
+      currentPhase: spectatorState.currentPhase
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[ACTIVATE-LEGEND] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to activate champion ability' });
+  }
+});
+
+/**
+ * Pass priority in the current window
+ * POST /matches/:matchId/actions/pass-priority
+ * Body: { playerId }
+ */
+matchRouter.post('/matches/:matchId/actions/pass-priority', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId } = req.body;
+
+    if (!playerId) {
+      res.status(400).json({ error: 'playerId is required' });
+      return;
+    }
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    engine.passPriority(playerId);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Player passed priority', {
+      matchId,
+      playerId,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState,
+      currentPhase: spectatorState.currentPhase
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[PASS-PRIORITY] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to pass priority' });
+  }
+});
+
+/**
  * End current phase and proceed to next
  * POST /matches/:matchId/actions/next-phase
  * Body: { playerId }
@@ -980,10 +1200,12 @@ matchRouter.post('/matches/:matchId/result', async (req: Request, res: Response)
     const spectatorState = serializeGameState(rawState);
 
     // Get final game state
+    const fallbackLoser =
+      rawState.players.find((p) => p.playerId !== winner)?.playerId ?? winner;
     const matchResult = engine.getMatchResult() || {
       matchId,
       winner,
-      loser: rawState.players.find((p) => p.playerId !== winner)?.playerId,
+      loser: fallbackLoser,
       reason: reason || 'victory_points',
       duration: Date.now() - rawState.timestamp,
       turns: rawState.turnNumber,
@@ -1004,12 +1226,16 @@ matchRouter.post('/matches/:matchId/result', async (req: Request, res: Response)
           Turns: matchResult.turns,
           MoveCount: matchResult.moves.length,
           Moves: matchResult.moves,
+          DuelLog: spectatorState.duelLog ?? [],
+          ChatLog: spectatorState.chatLog ?? [],
           FinalState: spectatorState,
           CreatedAt: Date.now(),
           Status: 'completed'
         }
       })
       .promise();
+
+    await recordMatchHistoryEntries(matchId, rawState.players, matchResult);
 
     logger.info(`[MATCH-COMPLETE] Match ${matchId} completed. Winner: ${winner}`, {
       matchId,
@@ -1019,7 +1245,8 @@ matchRouter.post('/matches/:matchId/result', async (req: Request, res: Response)
 
     res.json({
       success: true,
-      matchResult
+      matchResult,
+      gameState: spectatorState
     });
 
   } catch (error: any) {
@@ -1052,26 +1279,17 @@ matchRouter.post('/matches/:matchId/concede', async (req: Request, res: Response
     const { matchId } = req.params;
     const { playerId } = req.body;
 
-    const { engine } = await loadEngineState(matchId, context);
-
-    const opponent = engine.getGameState().players.find((p) => p.playerId !== playerId);
-    if (!opponent) {
-      res.status(404).json({ error: 'Opponent not found' });
+    if (!playerId) {
+      res.status(400).json({ error: 'playerId is required' });
       return;
     }
 
+    const { engine } = await loadEngineState(matchId, context);
+    const matchResult = engine.concedeMatch(playerId);
+    await saveGameState(matchId, engine);
+
     const rawState = engine.getGameState();
     const spectatorState = serializeGameState(rawState);
-
-    const matchResult = engine.getMatchResult() || {
-      matchId,
-      winner: opponent.playerId,
-      loser: playerId,
-      reason: 'concede' as const,
-      duration: Date.now() - rawState.timestamp,
-      turns: rawState.turnNumber,
-      moves: rawState.moveHistory
-    };
 
     // Save to DynamoDB
     await dynamodb
@@ -1087,6 +1305,8 @@ matchRouter.post('/matches/:matchId/concede', async (req: Request, res: Response
           Turns: matchResult.turns,
           MoveCount: matchResult.moves.length,
           Moves: matchResult.moves,
+          DuelLog: spectatorState.duelLog ?? [],
+          ChatLog: spectatorState.chatLog ?? [],
           FinalState: spectatorState,
           CreatedAt: Date.now(),
           Status: 'completed'
@@ -1094,16 +1314,19 @@ matchRouter.post('/matches/:matchId/concede', async (req: Request, res: Response
       })
       .promise();
 
-    logger.info(`[MATCH-CONCEDE] Match ${matchId} ended. Winner: ${opponent.playerId}`, {
+    await recordMatchHistoryEntries(matchId, rawState.players, matchResult);
+
+    logger.info(`[MATCH-CONCEDE] Match ${matchId} ended. Winner: ${matchResult.winner}`, {
       matchId,
       playerId,
-      winner: opponent.playerId,
+      winner: matchResult.winner,
       requestId: context.requestId ?? null
     });
 
     res.json({
       success: true,
-      matchResult
+      matchResult,
+      gameState: spectatorState
     });
 
   } catch (error: any) {

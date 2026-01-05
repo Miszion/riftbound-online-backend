@@ -1731,6 +1731,94 @@ export const mutationResolvers = {
     }
   },
 
+  async activateChampionAbility(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      target,
+      destinationId,
+    }: {
+      matchId: string;
+      playerId: string;
+      target?: 'legend' | 'leader';
+      destinationId?: string | null;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'activate-legend',
+        {
+          playerId,
+          target,
+          destinationId,
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      logger.info('[ACTIVATE-LEGEND] Player activated champion ability', {
+        matchId,
+        playerId,
+        target: target ?? 'legend',
+        destinationId: destinationId ?? null,
+      });
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[ACTIVATE-LEGEND] Error:', error);
+      throw error;
+    }
+  },
+
+  async passPriority(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+    }: {
+      matchId: string;
+      playerId: string;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'pass-priority',
+        {
+          playerId,
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      logger.info('[PASS-PRIORITY] Player passed priority', {
+        matchId,
+        playerId,
+      });
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[PASS-PRIORITY] Error:', error);
+      throw error;
+    }
+  },
+
   async recordDuelLogEntry(
     _parent: any,
     {
@@ -1869,6 +1957,7 @@ export const mutationResolvers = {
       const response = await internalApiRequest<{
         success: boolean;
         matchResult: any;
+        gameState?: any;
       }>(
         `/matches/${matchId}/result`,
         {
@@ -1885,6 +1974,7 @@ export const mutationResolvers = {
       return {
         success: response.success,
         matchResult: response.matchResult,
+        gameState: response.gameState ?? null,
       };
     } catch (error) {
       logger.error('[RESULT] Error:', error);
@@ -1901,6 +1991,7 @@ export const mutationResolvers = {
       const response = await internalApiRequest<{
         success: boolean;
         matchResult: any;
+        gameState?: any;
       }>(
         `/matches/${matchId}/concede`,
         {
@@ -1919,6 +2010,7 @@ export const mutationResolvers = {
       return {
         success: response.success,
         matchResult: response.matchResult,
+        gameState: response.gameState ?? null,
       };
     } catch (error) {
       logger.error('[CONCEDE] Error:', error);

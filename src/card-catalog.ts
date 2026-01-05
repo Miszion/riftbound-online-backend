@@ -45,6 +45,7 @@ export interface EffectOperation {
   automated: boolean;
   ruleRefs?: string[];
   magnitudeHint?: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 export type EffectClassId =
@@ -88,6 +89,18 @@ export interface EffectProfile {
   priority: PriorityHint;
   references: string[];
   reliability: 'heuristic' | 'exact';
+}
+
+export interface TokenSpec {
+  name: string;
+  slug: string;
+  might: number;
+  count: number;
+  entersReady: boolean;
+  location: 'base' | 'battlefield' | 'here';
+  flexiblePlacement?: boolean;
+  variableCount?: boolean;
+  keywords: string[];
 }
 
 export interface CardCostProfile {
@@ -478,6 +491,8 @@ export const buildEffectProfile = (
 ): EffectProfile => {
   const text = effect || '';
   const classes = matchEffectClasses(text, activation);
+  const tokenSpecs = extractTokenSpecs(text);
+  let tokenCursor = 0;
   const operations = classes.map((definition) => {
     const operation = {
       ...definition.operation,
@@ -486,6 +501,20 @@ export const buildEffectProfile = (
     const magnitude = extractMagnitudeFromEffect(text, operation.type);
     if (magnitude !== null) {
       operation.magnitudeHint = magnitude;
+    }
+     if (
+      (operation.type === 'create_token' || operation.type === 'summon_unit') &&
+      tokenCursor < tokenSpecs.length
+    ) {
+      const tokenSpec = tokenSpecs[tokenCursor];
+      tokenCursor += 1;
+      operation.metadata = {
+        ...(operation.metadata ?? {}),
+        tokenSpec
+      };
+      if (operation.magnitudeHint == null && !tokenSpec.variableCount) {
+        operation.magnitudeHint = tokenSpec.count;
+      }
     }
     return operation;
   });
@@ -693,6 +722,92 @@ const extractMagnitudeFromEffect = (
   return null;
 };
 
+const TOKEN_REGEX =
+  /play\s+(?<quantifier>a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)?\s*(?<ready>ready)?\s*(?<might>\d+)\s*(?::rb_might:|\[might\])\s*(?<name>[A-Za-z' -]+?)\s+unit token/gi;
+const FLEXIBLE_PLACEMENT_REGEX =
+  /\bdifferent locations\b|\bchoose\b.*\blocation\b|\bbattlefields you control\b|\bto each\b/i;
+const VARIABLE_COUNT_REGEX =
+  /\bfor each\b|\bper\b|\bbased on\b|\bequal to\b|\bnumber of\b/i;
+
+const sanitizeEffectText = (effect: string) =>
+  effect.replace(/<[^>]+>/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+
+const toSlug = (value: string) =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'token';
+
+const resolveTokenCount = (quantifier?: string | null): number => {
+  if (!quantifier) {
+    return 1;
+  }
+  const numeric = Number(quantifier);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+  const normalized = quantifier.toLowerCase();
+  if (normalized === 'a' || normalized === 'an') {
+    return 1;
+  }
+  const lookup = NUMBER_WORDS[normalized];
+  return lookup ?? 1;
+};
+
+const resolveTokenLocation = (clause: string): TokenSpec['location'] => {
+  if (/\bhere\b/i.test(clause)) {
+    return 'here';
+  }
+  if (/(?:to|in|into|at)\s+(?:your\s+)?base/i.test(clause)) {
+    return 'base';
+  }
+  if (/\bbattlefield(s)?\b/i.test(clause)) {
+    return 'battlefield';
+  }
+  return 'base';
+};
+
+const extractTokenKeywords = (clause: string): string[] => {
+  const matches = clause.match(/\[([^\]]+)\]/gi);
+  if (!matches) {
+    return [];
+  }
+  return matches
+    .map((entry) => entry.replace(/\[|\]/g, '').trim())
+    .filter((keyword) => keyword.length > 0 && !/^(?:action|reaction|hidden|repeat)$/i.test(keyword));
+};
+
+const extractTokenSpecs = (effect: string): TokenSpec[] => {
+  const normalized = sanitizeEffectText(effect);
+  const specs: TokenSpec[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = TOKEN_REGEX.exec(normalized)) !== null) {
+    const quantifier = match.groups?.quantifier ?? null;
+    const readyFlag = match.groups?.ready ?? null;
+    const mightToken = match.groups?.might ?? null;
+    const name = (match.groups?.name ?? 'Token').trim();
+    const clauseTerminator = normalized.indexOf('.', match.index);
+    const clauseEnd = clauseTerminator >= 0 ? clauseTerminator : normalized.length;
+    const clause = normalized.slice(match.index, clauseEnd);
+    const count = resolveTokenCount(quantifier);
+    const might = Number(mightToken ?? 1) || 1;
+    const entersReady = Boolean(readyFlag && readyFlag.length > 0);
+    const keywords = extractTokenKeywords(clause);
+    const location = resolveTokenLocation(clause);
+    const flexiblePlacement = FLEXIBLE_PLACEMENT_REGEX.test(clause);
+    const variableCount = VARIABLE_COUNT_REGEX.test(clause);
+    specs.push({
+      name,
+      slug: toSlug(name),
+      might,
+      count,
+      entersReady,
+      location,
+      flexiblePlacement,
+      variableCount,
+      keywords
+    });
+  }
+  return specs;
+};
+
 const ensureRulesCompliantEffect = (effect: string, rawType: unknown) => {
   const warnings: string[] = [];
   let text = effect.trim();
@@ -811,7 +926,7 @@ const deriveTiming = (effect: string): ActivationTiming => {
   return 'passive';
 };
 
-const buildActivation = (effect: string): ActivationProfile => {
+export const buildActivation = (effect: string): ActivationProfile => {
   const text = effect || '';
   return {
     timing: deriveTiming(text),

@@ -12,7 +12,8 @@ import type {
   PlayerBoard,
   PriorityWindow,
   RuneCard,
-  TemporaryEffect
+  TemporaryEffect,
+  ChampionAbilityRuntimeState
 } from './game-engine';
 
 export type PlayerVisibility = 'self' | 'opponent' | 'spectator';
@@ -99,11 +100,12 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
     tags: card.tags ?? [],
     abilities: abilityLabels(card),
     text: card.text ?? null,
+    effect: card.text ?? null,
     assets: card.assets ?? null,
     metadata: card.metadata ?? null,
     location: null as ReturnType<typeof serializeLocation>,
-    isTapped: null as boolean | null,
-    tapped: null as boolean | null
+    isTapped: card.isTapped ?? null,
+    tapped: card.isTapped ?? null
   };
 
   if (!isBoardCard(card)) {
@@ -136,7 +138,7 @@ const serializePlayerBoard = (board: PlayerBoard) => ({
   enchantments: serializeCardZone(board.enchantments)
 });
 
-const serializeBattlefieldState = (battlefield: BattlefieldState) => ({
+const serializeBattlefieldState = (state: GameState, battlefield: BattlefieldState) => ({
   battlefieldId: battlefield.battlefieldId,
   slug: battlefield.slug ?? null,
   name: battlefield.name,
@@ -146,8 +148,41 @@ const serializeBattlefieldState = (battlefield: BattlefieldState) => ({
   lastConqueredTurn: battlefield.lastConqueredTurn ?? null,
   lastHoldTurn: battlefield.lastHoldTurn ?? null,
   lastCombatTurn: battlefield.lastCombatTurn ?? null,
+  lastHoldScoreTurn: battlefield.lastHoldScoreTurn ?? null,
+  presence: resolveBattlefieldPresence(state, battlefield),
   card: battlefield.card ? serializeCardSnapshot(battlefield.card) : null
 });
+
+const resolveBattlefieldPresence = (state: GameState, battlefield: BattlefieldState) => {
+  const track = new Map<string, { playerId: string; totalMight: number; unitCount: number }>();
+  state.players.forEach((player) => {
+    player.board.creatures.forEach((creature) => {
+      if (
+        creature.location.zone === 'battlefield' &&
+        creature.location.battlefieldId === battlefield.battlefieldId
+      ) {
+        const key = player.playerId;
+        const record =
+          track.get(key) ??
+          {
+            playerId: key,
+            totalMight: 0,
+            unitCount: 0
+          };
+        const might =
+          typeof creature.power === 'number'
+            ? creature.power
+            : typeof creature.currentToughness === 'number'
+              ? creature.currentToughness
+              : 0;
+        record.totalMight += Number.isFinite(might) ? might : 0;
+        record.unitCount += 1;
+        track.set(key, record);
+      }
+    });
+  });
+  return Array.from(track.values());
+};
 
 const resolveRuneSnapshot = (rune: RuneCard): Card | null => {
   return rune.cardSnapshot ?? null;
@@ -231,9 +266,39 @@ const serializeChatMessage = (entry: ChatMessage) => ({
   timestamp: toDate(entry.timestamp)
 });
 
+const serializeChampionAbilityState = (
+  state?: ChampionAbilityRuntimeState | null
+): {
+  canActivate: boolean;
+  reason: string | null;
+  costSummary: string | null;
+  cost: {
+    energy: number;
+    runes: Record<string, number | null | undefined>;
+    exhausts: boolean;
+  } | null;
+} | null => {
+  if (!state) {
+    return null;
+  }
+  return {
+    canActivate: state.canActivate,
+    reason: state.reason ?? null,
+    costSummary: state.costSummary ?? null,
+    cost: state.cost
+      ? {
+          energy: state.cost.energy,
+          runes: state.cost.runes,
+          exhausts: state.cost.requiresExhaust
+        }
+      : null
+  };
+};
+
 export const serializePlayerState = (player: PlayerState, visibility: PlayerVisibility) => {
   const hideHand = visibility === 'opponent';
   const hideRuneDeck = visibility === 'opponent';
+  const includeChampionStatus = visibility !== 'opponent';
 
   return {
     playerId: player.playerId,
@@ -258,7 +323,13 @@ export const serializePlayerState = (player: PlayerState, visibility: PlayerVisi
     runeDeck: hideRuneDeck ? [] : player.runeDeck.map(serializeRuneCard),
     temporaryEffects: player.temporaryEffects.map(serializeTemporaryEffect),
     championLegend: player.championLegend ? serializeCardSnapshot(player.championLegend) : null,
-    championLeader: player.championLeader ? serializeCardSnapshot(player.championLeader) : null
+    championLeader: player.championLeader ? serializeCardSnapshot(player.championLeader) : null,
+    championLegendState: includeChampionStatus
+      ? serializeChampionAbilityState(player.championLegendStatus)
+      : null,
+    championLeaderState: includeChampionStatus
+      ? serializeChampionAbilityState(player.championLeaderStatus)
+      : null
   };
 };
 
@@ -302,9 +373,19 @@ export const serializeGameState = (state: GameState, options?: SerializeGameStat
     prompts: state.prompts.map(serializePrompt),
     priorityWindow: serializePriorityWindow(state.priorityWindow),
     snapshots: state.snapshots.map(serializeSnapshot),
-    battlefields: state.battlefields.map(serializeBattlefieldState),
+    battlefields: state.battlefields.map((battlefield) =>
+      serializeBattlefieldState(state, battlefield)
+    ),
     duelLog: duelLogEntries.map(serializeDuelLogEntry),
-    chatLog: chatLogEntries.map(serializeChatMessage)
+    chatLog: chatLogEntries.map(serializeChatMessage),
+    focusPlayerId: state.focusPlayerId ?? null,
+    combatContext: state.combatContext
+      ? {
+          battlefieldId: state.combatContext.battlefieldId,
+          initiatedBy: state.combatContext.initiatedBy,
+          priorityStage: state.combatContext.priorityStage
+        }
+      : null
   };
 };
 

@@ -6,10 +6,8 @@ Welcome to the Riftbound Online Backend repository. This is a complete TypeScrip
 
 Get up and running in minutes:
 
-1. **New to the project?** → Read [QUICKSTART.md](./QUICKSTART.md)
-2. **Full documentation** → Visit [docs/INDEX.md](./docs/INDEX.md)
-3. **Need match engine internals?** → See [docs/GAME_RULES_IMPLEMENTATION.md](./docs/GAME_RULES_IMPLEMENTATION.md)
-4. **Understand the rules?** → Check [docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md)
+1. **Need match engine internals?** → See [docs/GAME_RULES_IMPLEMENTATION.md](./docs/GAME_RULES_IMPLEMENTATION.md)
+2. **Understand the rules?** → Check [docs/RULES_SUMMARY.md](./docs/RULES_SUMMARY.md)
 
 ## 📚 Documentation
 

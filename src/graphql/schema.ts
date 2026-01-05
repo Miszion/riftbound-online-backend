@@ -106,6 +106,7 @@ export const typeDefs = `#graphql
     keywords: [String!]
     effect: String
     assets: CardAssetInfo
+    isTapped: Boolean
   }
 
   type BattlefieldState {
@@ -118,7 +119,15 @@ export const typeDefs = `#graphql
     lastConqueredTurn: Int
     lastHoldTurn: Int
     lastCombatTurn: Int
+    lastHoldScoreTurn: Int
+    presence: [BattlefieldPresence!]!
     card: CardSnapshot
+  }
+
+  type BattlefieldPresence {
+    playerId: ID!
+    totalMight: Int!
+    unitCount: Int!
   }
 
   type CardPricing {
@@ -330,6 +339,19 @@ export const typeDefs = `#graphql
     summary: String!
   }
 
+  type ChampionAbilityCostState {
+    energy: Int
+    runes: JSON
+    exhausts: Boolean!
+  }
+
+  type ChampionAbilityState {
+    canActivate: Boolean!
+    reason: String
+    costSummary: String
+    cost: ChampionAbilityCostState
+  }
+
   type PlayerState {
     playerId: ID!
     name: String!
@@ -350,6 +372,8 @@ export const typeDefs = `#graphql
     temporaryEffects: [TemporaryEffectState!]!
     championLegend: CardSnapshot
     championLeader: CardSnapshot
+    championLegendState: ChampionAbilityState
+    championLeaderState: ChampionAbilityState
   }
 
   type ScoreEvent {
@@ -401,6 +425,14 @@ export const typeDefs = `#graphql
     battlefields: [BattlefieldState!]!
     duelLog: [DuelLogEntry!]!
     chatLog: [ChatMessage!]!
+    focusPlayerId: ID
+    combatContext: CombatContext
+  }
+
+  type CombatContext {
+    battlefieldId: ID!
+    initiatedBy: ID!
+    priorityStage: String!
   }
 
   type MatchResult {
@@ -438,6 +470,8 @@ export const typeDefs = `#graphql
     currentPlayerIndex: Int!
     canAct: Boolean!
     turnSequenceStep: String
+    focusPlayerId: ID
+    combatContext: CombatContext
   }
 
   # ============================================================================
@@ -601,6 +635,18 @@ export const typeDefs = `#graphql
       destinationId: String!
     ): ActionResponse!
 
+    activateChampionAbility(
+      matchId: ID!
+      playerId: ID!
+      target: String
+      destinationId: String
+    ): ActionResponse!
+
+    passPriority(
+      matchId: ID!
+      playerId: ID!
+    ): ActionResponse!
+
     recordDuelLogEntry(
       matchId: ID!
       playerId: ID
@@ -691,10 +737,11 @@ export const typeDefs = `#graphql
     runePayment: RunePaymentSummary
   }
 
-  type MatchResultResponse {
-    success: Boolean!
-    matchResult: MatchResult!
-  }
+type MatchResultResponse {
+  success: Boolean!
+  matchResult: MatchResult!
+  gameState: GameState
+}
 
   type CardPlayedEvent {
     matchId: ID!

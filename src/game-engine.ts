@@ -1,16 +1,30 @@
 import {
   ActivationProfile,
+  ActivationTiming,
   CardActivationState,
   CardAssetInfo,
   CardCostProfile,
+  EffectClassId,
   EffectOperation,
   EffectProfile,
   EnrichedCardRecord,
+  PriorityHint,
   RuleClause,
+  TargetingProfile,
+  TokenSpec,
+  buildActivation,
   buildActivationStateIndex,
+  buildEffectProfile,
   findCardById,
   findCardBySlug
 } from './card-catalog';
+import {
+  ChampionAbilityCost,
+  DomainKey,
+  canSatisfyChampionCost,
+  parseChampionAbilityCost,
+  summarizeChampionCost
+} from './champion-utils';
 
 /**
  * Riftbound TCG Game State Engine
@@ -84,12 +98,23 @@ export interface Card {
   flavorText?: string | null;
   effectProfile?: EffectProfile;
   instanceId?: string;
+  isTapped?: boolean;
 }
 
 export interface CardAbility {
   name: string;
   description: string;
   triggerType?: 'play' | 'attack' | 'damage' | 'heal' | 'death';
+  keyword?: string;
+  timing?: ActivationTiming;
+  requiresTarget?: boolean;
+  triggerWindows?: string[];
+  reactionWindows?: string[];
+  effectClasses?: EffectClassId[];
+  references?: string[];
+  targeting?: TargetingProfile;
+  priorityHint?: PriorityHint;
+  operations?: EffectOperation[];
 }
 
 export interface PlayerHand {
@@ -167,6 +192,16 @@ export interface PlayerState {
   firstTurnRuneBoost: number;
   championLegend?: Card | null;
   championLeader?: Card | null;
+  championLegendStatus?: ChampionAbilityRuntimeState | null;
+  championLeaderStatus?: ChampionAbilityRuntimeState | null;
+  championLeaderDeployed?: boolean;
+}
+
+export interface ChampionAbilityRuntimeState {
+  canActivate: boolean;
+  reason?: string | null;
+  cost: ChampionAbilityCost;
+  costSummary: string;
 }
 
 export interface ResourcePool {
@@ -226,7 +261,14 @@ export interface TemporaryEffect {
   };
 }
 
-export type ScoreReason = 'combat' | 'objective' | 'support' | 'decking' | 'concede' | 'timeout';
+export type ScoreReason =
+  | 'combat'
+  | 'objective'
+  | 'support'
+  | 'decking'
+  | 'concede'
+  | 'timeout'
+  | 'hold';
 
 export type PromptType =
   | 'mulligan'
@@ -250,11 +292,19 @@ export interface GamePrompt {
 
 export interface PriorityWindow {
   id: string;
-  type: 'main' | 'reaction' | 'showdown';
+  type: 'main' | 'reaction' | 'showdown' | 'combat';
   holder: string;
   openedAt: number;
   event?: string;
   expiresAt?: number;
+}
+
+export interface CombatContext {
+  battlefieldId: string;
+  initiatedBy: string;
+  priorityStage: 'action' | 'reaction';
+  lastActionPlayerId?: string;
+  actionPasses: number;
 }
 
 export interface GameStateSnapshot {
@@ -292,6 +342,15 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+type EffectOperationContext = {
+  source: Card;
+  boardTarget?: BoardCard;
+  playerTarget?: PlayerState;
+  battlefieldTarget?: BattlefieldState;
+  abilityName?: string | null;
+  triggerType?: string | null;
+};
+
 export enum GamePhase {
   BEGIN = 'begin',
   MAIN_1 = 'main_1',
@@ -321,6 +380,11 @@ const TURN_SEQUENCE_LABELS: Record<TurnSequenceStep, string> = {
   main: 'Main Phase 1'
 };
 
+const ABILITY_KEYWORD_PATTERN = /^\s*\[(?<keyword>[^\]]+)\]\s*[—-]\s*(?<body>.+)$/i;
+const SUPPORTED_KEYWORD_TRIGGERS: Record<string, CardAbility['triggerType']> = {
+  deathknell: 'death'
+};
+
 export interface GameState {
   matchId: string;
   players: PlayerState[];
@@ -346,6 +410,8 @@ export interface GameState {
   chatLog: ChatMessage[];
   pendingMainPhaseEntry: boolean;
   turnSequenceStep: TurnSequenceStep | null;
+  focusPlayerId?: string | null;
+  combatContext?: CombatContext | null;
 }
 
 export interface GameMove {
@@ -379,6 +445,13 @@ export interface BattlefieldState {
   lastConqueredTurn?: number;
   lastHoldTurn?: number;
   lastCombatTurn?: number;
+  lastHoldScoreTurn?: number;
+}
+
+export interface BattlefieldPresence {
+  playerId: string;
+  totalMight: number;
+  unitCount: number;
 }
 
 const INITIATIVE_CHOICES = [
@@ -454,7 +527,9 @@ export class RiftboundGameEngine {
       duelLog: [],
       chatLog: [],
       pendingMainPhaseEntry: false,
-      turnSequenceStep: null
+      turnSequenceStep: null,
+      focusPlayerId: null,
+      combatContext: null
     };
   }
 
@@ -475,6 +550,17 @@ export class RiftboundGameEngine {
     }
     if (!engine.gameState.turnSequenceStep) {
       engine.gameState.turnSequenceStep = null;
+    }
+    if (typeof engine.gameState.focusPlayerId === 'undefined') {
+      engine.gameState.focusPlayerId = null;
+    }
+    if (!engine.gameState.combatContext) {
+      engine.gameState.combatContext = null;
+    }
+    for (const player of engine.gameState.players) {
+      if (typeof player.championLeaderDeployed !== 'boolean') {
+        player.championLeaderDeployed = false;
+      }
     }
     return engine;
   }
@@ -516,7 +602,8 @@ export class RiftboundGameEngine {
       battlefieldPool: [],
       firstTurnRuneBoost: 0,
       championLegend: null,
-      championLeader: null
+      championLeader: null,
+      championLeaderDeployed: false
     };
   }
 
@@ -837,10 +924,12 @@ export class RiftboundGameEngine {
     this.untapAllPermanents(currentPlayer);
     this.untapRunes(currentPlayer);
     this.readySummonedCreatures(currentPlayer);
+    this.readyChampions(currentPlayer);
 
     // B — Begin phase triggers
     this.updateTurnSequenceStep('begin', currentPlayer, 'turn-begin-step');
     this.resolveTemporaryEffects(currentPlayer);
+    this.checkBattlefieldHoldBonuses(currentPlayer);
 
     // C — Channel
     this.updateTurnSequenceStep('channel', currentPlayer, 'turn-channel');
@@ -862,7 +951,8 @@ export class RiftboundGameEngine {
     this.promoteBeginPhaseToMainPhase(currentPlayer);
   }
 
-  private channelRunes(player: PlayerState, maxRunes: number): void {
+  private channelRunes(player: PlayerState, maxRunes: number, options?: { tapped?: boolean }): void {
+    const enterTapped = Boolean(options?.tapped);
     for (let i = 0; i < maxRunes; i++) {
       if (player.runeDeck.length === 0) {
         break;
@@ -873,7 +963,7 @@ export class RiftboundGameEngine {
         break;
       }
 
-      rune.isTapped = false;
+      rune.isTapped = enterTapped;
       player.channeledRunes.push(rune);
     }
     this.recalculateResources(player);
@@ -1315,6 +1405,25 @@ export class RiftboundGameEngine {
   // CARD PLAY RULES
   // ========================================================================
 
+  private cardSupportsTiming(card: Card, timing: 'action' | 'reaction'): boolean {
+    const keywordHints = (card.keywords ?? []).map((keyword) => keyword.toLowerCase());
+    const timingHints = new Set<string>(keywordHints);
+    if (card.activationProfile?.timing) {
+      timingHints.add(card.activationProfile.timing.toLowerCase());
+    }
+    (card.activationProfile?.reactionWindows ?? []).forEach((window) =>
+      timingHints.add(window.toLowerCase())
+    );
+    return timingHints.has(timing);
+  }
+
+  private ensureCombatTiming(card: Card, stage: 'action' | 'reaction'): void {
+    if (!this.cardSupportsTiming(card, stage)) {
+      const label = stage === 'action' ? 'action' : 'reaction';
+      throw new Error(`Only ${label} cards may be played right now.`);
+    }
+  }
+
   /**
    * Play a card from hand to board
    */
@@ -1325,17 +1434,30 @@ export class RiftboundGameEngine {
     destinationId?: string | null
   ): void {
     const player = this.getPlayerById(playerId);
-    if (player.playerId !== this.getCurrentPlayer().playerId) {
+    const hasCombatPriority = this.hasCombatPriority(playerId);
+    if (!hasCombatPriority && player.playerId !== this.getCurrentPlayer().playerId) {
       throw new Error('Not your turn');
     }
 
-    if (this.currentPhase !== GamePhase.MAIN_1 && this.currentPhase !== GamePhase.MAIN_2) {
+    if (
+      !hasCombatPriority &&
+      this.currentPhase !== GamePhase.MAIN_1 &&
+      this.currentPhase !== GamePhase.MAIN_2
+    ) {
       throw new Error(`Cannot play cards during ${this.currentPhase} phase`);
     }
 
     const card = player.hand[cardIndex];
     if (!card) {
       throw new Error('Card not in hand');
+    }
+
+    const combatStage = hasCombatPriority
+      ? this.gameState.combatContext?.priorityStage ?? 'action'
+      : null;
+    if (hasCombatPriority) {
+      this.ensureCombatTiming(card, combatStage ?? 'action');
+      this.currentPhase = GamePhase.COMBAT;
     }
 
     const cardCost = this.getCardCost(card);
@@ -1351,43 +1473,23 @@ export class RiftboundGameEngine {
     this.payCardCost(player, cardCost);
 
     // Place on board based on card type
-    const boardCard = this.createBoardCard(card);
     const cardType = (card.type ?? '').toLowerCase() as CardType;
-    const entersZoneTapped =
-      cardType === CardType.CREATURE ||
-      cardType === CardType.ARTIFACT ||
-      cardType === CardType.ENCHANTMENT;
-    if (entersZoneTapped) {
-      boardCard.isTapped = !this.cardEntersUntapped(card);
-    }
     switch (cardType) {
       case CardType.CREATURE:
-        boardCard.location = this.resolveDeploymentLocation(player, destinationId);
-        player.board.creatures.push(boardCard);
-        this.logRuleUsage(boardCard, 'enter-play');
-        this.triggerAbilities(boardCard, 'play', player, targets);
+      case CardType.ARTIFACT:
+      case CardType.ENCHANTMENT:
+        this.deployPermanentCard(player, card, { destinationId, targets });
         break;
       case CardType.SPELL:
         this.resolveSpell(card, player, targets);
         player.graveyard.push(card);
-        break;
-      case CardType.ARTIFACT:
-        boardCard.location = { zone: 'base' };
-        player.board.artifacts.push(boardCard);
-        this.logRuleUsage(boardCard, 'enter-play');
-        this.triggerAbilities(boardCard, 'play', player, targets);
-        break;
-      case CardType.ENCHANTMENT:
-        boardCard.location = { zone: 'base' };
-        player.board.enchantments.push(boardCard);
-        this.logRuleUsage(boardCard, 'enter-play');
-        this.triggerAbilities(boardCard, 'play', player, targets);
         break;
       default:
         throw new Error(`Unsupported card type: ${card.type}`);
     }
 
     this.recordMove('play_card', card.id, destinationId ?? targets?.[0]);
+    this.advanceCombatPriorityAfterPlay(player, combatStage);
   }
 
   /**
@@ -1477,10 +1579,6 @@ export class RiftboundGameEngine {
       throw new Error('Creature is tapped');
     }
 
-    if (creature.summoned) {
-      throw new Error('Creature cannot move the turn it was summoned');
-    }
-
     if (destinationId === 'base') {
       if (
         this.currentPhase !== GamePhase.MAIN_1 &&
@@ -1499,16 +1597,150 @@ export class RiftboundGameEngine {
       throw new Error('Battlefield not found');
     }
 
-    if (this.currentPhase !== GamePhase.COMBAT) {
-      if (this.currentPhase === GamePhase.MAIN_1) {
-        this.enterCombatPhase(true);
-      } else {
-        throw new Error('Units can only enter battlefields during the combat phase');
-      }
+    const canEnterBattlefieldPhase =
+      this.currentPhase === GamePhase.MAIN_1 || this.currentPhase === GamePhase.COMBAT;
+    if (!canEnterBattlefieldPhase) {
+      throw new Error('Units can only enter battlefields during the main phase or combat');
     }
 
     this.moveUnitToBattlefield(player, creature, battlefield);
     this.recordMove('move', creature.id, battlefield.battlefieldId);
+  }
+
+  public deployChampionLeader(playerId: string, destinationId?: string | null): void {
+    const player = this.getPlayerById(playerId);
+    const champion = player.championLeader;
+    if (!champion) {
+      throw new Error('No champion leader assigned.');
+    }
+    if (player.championLeaderDeployed) {
+      throw new Error('Champion leader already deployed.');
+    }
+    const hasCombatPriority = this.hasCombatPriority(playerId);
+    if (hasCombatPriority) {
+      throw new Error('Cannot deploy champion leader during combat priority.');
+    }
+    if (player.playerId !== this.getCurrentPlayer().playerId) {
+      throw new Error('Not your turn');
+    }
+    if (
+      this.currentPhase !== GamePhase.MAIN_1 &&
+      this.currentPhase !== GamePhase.MAIN_2
+    ) {
+      throw new Error('Champion leaders can only be deployed during the main phase.');
+    }
+    if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+      throw new Error('Game is not in progress.');
+    }
+
+    const cardCost = this.getCardCost(champion);
+    if (!this.canPayCost(player, cardCost)) {
+      throw new Error('Insufficient resources to deploy champion leader.');
+    }
+
+    this.payCardCost(player, cardCost);
+
+    const boardCard = this.deployPermanentCard(player, champion, { destinationId, targets: [] });
+
+    player.championLeaderDeployed = true;
+    this.recordMove(
+      'play_card',
+      champion.id,
+      boardCard.location.zone === 'battlefield' ? boardCard.location.battlefieldId ?? null : 'base'
+    );
+
+    this.addDuelLogEntry({
+      playerId,
+      message: `${this.resolvePlayerName(playerId) ?? 'Player'} deploys ${champion.name}.`,
+      tone: 'info'
+    });
+  }
+
+  public concedeMatch(concedingPlayerId: string): MatchResult {
+    const concedingPlayer = this.getPlayerById(concedingPlayerId);
+    const opponent = this.getOtherPlayer(concedingPlayer);
+    const alreadyDecided = this.getMatchResult();
+    if (alreadyDecided) {
+      return alreadyDecided;
+    }
+    this.addDuelLogEntry({
+      playerId: concedingPlayer.playerId,
+      message: `${this.resolvePlayerName(concedingPlayer.playerId) ?? 'Player'} concedes the duel.`,
+      tone: 'warning'
+    });
+    this.endGame(opponent, concedingPlayer, 'concede');
+    return {
+      matchId: this.gameState.matchId,
+      winner: opponent.playerId,
+      loser: concedingPlayer.playerId,
+      reason: 'concede',
+      duration: Date.now() - this.gameState.timestamp,
+      turns: this.turnNumber,
+      moves: [...this.gameState.moveHistory]
+    };
+  }
+
+  public activateChampionAbility(
+    playerId: string,
+    target: 'legend' | 'leader' = 'legend',
+    destinationId?: string | null
+  ): void {
+    const player = this.getPlayerById(playerId);
+    if (target === 'leader') {
+      this.deployChampionLeader(playerId, destinationId);
+      return;
+    }
+    const champion = player.championLegend;
+    if (!champion) {
+      throw new Error('No legend assigned to activate.');
+    }
+    const costProfile = parseChampionAbilityCost(champion.text ?? '');
+    if (costProfile.requiresExhaust && champion.isTapped) {
+      throw new Error(`${champion.name} is exhausted.`);
+    }
+    const cardCost = this.championCostToCardCost(costProfile);
+    if (!this.tryAllocateRunesForCost(player, cardCost, true)) {
+      throw new Error('Insufficient resources to activate champion ability.');
+    }
+    if (costProfile.requiresExhaust) {
+      champion.isTapped = true;
+    }
+    const operations = champion.effectProfile?.operations ?? [];
+    if (operations.length === 0) {
+      throw new Error('Champion has no activatable effect.');
+    }
+    this.executeEffectOperations(operations, player, {
+      source: champion,
+      abilityName: 'legend ability',
+      triggerType: 'legend'
+    });
+    this.recordMove('activate_ability', champion.id);
+    this.addDuelLogEntry({
+      playerId,
+      message: `${this.resolvePlayerName(playerId) ?? 'Player'} activates ${champion.name}.`,
+      tone: 'info'
+    });
+  }
+
+  public passPriority(playerId: string): void {
+    const window = this.gameState.priorityWindow;
+    if (!window) {
+      throw new Error('No priority window is active.');
+    }
+    if (window.holder !== playerId) {
+      throw new Error('You do not currently have priority.');
+    }
+    const player = this.getPlayerById(playerId);
+    if (window.type === 'combat' && this.gameState.combatContext) {
+      this.handleCombatPriorityPass(player);
+      return;
+    }
+    this.addDuelLogEntry({
+      playerId,
+      message: `${this.resolvePlayerName(playerId) ?? 'Player'} passes priority.`,
+      tone: 'info'
+    });
+    this.closePriorityWindow();
   }
 
   private resolveDeploymentLocation(
@@ -1593,17 +1825,72 @@ export class RiftboundGameEngine {
     const previous = player.victoryPoints;
     player.victoryPoints = Math.min(player.victoryPoints + amount, player.victoryScore);
 
-    this.gameState.scoreLog.push({
-      playerId: player.playerId,
-      amount: player.victoryPoints - previous,
-      reason,
-      sourceCardId,
-      timestamp: Date.now()
-    });
+    const gained = player.victoryPoints - previous;
+    if (gained > 0) {
+      this.gameState.scoreLog.push({
+        playerId: player.playerId,
+        amount: gained,
+        reason,
+        sourceCardId,
+        timestamp: Date.now()
+      });
+      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+      const sourceName = this.resolveSourceCardName(sourceCardId);
+      const reasonLabel = this.describeScoreReason(reason, sourceName);
+      const suffix = reasonLabel ? ` ${reasonLabel}` : '';
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${playerName} gains ${gained} victory point${gained === 1 ? '' : 's'}${suffix}.`,
+        tone: 'success'
+      });
+    }
 
     if (player.victoryPoints >= player.victoryScore) {
       const opponent = this.getOtherPlayer(player);
       this.endGame(player, opponent, 'victory_points');
+    }
+  }
+
+  private resolveSourceCardName(sourceCardId?: string): string | null {
+    if (!sourceCardId) {
+      return null;
+    }
+    const boardCard = this.findCardInstance(sourceCardId);
+    if (boardCard?.name) {
+      return boardCard.name;
+    }
+    const battlefield = this.gameState.battlefields.find(
+      (entry) => entry.battlefieldId === sourceCardId
+    );
+    if (battlefield) {
+      return battlefield.name;
+    }
+    try {
+      const catalogCard = this.lookupCatalogCard(sourceCardId);
+      return catalogCard?.name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private describeScoreReason(reason: ScoreReason, sourceName?: string | null): string | null {
+    switch (reason) {
+      case 'combat':
+        return sourceName ? `for conquering ${sourceName}` : 'after combat';
+      case 'hold':
+        return sourceName ? `for holding ${sourceName}` : 'for holding a battlefield';
+      case 'objective':
+        return sourceName ? `for securing ${sourceName}` : 'for securing an objective';
+      case 'support':
+        return 'from a support effect';
+      case 'decking':
+        return 'after the opponent exhausted their deck';
+      case 'concede':
+        return 'after the opponent conceded';
+      case 'timeout':
+        return 'after a timeout';
+      default:
+        return null;
     }
   }
 
@@ -1659,7 +1946,8 @@ export class RiftboundGameEngine {
         source: spell,
         boardTarget,
         playerTarget,
-        battlefieldTarget
+        battlefieldTarget,
+        triggerType: 'spell'
       });
     } else {
       const profile = spell.activationProfile;
@@ -1727,12 +2015,7 @@ export class RiftboundGameEngine {
   private executeEffectOperations(
     operations: EffectOperation[],
     caster: PlayerState,
-    context: {
-      source: Card;
-      boardTarget?: BoardCard;
-      playerTarget?: PlayerState;
-      battlefieldTarget?: BattlefieldState;
-    }
+    context: EffectOperationContext
   ): void {
     for (const operation of operations) {
       switch (operation.type) {
@@ -1788,14 +2071,37 @@ export class RiftboundGameEngine {
           }
           break;
         }
+        case 'summon_unit':
+        case 'create_token': {
+          const tokenSpec = this.getTokenSpec(operation);
+          if (!tokenSpec) {
+            this.logRuleUsage(context.source, `${operation.type}-manual`);
+            break;
+          }
+          if (tokenSpec.variableCount || tokenSpec.flexiblePlacement) {
+            this.logRuleUsage(context.source, `${operation.type}-manual`);
+            break;
+          }
+          this.spawnTokenUnits(caster, tokenSpec, context);
+          break;
+        }
         case 'gain_resource': {
           const amount = operation.magnitudeHint ?? 1;
           if (amount > 0) {
             const normalized = Math.max(1, Math.round(amount));
             this.channelRunes(caster, normalized);
+            this.logRuneChange(caster, normalized, {
+              direction: 'channel',
+              exhausted: false,
+              context
+            });
           } else if (amount < 0) {
             const normalized = Math.max(1, Math.round(Math.abs(amount)));
             this.exhaustRunes(caster, normalized);
+            this.logRuneChange(caster, normalized, {
+              direction: 'exhaust',
+              context
+            });
           }
           break;
         }
@@ -1817,7 +2123,133 @@ export class RiftboundGameEngine {
         }
         case 'channel_rune': {
           const amount = Math.max(1, operation.magnitudeHint ?? 1);
-          this.channelRunes(caster, amount);
+          const enterTapped =
+            typeof operation.metadata === 'object' && operation.metadata
+              ? Boolean((operation.metadata as { enterTapped?: boolean }).enterTapped)
+              : false;
+          this.channelRunes(caster, amount, { tapped: enterTapped });
+          this.logRuneChange(caster, amount, {
+            direction: 'channel',
+            exhausted: enterTapped,
+            context
+          });
+          break;
+        }
+        case 'move_unit': {
+          const unit =
+            context.boardTarget && context.boardTarget.type === CardType.CREATURE
+              ? context.boardTarget
+              : this.isBoardCard(context.source) && context.source.type === CardType.CREATURE
+                ? (context.source as BoardCard)
+                : null;
+          if (!unit) {
+            break;
+          }
+          const owner = this.getPlayerByCard(unit.instanceId);
+          const destination =
+            typeof operation.metadata === 'object' && operation.metadata
+              ? (operation.metadata as { destination?: 'base' | 'battlefield' }).destination
+              : undefined;
+          const prefersBattlefield =
+            destination === 'battlefield' ||
+            (destination === undefined &&
+              unit.location.zone === 'base' &&
+              operation.targetHint !== 'enemy');
+          if (prefersBattlefield && context.battlefieldTarget) {
+            if (
+              unit.location.zone !== 'battlefield' ||
+              unit.location.battlefieldId !== context.battlefieldTarget.battlefieldId
+            ) {
+              this.moveUnitToBattlefield(owner, unit, context.battlefieldTarget);
+            }
+            break;
+          }
+          if (unit.location.zone !== 'base') {
+            this.moveUnitToBase(owner, unit);
+          }
+          break;
+        }
+        case 'recycle_card': {
+          const iterations = Math.max(1, operation.magnitudeHint ?? 1);
+          for (let i = 0; i < iterations; i++) {
+            const targetPlayer =
+              operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
+            const recovered = targetPlayer.graveyard.shift();
+            if (!recovered) {
+              break;
+            }
+            targetPlayer.deck.push(recovered);
+            this.logRuleUsage(context.source, 'recycle-card');
+          }
+          const affectedPlayer =
+            operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
+          this.shuffle(affectedPlayer.deck);
+          break;
+        }
+        case 'search_deck': {
+          const viewer = operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
+          const peekCount = Math.max(1, operation.magnitudeHint ?? 1);
+          const preview = viewer.deck.slice(0, peekCount).map((card) => card.name);
+          const previewSnippet = preview.slice(0, 3).join(', ');
+          this.addDuelLogEntry({
+            playerId: viewer.playerId,
+            message: `${this.resolvePlayerName(viewer.playerId) ?? 'Player'} inspects their deck${
+              previewSnippet ? ` (${previewSnippet}${preview.length > 3 ? '…' : ''})` : ''
+            }.`,
+            tone: 'info'
+          });
+          this.logRuleUsage(context.source, 'search-deck');
+          break;
+        }
+        case 'manipulate_priority': {
+          const baseType =
+            this.gameState.currentPhase === GamePhase.COMBAT ? 'combat' : 'main';
+          const windowHolder =
+            operation.targetHint === 'enemy' ? this.getOtherPlayer(caster).playerId : caster.playerId;
+          this.gameState.focusPlayerId = windowHolder;
+          this.openPriorityWindow(baseType, windowHolder, `effect-${context.source.id}`);
+          break;
+        }
+        case 'interact_legend': {
+          const player =
+            operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
+          this.addDuelLogEntry({
+            playerId: player.playerId,
+            message: `${this.resolvePlayerName(player.playerId) ?? 'Player'}'s legend reacts to ${
+              context.source.name
+            }.`,
+            tone: 'info'
+          });
+          this.logRuleUsage(context.source, 'legend-interaction');
+          break;
+        }
+        case 'attach_gear': {
+          this.addDuelLogEntry({
+            playerId: caster.playerId,
+            message: `${this.resolvePlayerName(caster.playerId) ?? 'Player'} equips a gear via ${
+              context.source.name
+            }.`,
+            tone: 'info'
+          });
+          this.logRuleUsage(context.source, 'attach-gear');
+          break;
+        }
+        case 'transform': {
+          this.addDuelLogEntry({
+            playerId: caster.playerId,
+            message: `${context.source.name} transforms a target.`,
+            tone: 'info'
+          });
+          this.logRuleUsage(context.source, 'transform');
+          break;
+        }
+        case 'adjust_mulligan': {
+          caster.firstTurnRuneBoost += Math.max(0, operation.magnitudeHint ?? 0);
+          this.addDuelLogEntry({
+            playerId: caster.playerId,
+            message: `${this.resolvePlayerName(caster.playerId) ?? 'Player'} modifies their mulligan options.`,
+            tone: 'info'
+          });
           break;
         }
         case 'control_battlefield': {
@@ -1865,7 +2297,7 @@ export class RiftboundGameEngine {
   /**
    * Damage a creature
    */
-  private damageCreature(creature: BoardCard, amount: number, _source: Card): void {
+  private damageCreature(creature: BoardCard, amount: number, source: Card): void {
     if (creature.type !== CardType.CREATURE) {
       throw new Error('Only units (non-gears) can be dealt damage.');
     }
@@ -1873,21 +2305,45 @@ export class RiftboundGameEngine {
     creature.currentToughness -= amount;
 
     if (creature.currentToughness <= 0) {
-      // Destroy the creature
-      this.updateActivationState(creature, false, 'destroyed');
-       const battlefieldId =
-        creature.location.zone === 'battlefield' ? creature.location.battlefieldId : null;
-      const player = this.getPlayerByCard(creature.instanceId);
-      const index = player.board.creatures.findIndex((c) => c.instanceId === creature.instanceId);
-      if (index !== -1) {
-        const destroyed = player.board.creatures.splice(index, 1)[0];
-        if (battlefieldId) {
-          this.removeContestant(battlefieldId, player.playerId);
-        }
-        player.graveyard.push(destroyed);
-        this.triggerAbilities(destroyed, 'death', player);
-      }
+      this.destroyUnit(creature, 'effect', source);
     }
+  }
+
+  private destroyUnit(creature: BoardCard, cause: 'combat' | 'effect', source?: Card): void {
+    const player = this.getPlayerByCard(creature.instanceId);
+    const index = player.board.creatures.findIndex((entry) => entry.instanceId === creature.instanceId);
+    if (index === -1) {
+      return;
+    }
+    const removed = player.board.creatures.splice(index, 1)[0];
+    this.updateActivationState(removed, false, 'destroyed');
+    if (removed.location.zone === 'battlefield' && removed.location.battlefieldId) {
+      this.removeContestant(removed.location.battlefieldId, player.playerId);
+    }
+    player.graveyard.push(removed);
+    this.announceUnitDeath(removed, player, { cause, source });
+    this.triggerAbilities(removed, 'death', player);
+  }
+
+  private announceUnitDeath(
+    unit: BoardCard,
+    owner: PlayerState,
+    context: { cause: 'combat' | 'effect'; source?: Card }
+  ): void {
+    const cardName = unit.name ?? 'Unit';
+    const ownerName = this.resolvePlayerName(owner.playerId);
+    const ownerSuffix = ownerName ? ` (${ownerName})` : '';
+    let causeSuffix = '';
+    if (context.source && context.source.id !== unit.id) {
+      causeSuffix = ` due to ${context.source.name}`;
+    } else if (context.cause === 'combat') {
+      causeSuffix = ' in combat';
+    }
+    this.addDuelLogEntry({
+      playerId: owner.playerId,
+      message: `${cardName}${ownerSuffix} is sent to the graveyard${causeSuffix}.`,
+      tone: 'warning'
+    });
   }
 
   private restoreCreature(creature: BoardCard, amount: number): void {
@@ -1900,6 +2356,373 @@ export class RiftboundGameEngine {
     }
     creature.currentToughness = Math.min(baseToughness, (creature.currentToughness ?? 0) + amount);
     this.updateActivationState(creature, true, 'healed');
+  }
+
+  private deriveCardAbilities(record: EnrichedCardRecord): CardAbility[] {
+    if (!record.rules || record.rules.length === 0) {
+      return [];
+    }
+    const abilities: CardAbility[] = [];
+    for (const clause of record.rules) {
+      const match = clause.text.match(ABILITY_KEYWORD_PATTERN);
+      if (!match) {
+        continue;
+      }
+      const keyword = (match.groups?.keyword ?? '').trim();
+      const rawBody = (match.groups?.body ?? '').trim();
+      if (!keyword || !rawBody) {
+        continue;
+      }
+      const description = this.stripRichText(rawBody);
+      if (!description) {
+        continue;
+      }
+      const normalizedKeyword = keyword.toLowerCase();
+      const supportedTrigger = SUPPORTED_KEYWORD_TRIGGERS[normalizedKeyword];
+      const clauseActivation = buildActivation(description);
+      const clauseProfile = buildEffectProfile(description, clauseActivation);
+      const operations =
+        clauseProfile.operations.length > 0
+          ? this.enhanceAbilityOperationsFromText(clauseProfile.operations, description)
+          : undefined;
+      const triggerType =
+        supportedTrigger ?? this.inferAbilityTriggerFromText(keyword, description);
+      abilities.push({
+        name: keyword,
+        keyword,
+        description,
+        triggerType,
+        timing: clauseActivation.timing,
+        requiresTarget: clauseActivation.requiresTarget,
+        triggerWindows: clauseActivation.triggers,
+        reactionWindows: clauseActivation.reactionWindows,
+        effectClasses: clauseProfile.classes,
+        references: clauseProfile.references,
+        priorityHint: clauseProfile.priority,
+        targeting: clauseProfile.targeting,
+        operations
+      });
+    }
+    return abilities;
+  }
+
+  private championCostToCardCost(cost: ChampionAbilityCost): CardCost {
+    const power: DomainCost = {};
+    Object.entries(cost.runes).forEach(([key, value]) => {
+      const numeric = Number(value ?? 0);
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        return;
+      }
+      const normalized = key.toLowerCase();
+      switch (normalized) {
+        case 'fury':
+          power[Domain.FURY] = (power[Domain.FURY] ?? 0) + numeric;
+          break;
+        case 'calm':
+          power[Domain.CALM] = (power[Domain.CALM] ?? 0) + numeric;
+          break;
+        case 'mind':
+          power[Domain.MIND] = (power[Domain.MIND] ?? 0) + numeric;
+          break;
+        case 'body':
+          power[Domain.BODY] = (power[Domain.BODY] ?? 0) + numeric;
+          break;
+        case 'chaos':
+          power[Domain.CHAOS] = (power[Domain.CHAOS] ?? 0) + numeric;
+          break;
+        case 'order':
+          power[Domain.ORDER] = (power[Domain.ORDER] ?? 0) + numeric;
+          break;
+        case 'rainbow':
+          power[Domain.CHAOS] = (power[Domain.CHAOS] ?? 0) + numeric;
+          break;
+        default:
+          break;
+      }
+    });
+    return {
+      energy: cost.energy,
+      power
+    };
+  }
+
+  private cardCostToChampionAbilityCost(cost: CardCost): ChampionAbilityCost {
+    const powerEntries = Object.entries(cost.power ?? {});
+    const runes: Partial<Record<DomainKey, number>> = {};
+    for (const [domainKey, amount] of powerEntries) {
+      const numeric = Number(amount ?? 0);
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        continue;
+      }
+      const normalized = domainKey.toLowerCase() as DomainKey;
+      runes[normalized] = (runes[normalized] ?? 0) + numeric;
+    }
+    return {
+      energy: cost.energy ?? 0,
+      runes,
+      requiresExhaust: false,
+      rawText: ''
+    };
+  }
+
+  private evaluateChampionAbility(
+    player: PlayerState,
+    champion: Card | null
+  ): ChampionAbilityRuntimeState | null {
+    if (!champion) {
+      return null;
+    }
+    const abilityCost = parseChampionAbilityCost(champion.text ?? '');
+    const reasons: string[] = [];
+    if (abilityCost.requiresExhaust && champion.isTapped) {
+      reasons.push('Champion is exhausted');
+    }
+    const canAfford = canSatisfyChampionCost(player.channeledRunes, abilityCost);
+    if (!canAfford) {
+      reasons.push('Insufficient energy');
+    }
+    return {
+      canActivate: reasons.length === 0,
+      reason: reasons.length ? reasons.join('; ') : null,
+      cost: abilityCost,
+      costSummary: summarizeChampionCost(abilityCost)
+    };
+  }
+
+  private evaluateChampionLeader(
+    player: PlayerState,
+    champion: Card | null
+  ): ChampionAbilityRuntimeState | null {
+    if (!champion) {
+      return null;
+    }
+    const reasons: string[] = [];
+    const cardCost = this.getCardCost(champion);
+    if (player.championLeaderDeployed) {
+      reasons.push('Already deployed');
+    }
+    if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+      reasons.push('Match not in progress');
+    }
+    const hasCombatPriority = this.hasCombatPriority(player.playerId);
+    const isCurrentPlayer = player.playerId === this.getCurrentPlayer().playerId;
+    if (!hasCombatPriority && !isCurrentPlayer) {
+      reasons.push('Not your turn');
+    }
+    const isMainPhase =
+      this.currentPhase === GamePhase.MAIN_1 || this.currentPhase === GamePhase.MAIN_2;
+    if (!hasCombatPriority && !isMainPhase) {
+      reasons.push(`Waiting for main phase`);
+    }
+    if (!this.canPayCost(player, cardCost)) {
+      reasons.push('Insufficient resources');
+    }
+    const pseudoCost = this.cardCostToChampionAbilityCost(cardCost);
+    return {
+      canActivate: reasons.length === 0,
+      reason: reasons.length ? reasons.join('; ') : null,
+      cost: pseudoCost,
+      costSummary: summarizeChampionCost(pseudoCost)
+    };
+  }
+
+  private refreshChampionAvailability(): void {
+    for (const player of this.gameState.players) {
+      player.championLegendStatus = this.evaluateChampionAbility(player, player.championLegend ?? null);
+      player.championLeaderStatus = this.evaluateChampionLeader(player, player.championLeader ?? null);
+    }
+  }
+
+  private getTokenSpec(operation: EffectOperation): TokenSpec | null {
+    if (operation.metadata && typeof operation.metadata === 'object') {
+      const candidate = (operation.metadata as { tokenSpec?: TokenSpec }).tokenSpec;
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  private resolveTokenPlacement(
+    spec: TokenSpec,
+    context: {
+      boardTarget?: BoardCard;
+      battlefieldTarget?: BattlefieldState;
+    }
+  ): CardLocation {
+    if (spec.location === 'here' && context.boardTarget) {
+      if (context.boardTarget.location.zone === 'battlefield' && context.boardTarget.location.battlefieldId) {
+        return { zone: 'battlefield', battlefieldId: context.boardTarget.location.battlefieldId };
+      }
+      return { zone: 'base' };
+    }
+    if (spec.location === 'battlefield') {
+      const battlefield =
+        context.battlefieldTarget ??
+        (context.boardTarget?.location.zone === 'battlefield'
+          ? this.findBattlefieldState(context.boardTarget.location.battlefieldId)
+          : null);
+      if (battlefield) {
+        return { zone: 'battlefield', battlefieldId: battlefield.battlefieldId };
+      }
+    }
+    return { zone: 'base' };
+  }
+
+  private buildTokenCard(spec: TokenSpec, source: Card): Card {
+    return {
+      id: `token_${spec.slug}_${Date.now()}`,
+      slug: spec.slug,
+      name: `${spec.name}`,
+      type: CardType.CREATURE,
+      rarity: CardRarity.COMMON,
+      setName: 'Generated',
+      colors: source.colors ?? [],
+      tags: ['Token', spec.name],
+      keywords: spec.keywords ?? [],
+      manaCost: 0,
+      energyCost: 0,
+      power: spec.might,
+      toughness: spec.might,
+      text: `${spec.name} token created by ${source.name}`,
+      effectProfile: source.effectProfile,
+      activationProfile: source.activationProfile
+    };
+  }
+
+  private spawnTokenUnits(
+    player: PlayerState,
+    spec: TokenSpec,
+    context: EffectOperationContext
+  ): void {
+    if (spec.variableCount || spec.flexiblePlacement) {
+      this.logRuleUsage(context.source, 'token-manual-resolution');
+      return;
+    }
+    const count = Math.max(1, spec.count || 1);
+    for (let i = 0; i < count; i++) {
+      const tokenCard = this.buildTokenCard(spec, context.source);
+      const boardCard = this.createBoardCard(tokenCard);
+      boardCard.power = spec.might;
+      boardCard.toughness = spec.might;
+      boardCard.currentToughness = spec.might;
+      boardCard.isTapped = !spec.entersReady;
+      const location = this.resolveTokenPlacement(spec, context);
+      boardCard.location = location;
+      player.board.creatures.push(boardCard);
+      if (location.zone === 'battlefield' && location.battlefieldId) {
+        const battlefieldState = this.findBattlefieldState(location.battlefieldId);
+        if (battlefieldState) {
+          this.markBattlefieldContested(battlefieldState, player.playerId);
+        }
+      }
+    }
+    const effectSuffix = this.describeEffectSuffix(context);
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} creates ${count} ${spec.name} token${count > 1 ? 's' : ''}${effectSuffix}.`,
+      tone: 'info'
+    });
+  }
+
+  private describeEffectAttribution(context: EffectOperationContext): string | null {
+    const abilityLabel = (context.abilityName ?? '').trim();
+    const sourceName = context.source?.name ?? null;
+    if (abilityLabel && sourceName) {
+      return `${sourceName}'s ${abilityLabel}`;
+    }
+    if (abilityLabel) {
+      return abilityLabel;
+    }
+    if (context.triggerType === 'death' && sourceName) {
+      return `${sourceName}'s death trigger`;
+    }
+    return sourceName;
+  }
+
+  private describeEffectSuffix(context: EffectOperationContext): string {
+    const attribution = this.describeEffectAttribution(context);
+    return attribution ? ` due to ${attribution}` : '';
+  }
+
+  private logRuneChange(
+    player: PlayerState,
+    amount: number,
+    options: { direction: 'channel' | 'exhaust'; exhausted?: boolean; context: EffectOperationContext }
+  ): void {
+    if (amount <= 0) {
+      return;
+    }
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    const runeLabel = amount === 1 ? 'rune' : 'runes';
+    const suffix = this.describeEffectSuffix(options.context);
+    const verb = options.direction === 'channel' ? 'channels' : 'exhausts';
+    const stateNote =
+      options.direction === 'channel' && options.exhausted ? ' exhausted' : '';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} ${verb} ${amount} ${runeLabel}${stateNote}${suffix}.`,
+      tone: 'info'
+    });
+  }
+
+  private stripRichText(text: string): string {
+    return text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  private inferAbilityTriggerFromText(
+    keyword: string,
+    clauseText: string
+  ): CardAbility['triggerType'] | undefined {
+    const normalizedKeyword = (keyword ?? '').toLowerCase();
+    if (SUPPORTED_KEYWORD_TRIGGERS[normalizedKeyword]) {
+      return SUPPORTED_KEYWORD_TRIGGERS[normalizedKeyword];
+    }
+    const normalizedText = clauseText.toLowerCase();
+    if (/\bwhen i die\b/.test(normalizedText) || /\bdeathknell\b/.test(normalizedText)) {
+      return 'death';
+    }
+    if (/\bwhen i enter\b|\bwhen this enters\b|\bwhen you play\b/.test(normalizedText)) {
+      return 'play';
+    }
+    return undefined;
+  }
+
+  private enhanceAbilityOperationsFromText(
+    operations: EffectOperation[],
+    description: string
+  ): EffectOperation[] {
+    const requiresExhausted = /\bexhausted\b/i.test(description);
+    const normalized = description.toLowerCase();
+    return operations.map((operation) => {
+      if (operation.type === 'channel_rune' && requiresExhausted) {
+        return {
+          ...operation,
+          metadata: {
+            ...(operation.metadata ?? {}),
+            enterTapped: true
+          }
+        };
+      }
+      if (operation.type === 'move_unit') {
+        const metadata = {
+          ...(operation.metadata ?? {})
+        };
+        if (/\bbase\b/i.test(normalized)) {
+          Object.assign(metadata, { destination: 'base' });
+        } else if (/\bbattlefield\b/i.test(normalized) || /\bhere\b/i.test(normalized)) {
+          Object.assign(metadata, { destination: 'battlefield' });
+        }
+        if (Object.keys(metadata).length > 0) {
+          return {
+            ...operation,
+            metadata
+          };
+        }
+      }
+      return { ...operation };
+    });
   }
 
   // ========================================================================
@@ -1915,20 +2738,47 @@ export class RiftboundGameEngine {
     player: PlayerState,
     targets?: string[]
   ): void {
-    if (!card.abilities || card.abilities.length === 0) {
+    const abilities = card.abilities ?? [];
+    if (abilities.length === 0) {
       if (triggerType === 'play') {
         this.logRuleUsage(card, 'static-entry');
       }
       return;
     }
 
-    for (const ability of card.abilities) {
-      if (!ability.triggerType || ability.triggerType === triggerType) {
-        this.resolveAbility(ability, card, player, targets);
-        if (this.isBoardCard(card)) {
-          this.updateActivationState(card, true, `ability-${ability.name}`);
-        }
+    let resolved = false;
+    for (const ability of abilities) {
+      if (ability.triggerType && ability.triggerType !== triggerType) {
+        continue;
       }
+      resolved = true;
+      if (ability.operations && ability.operations.length > 0) {
+        const boardSource = this.isBoardCard(card) ? card : undefined;
+        const battlefieldTarget =
+          boardSource?.location.zone === 'battlefield'
+            ? this.findBattlefieldState(boardSource.location.battlefieldId)
+            : undefined;
+        this.executeEffectOperations(ability.operations, player, {
+          source: card,
+          boardTarget: boardSource,
+          battlefieldTarget,
+          abilityName: ability.name,
+          triggerType: ability.triggerType ?? null
+        });
+        this.logRuleUsage(card, `ability-${ability.name}`);
+        if (boardSource) {
+          this.updateActivationState(boardSource, true, `ability-${ability.name}`);
+        }
+        continue;
+      }
+      this.resolveAbility(ability, card, player, targets);
+      if (this.isBoardCard(card)) {
+        this.updateActivationState(card, true, `ability-${ability.name}`);
+      }
+    }
+
+    if (!resolved && triggerType === 'play') {
+      this.logRuleUsage(card, 'static-entry');
     }
   }
 
@@ -2140,7 +2990,12 @@ export class RiftboundGameEngine {
     }
     try {
       const [card] = this.materializeDeckEntry(entry);
-      return card ? this.cloneCard(card) : null;
+      if (!card) {
+        return null;
+      }
+      const cloned = this.cloneCard(card);
+      cloned.isTapped = false;
+      return cloned;
     } catch {
       return null;
     }
@@ -2198,9 +3053,10 @@ export class RiftboundGameEngine {
   }
 
   private convertRecordToCard(record: EnrichedCardRecord): Card {
-    const domain = this.mapDomain(record.colors[0]);
+    const domain =
+      record.colors && record.colors.length > 0 ? this.mapDomain(record.colors[0]) : undefined;
     const powerCost = this.resolvePowerCost(record.cost);
-    return {
+    const baseCard: Card = {
       id: record.id,
       slug: record.slug,
       name: record.name,
@@ -2228,6 +3084,11 @@ export class RiftboundGameEngine {
       flavorText: record.flavor,
       effectProfile: record.effectProfile
     };
+    const derivedAbilities = this.deriveCardAbilities(record);
+    if (derivedAbilities.length > 0) {
+      baseCard.abilities = derivedAbilities;
+    }
+    return baseCard;
   }
 
   private cloneCard(card: Card): Card {
@@ -2235,7 +3096,19 @@ export class RiftboundGameEngine {
       ...card,
       instanceId: card.instanceId,
       powerCost: card.powerCost ? { ...card.powerCost } : undefined,
-      abilities: card.abilities ? card.abilities.map((ability) => ({ ...ability })) : undefined,
+      abilities: card.abilities
+        ? card.abilities.map((ability) => ({
+            ...ability,
+            triggerWindows: ability.triggerWindows ? [...ability.triggerWindows] : undefined,
+            reactionWindows: ability.reactionWindows ? [...ability.reactionWindows] : undefined,
+            effectClasses: ability.effectClasses ? [...ability.effectClasses] : undefined,
+            references: ability.references ? [...ability.references] : undefined,
+            targeting: ability.targeting ? { ...ability.targeting } : undefined,
+            operations: ability.operations
+              ? ability.operations.map((operation) => ({ ...operation }))
+              : undefined
+          }))
+        : undefined,
       keywords: card.keywords ? [...card.keywords] : undefined,
       tags: card.tags ? [...card.tags] : undefined,
       colors: card.colors ? [...card.colors] : undefined,
@@ -2611,7 +3484,52 @@ export class RiftboundGameEngine {
     };
   }
 
+  private deployPermanentCard(
+    player: PlayerState,
+    card: Card,
+    options?: { destinationId?: string | null; targets?: string[] | null }
+  ): BoardCard {
+    const destinationId = options?.destinationId ?? null;
+    const targets = options?.targets ?? [];
+    const boardCard = this.createBoardCard(card);
+    const cardType = (card.type ?? '').toLowerCase() as CardType;
+    const entersZoneTapped =
+      cardType === CardType.CREATURE ||
+      cardType === CardType.ARTIFACT ||
+      cardType === CardType.ENCHANTMENT;
+    if (entersZoneTapped) {
+      boardCard.isTapped = !this.cardEntersUntapped(card);
+    }
+    switch (cardType) {
+      case CardType.CREATURE:
+        boardCard.location = this.resolveDeploymentLocation(player, destinationId);
+        player.board.creatures.push(boardCard);
+        break;
+      case CardType.ARTIFACT:
+        boardCard.location = { zone: 'base' };
+        player.board.artifacts.push(boardCard);
+        break;
+      case CardType.ENCHANTMENT:
+        boardCard.location = { zone: 'base' };
+        player.board.enchantments.push(boardCard);
+        break;
+      default:
+        throw new Error('Only permanent card types can be deployed.');
+    }
+    this.logRuleUsage(boardCard, 'enter-play');
+    this.triggerAbilities(boardCard, 'play', player, targets);
+    return boardCard;
+  }
+
   private cardEntersUntapped(card: Card): boolean {
+    const type = (card.type ?? '').toLowerCase().trim();
+    if (type === 'gear' || type === 'artifact' || type === 'equipment') {
+      return true;
+    }
+    const tags = (card.tags ?? []).map((tag) => tag?.toLowerCase().trim());
+    if (tags.some((tag) => tag === 'gear' || tag === 'artifact' || tag === 'equipment')) {
+      return true;
+    }
     const metadata = (card.metadata ?? {}) as Record<string, unknown>;
     if (metadata.enterUntapped === true || metadata.enterReady === true) {
       return true;
@@ -2781,7 +3699,52 @@ export class RiftboundGameEngine {
     }
     const sourceCard = options?.sourceCardId ?? battlefield.card?.id ?? battlefield.battlefieldId;
     const amount = Math.max(1, options?.points ?? 1);
+    if (!alreadyControlled) {
+      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+      const verb =
+        reason === 'combat'
+          ? 'conquers'
+          : reason === 'objective'
+            ? 'claims'
+            : 'controls';
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${playerName} ${verb} ${battlefield.name}.`,
+        tone: 'success'
+      });
+    }
     this.awardVictoryPoints(player, amount, reason, sourceCard);
+  }
+
+  private checkBattlefieldHoldBonuses(player: PlayerState): void {
+    for (const battlefield of this.gameState.battlefields) {
+      if (battlefield.controller !== player.playerId) {
+        continue;
+      }
+      if (battlefield.lastHoldScoreTurn === this.turnNumber) {
+        continue;
+      }
+      const units = this.getUnitsOnBattlefield(battlefield.battlefieldId);
+      if (units.length === 0) {
+        continue;
+      }
+      const exclusivelyControlled = units.every((unit) => {
+        const owner = this.getPlayerByCard(unit.instanceId);
+        return owner.playerId === player.playerId;
+      });
+      if (!exclusivelyControlled) {
+        continue;
+      }
+      battlefield.lastHoldScoreTurn = this.turnNumber;
+      battlefield.lastHoldTurn = this.turnNumber;
+      const sourceCardId = battlefield.card?.id ?? battlefield.battlefieldId;
+      this.awardVictoryPoints(player, 1, 'hold', sourceCardId);
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} holds ${battlefield.name}.`,
+        tone: 'success'
+      });
+    }
   }
 
   private markBattlefieldContested(battlefield: BattlefieldState, contestantId: string): void {
@@ -2821,6 +3784,14 @@ export class RiftboundGameEngine {
       }
     }
     return units;
+  }
+
+  private hasCombatPriority(playerId: string): boolean {
+    return (
+      this.gameState.priorityWindow?.type === 'combat' &&
+      this.gameState.priorityWindow?.holder === playerId &&
+      Boolean(this.gameState.combatContext)
+    );
   }
 
   private tapMovedUnit(creature: BoardCard): void {
@@ -2867,8 +3838,14 @@ export class RiftboundGameEngine {
       const owner = this.getPlayerByCard(unit.instanceId);
       return owner.playerId !== player.playerId;
     });
-    const blocked = enemyUnits.length > 0;
-    this.resolveCombat(creature.instanceId, battlefield.battlefieldId, blocked);
+    if (enemyUnits.length > 0) {
+      this.markBattlefieldContested(battlefield, player.playerId);
+      enemyUnits.forEach((unit) => {
+        const owner = this.getPlayerByCard(unit.instanceId);
+        this.markBattlefieldContested(battlefield, owner.playerId);
+      });
+    }
+    this.initiateBattlefieldEngagement(player, battlefield);
   }
 
   private untapAllPermanents(player: PlayerState): void {
@@ -2883,11 +3860,222 @@ export class RiftboundGameEngine {
     }
   }
 
+  private initiateBattlefieldEngagement(player: PlayerState, battlefield: BattlefieldState): void {
+    if (
+      this.gameState.combatContext &&
+      this.gameState.combatContext.battlefieldId !== battlefield.battlefieldId
+    ) {
+      this.completeCombatEngagement();
+    }
+    this.currentPhase = GamePhase.COMBAT;
+    this.gameState.combatContext = {
+      battlefieldId: battlefield.battlefieldId,
+      initiatedBy: player.playerId,
+      priorityStage: 'action',
+      actionPasses: 0
+    };
+    this.gameState.focusPlayerId = player.playerId;
+    this.openPriorityWindow('combat', player.playerId, 'battlefield-engagement');
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} contests ${
+        battlefield.name
+      }.`
+    });
+  }
+
+  private completeCombatEngagement(): void {
+    const context = this.gameState.combatContext;
+    if (!context) {
+      this.resetCombatContext();
+      return;
+    }
+    const battlefield = this.findBattlefieldState(context.battlefieldId);
+    if (!battlefield) {
+      this.resetCombatContext();
+      return;
+    }
+    this.addDuelLogEntry({
+      message: `Combat at ${battlefield.name} resolves.`,
+      tone: 'info'
+    });
+    this.resolveBattlefieldOutcome(battlefield);
+    this.resetCombatContext();
+    this.currentPhase = GamePhase.MAIN_1;
+    const currentPlayer = this.getCurrentPlayer();
+    this.openPriorityWindow('main', currentPlayer.playerId, 'post-combat');
+  }
+
+  private resetCombatContext(): void {
+    this.gameState.combatContext = null;
+    this.gameState.focusPlayerId = null;
+    if (this.gameState.priorityWindow?.type === 'combat') {
+      this.closePriorityWindow();
+    }
+  }
+
+  private describeUnitList(units: BoardCard[]): string {
+    if (units.length === 0) {
+      return 'forces';
+    }
+    const names = units.map((unit) => unit.name ?? 'unit');
+    if (names.length === 1) {
+      return names[0];
+    }
+    if (names.length === 2) {
+      return `${names[0]} and ${names[1]}`;
+    }
+    return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+  }
+
+  private resolveBattlefieldOutcome(battlefield: BattlefieldState): void {
+    const presence = new Map<
+      string,
+      { player: PlayerState; units: BoardCard[]; totalMight: number }
+    >();
+    const units = this.getUnitsOnBattlefield(battlefield.battlefieldId);
+    units.forEach((unit) => {
+      const owner = this.getPlayerByCard(unit.instanceId);
+      const entry =
+        presence.get(owner.playerId) ?? { player: owner, units: [], totalMight: 0 };
+      entry.units.push(unit);
+      const might =
+        typeof unit.power === 'number'
+          ? unit.power
+          : typeof unit.currentToughness === 'number'
+            ? unit.currentToughness
+            : 0;
+      if (Number.isFinite(might)) {
+        entry.totalMight += might;
+      }
+      presence.set(owner.playerId, entry);
+    });
+    if (presence.size === 0) {
+      battlefield.controller = undefined;
+      battlefield.contestedBy = [];
+      return;
+    }
+    const groups = Array.from(presence.values()).sort((a, b) => b.totalMight - a.totalMight);
+    if (groups.length === 1) {
+      const uncontested = groups[0];
+      const playerName = this.resolvePlayerName(uncontested.player.playerId) ?? 'Player';
+      const unitsLabel = this.describeUnitList(uncontested.units);
+      this.addDuelLogEntry({
+        playerId: uncontested.player.playerId,
+        message: `${playerName}'s ${unitsLabel} secure ${battlefield.name} uncontested (${uncontested.totalMight} might).`,
+        tone: 'info'
+      });
+      this.applyBattlefieldControl(groups[0].player, battlefield, 'combat', {
+        sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId
+      });
+      return;
+    }
+    if (groups[0].totalMight === groups[1].totalMight) {
+      groups.forEach((group) =>
+        group.units.forEach((unit) => {
+          this.destroyUnit(unit, 'combat');
+        })
+      );
+      battlefield.controller = undefined;
+      battlefield.contestedBy = [];
+      this.addDuelLogEntry({
+        message: `${battlefield.name} remains contested after a stalemate.`,
+        tone: 'warning'
+      });
+      return;
+    }
+    const winner = groups[0];
+    const losers = groups.slice(1);
+    const opposingMight = losers.reduce((sum, group) => sum + group.totalMight, 0);
+    const winnerName = this.resolvePlayerName(winner.player.playerId) ?? 'Player';
+    const winnerUnits = this.describeUnitList(winner.units);
+    this.addDuelLogEntry({
+      playerId: winner.player.playerId,
+      message: `${winnerName}'s ${winnerUnits} overpower the opposition ${winner.totalMight} to ${opposingMight} at ${battlefield.name}.`,
+      tone: 'success'
+    });
+    losers.forEach((group) =>
+      group.units.forEach((unit) => {
+        this.destroyUnit(unit, 'combat');
+      })
+    );
+    this.applyBattlefieldControl(winner.player, battlefield, 'combat', {
+      sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId
+    });
+  }
+
+  private handleCombatPriorityPass(player: PlayerState): void {
+    const context = this.gameState.combatContext;
+    if (!context) {
+      return;
+    }
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} passes priority.`,
+      tone: 'info'
+    });
+    if (context.priorityStage === 'reaction') {
+      const nextHolder =
+        context.lastActionPlayerId ?? this.getOtherPlayer(player).playerId;
+      context.priorityStage = 'action';
+      this.gameState.focusPlayerId = nextHolder;
+      this.openPriorityWindow('combat', nextHolder, 'battlefield-engagement');
+      return;
+    }
+    context.actionPasses += 1;
+    if (context.actionPasses >= 2) {
+      this.completeCombatEngagement();
+      return;
+    }
+    const opponent = this.getOtherPlayer(player);
+    this.gameState.focusPlayerId = opponent.playerId;
+    this.openPriorityWindow('combat', opponent.playerId, 'battlefield-engagement');
+  }
+
+  private advanceCombatPriorityAfterPlay(
+    player: PlayerState,
+    stage: 'action' | 'reaction' | null
+  ): void {
+    if (!stage || !this.gameState.combatContext) {
+      return;
+    }
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    const timingLabel = stage === 'reaction' ? 'reaction' : 'action';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} resolves a ${timingLabel}.`,
+      tone: 'info'
+    });
+    if (stage === 'action') {
+      this.gameState.combatContext.lastActionPlayerId = player.playerId;
+      this.gameState.combatContext.priorityStage = 'reaction';
+      this.gameState.combatContext.actionPasses = 0;
+      const opponent = this.getOtherPlayer(player);
+      this.gameState.focusPlayerId = player.playerId;
+      this.openPriorityWindow('combat', opponent.playerId, 'battlefield-engagement');
+      return;
+    }
+    const lastActor =
+      this.gameState.combatContext.lastActionPlayerId ?? this.getOtherPlayer(player).playerId;
+    this.gameState.combatContext.priorityStage = 'action';
+    this.gameState.focusPlayerId = lastActor;
+    this.openPriorityWindow('combat', lastActor, 'battlefield-engagement');
+  }
+
   private readySummonedCreatures(player: PlayerState): void {
     for (const creature of player.board.creatures) {
       if (creature.summoned) {
         creature.summoned = false;
       }
+    }
+  }
+
+  private readyChampions(player: PlayerState): void {
+    if (player.championLegend) {
+      player.championLegend.isTapped = false;
+    }
+    if (player.championLeader) {
+      player.championLeader.isTapped = false;
     }
   }
 
@@ -2931,6 +4119,7 @@ export class RiftboundGameEngine {
   // ========================================================================
 
   public getGameState(): GameState {
+    this.refreshChampionAvailability();
     return this.gameState;
   }
 
