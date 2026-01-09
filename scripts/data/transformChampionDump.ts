@@ -976,9 +976,47 @@ const fetchChampionDump = async () => {
   return response.json();
 };
 
+/**
+ * Apply card-specific fixes to correct parsing errors or semantic issues
+ */
+const applyCardSpecificFixes = (cards) => {
+  return cards.map((card) => {
+    // Fix Traveling Merchant (OGN-185): discard should target self, not enemy
+    // and remove the move_unit operation that causes duplicate effects
+    if (card.id === 'OGN-185') {
+      if (card.effectProfile?.operations) {
+        const discard = card.effectProfile.operations.find((op) => op.type === 'discard_cards');
+        if (discard && discard.targetHint === 'enemy') {
+          discard.targetHint = 'self';
+        }
+        
+        // Remove move_unit operation if it exists (it's incorrectly added and causes double-triggering)
+        card.effectProfile.operations = card.effectProfile.operations.filter(
+          (op) => op.type !== 'move_unit'
+        );
+      }
+      
+      // Apply same fixes to abilities if they exist
+      if (card.abilities?.[0]?.operations) {
+        const discard = card.abilities[0].operations.find((op) => op.type === 'discard_cards');
+        if (discard && discard.targetHint === 'enemy') {
+          discard.targetHint = 'self';
+        }
+        
+        card.abilities[0].operations = card.abilities[0].operations.filter(
+          (op) => op.type !== 'move_unit'
+        );
+      }
+    }
+    
+    return card;
+  });
+};
+
 const main = async () => {
   const rawDump = await fetchChampionDump();
-  const cards = reshapeDump(rawDump);
+  let cards = reshapeDump(rawDump);
+  cards = applyCardSpecificFixes(cards);
   const manifest = cards.map((card) => ({
     id: card.id,
     name: card.name,

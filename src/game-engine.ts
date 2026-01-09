@@ -2531,9 +2531,8 @@ export class RiftboundGameEngine {
           break;
         }
         case 'discard_cards': {
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context, {
-            defaultToOpponent: true
-          });
+          // Discard defaults to self (caster) - opponent discard requires explicit targetHint: 'enemy'
+          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
           if (
             context.battlefieldTarget &&
             context.source &&
@@ -4919,7 +4918,7 @@ export class RiftboundGameEngine {
         baseCard.effectProfile.operations;
       baseCard.effectProfile = {
         ...baseCard.effectProfile,
-        operations: this.normalizeEffectOperations(effectText, enrichedOperations)
+        operations: this.normalizeEffectOperations(effectText, enrichedOperations) ?? enrichedOperations
       };
     }
     return baseCard;
@@ -5987,8 +5986,10 @@ export class RiftboundGameEngine {
     const previousLocation =
       creature.location.zone === 'battlefield' ? creature.location.battlefieldId : null;
 
+    // Note: We skip move_from_battlefield trigger here when move_to_battlefield will also fire
+    // This prevents double-triggering of "When I move" abilities for a single move action.
+    // The move_from_battlefield trigger is only used when moving to base (no move_to_battlefield).
     if (previousLocation) {
-      this.triggerAbilities(creature, 'move_from_battlefield', player);
       const previousBattlefield = this.findBattlefieldState(previousLocation);
       if (previousBattlefield) {
         this.triggerBattlefieldAbility(previousBattlefield, 'unit_move_from', player, {
@@ -6001,7 +6002,13 @@ export class RiftboundGameEngine {
       zone: 'battlefield',
       battlefieldId: battlefield.battlefieldId
     };
-    this.triggerAbilities(creature, 'move_to_battlefield', player);
+    
+    // Only trigger move_to_battlefield abilities if this is an auto-engage (actual combat entry)
+    // This prevents effects from triggering before the player clicks "Finish moving units"
+    if (options?.autoEngage !== false) {
+      this.triggerAbilities(creature, 'move_to_battlefield', player);
+    }
+    
     this.triggerBattlefieldAbility(battlefield, 'unit_move_to', player, {
       boardTarget: creature
     });
@@ -6132,6 +6139,28 @@ export class RiftboundGameEngine {
         battlefield.name
       }.`
     });
+    
+    // Trigger move_to_battlefield abilities for units entering combat
+    // But only if they haven't been triggered yet for this unit
+    // This happens before attack/defend triggers
+    if (contestingUnits.length > 0) {
+      contestingUnits.forEach((unit) => {
+        const owner = this.getPlayerByCard(unit.instanceId);
+        // Check if move_to_battlefield has already been triggered for this unit this turn
+        const hasMoveTriggerBeenFired = (unit.activationState?.history ?? []).some(
+          (entry) => 
+            typeof entry === 'object' && 
+            entry !== null && 
+            'reason' in entry && 
+            typeof entry.reason === 'string' && 
+            entry.reason.includes('ability-Move')
+        );
+        if (!hasMoveTriggerBeenFired) {
+          this.triggerAbilities(unit, 'move_to_battlefield', owner);
+        }
+      });
+    }
+    
     if (contestingUnits.length > 0) {
       if (attackers.length > 0) {
         this.triggerUnits(attackers, 'attack');
