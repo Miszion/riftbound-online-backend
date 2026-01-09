@@ -56,6 +56,7 @@ export const typeDefs = `#graphql
     isTapped: Boolean
     summoned: Boolean
     counters: JSON
+    metadata: JSON
     activationState: CardActivationStateEntry
     location: CardLocationState
   }
@@ -120,6 +121,8 @@ export const typeDefs = `#graphql
     lastHoldTurn: Int
     lastCombatTurn: Int
     lastHoldScoreTurn: Int
+    combatTurnByPlayer: JSON
+    effectState: JSON
     presence: [BattlefieldPresence!]!
     card: CardSnapshot
   }
@@ -432,6 +435,9 @@ export const typeDefs = `#graphql
   type CombatContext {
     battlefieldId: ID!
     initiatedBy: ID!
+    defendingPlayerId: ID
+    attackingUnitIds: [ID!]!
+    defendingUnitIds: [ID!]!
     priorityStage: String!
   }
 
@@ -607,6 +613,20 @@ export const typeDefs = `#graphql
       indices: [Int!]
     ): GameState!
 
+    submitDiscardSelection(
+      matchId: ID!
+      playerId: ID!
+      promptId: ID!
+      cardInstanceIds: [ID!]!
+    ): GameState!
+
+    submitTargetSelection(
+      matchId: ID!
+      playerId: ID!
+      promptId: ID!
+      selectionIds: [ID!]!
+    ): GameState!
+
     selectBattlefield(
       matchId: ID!
       playerId: ID!
@@ -619,6 +639,7 @@ export const typeDefs = `#graphql
       cardIndex: Int!
       targets: [String!]
       destinationId: String
+      useAccelerate: Boolean
     ): ActionResponse!
 
     attack(
@@ -633,6 +654,12 @@ export const typeDefs = `#graphql
       playerId: ID!
       creatureInstanceId: String!
       destinationId: String!
+    ): ActionResponse!
+
+    commenceBattle(
+      matchId: ID!
+      playerId: ID!
+      battlefieldId: ID!
     ): ActionResponse!
 
     activateChampionAbility(

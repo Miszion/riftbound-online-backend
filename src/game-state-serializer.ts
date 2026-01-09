@@ -149,6 +149,8 @@ const serializeBattlefieldState = (state: GameState, battlefield: BattlefieldSta
   lastHoldTurn: battlefield.lastHoldTurn ?? null,
   lastCombatTurn: battlefield.lastCombatTurn ?? null,
   lastHoldScoreTurn: battlefield.lastHoldScoreTurn ?? null,
+  combatTurnByPlayer: battlefield.combatTurnByPlayer ?? null,
+  effectState: battlefield.effectState ?? null,
   presence: resolveBattlefieldPresence(state, battlefield),
   card: battlefield.card ? serializeCardSnapshot(battlefield.card) : null
 });
@@ -383,6 +385,9 @@ export const serializeGameState = (state: GameState, options?: SerializeGameStat
       ? {
           battlefieldId: state.combatContext.battlefieldId,
           initiatedBy: state.combatContext.initiatedBy,
+          defendingPlayerId: state.combatContext.defendingPlayerId ?? null,
+          attackingUnitIds: state.combatContext.attackingUnitIds ?? [],
+          defendingUnitIds: state.combatContext.defendingUnitIds ?? [],
           priorityStage: state.combatContext.priorityStage
         }
       : null

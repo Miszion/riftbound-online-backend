@@ -6,27 +6,25 @@ import logger from './logger';
 import {
   RiftboundGameEngine,
   GameState,
+  GameStatus,
   CardType,
   PlayerState,
   BoardCard,
-  MatchResult,
+  MatchResult
 } from './game-engine';
 import { serializeGameState, serializePlayerState, buildOpponentView } from './game-state-serializer';
+import { TABLE_NAMES } from './config/tableNames';
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
-const MATCH_TABLE =
-  process.env.MATCH_TABLE ||
-  process.env.MATCH_HISTORY_TABLE ||
-  'riftbound-online-matches-dev';
-const MATCH_HISTORY_TABLE =
-  process.env.MATCH_HISTORY_TABLE || 'riftbound-online-match-history-dev';
-const STATE_TABLE =
-  process.env.STATE_TABLE ||
-  process.env.MATCH_STATE_TABLE ||
-  'riftbound-online-match-states-dev';
+const MATCH_TABLE = TABLE_NAMES.MATCHES;
+const MATCH_HISTORY_TABLE = TABLE_NAMES.MATCH_HISTORY;
+const STATE_TABLE = TABLE_NAMES.MATCH_STATES;
+const MATCHMAKING_QUEUE_TABLE = TABLE_NAMES.MATCHMAKING_QUEUE;
+type MatchMode = 'ranked' | 'free';
+const MATCHMAKING_MODES: MatchMode[] = ['ranked', 'free'];
 
 const dynamodb = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || 'us-east-1'
@@ -34,20 +32,43 @@ const dynamodb = new AWS.DynamoDB.DocumentClient({
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const extractAccelerateMetadata = (
+  card?: { metadata?: Record<string, unknown> | null }
+): { energy: number; rune?: string | null } | null => {
+  if (!card?.metadata || typeof card.metadata !== 'object') {
+    return null;
+  }
+  const raw = card.metadata.accelerateCost as { energy?: number; rune?: string } | undefined;
+  if (!raw) {
+    return null;
+  }
+  const energy = Number(raw.energy ?? 0);
+  if (!Number.isFinite(energy) || energy <= 0) {
+    return null;
+  }
+  const rune = typeof raw.rune === 'string' ? raw.rune : null;
+  return { energy: Math.round(energy), rune };
+};
+
 const recordMatchHistoryEntries = async (
   matchId: string,
   players: PlayerState[],
   matchResult: MatchResult
 ) => {
   try {
-    if (!players.length) {
+    const eligiblePlayers = players.filter(
+      (player) => typeof player?.playerId === 'string' && player.playerId.trim().length > 0
+    );
+    if (!eligiblePlayers.length) {
       return;
     }
     const baseTimestamp = Date.now();
-    const playerIds = players.map((player) => player.playerId);
-    const moveCount = Array.isArray(matchResult.moves) ? matchResult.moves.length : 0;
+    const playerIds = eligiblePlayers.map((player) => player.playerId);
+    const moveCount = Array.isArray(matchResult.moves)
+      ? matchResult.moves.length
+      : 0;
     type WriteRequest = AWS.DynamoDB.DocumentClient.WriteRequest;
-    const requests: WriteRequest[] = players.map(
+    const requests: WriteRequest[] = eligiblePlayers.map(
       (player, index) => ({
         PutRequest: {
           Item: {
@@ -96,6 +117,139 @@ const recordMatchHistoryEntries = async (
   }
 };
 
+const persistMatchFinalState = async (
+  matchId: string,
+  rawState: GameState,
+  matchResult: MatchResult,
+  reason: string
+) => {
+  const spectatorState = serializeGameState(rawState);
+  if (rawState.outcomePersisted) {
+    return spectatorState;
+  }
+
+  const moveHistory = Array.isArray(matchResult.moves)
+    ? matchResult.moves
+    : rawState.moveHistory ?? [];
+  const moveCount = moveHistory.length;
+
+  await dynamodb
+    .put({
+      TableName: MATCH_TABLE,
+      Item: {
+        MatchId: matchId,
+        Players: rawState.players.map((p) => p.playerId),
+        Winner: matchResult.winner,
+        Loser: matchResult.loser,
+        Reason: matchResult.reason,
+        Duration: matchResult.duration,
+        Turns: matchResult.turns,
+        MoveCount: moveCount,
+        Moves: moveHistory,
+        DuelLog: spectatorState.duelLog ?? [],
+        ChatLog: spectatorState.chatLog ?? [],
+        FinalState: spectatorState,
+        CreatedAt: Date.now(),
+        Status: 'completed'
+      }
+    })
+    .promise();
+
+  await recordMatchHistoryEntries(matchId, rawState.players, {
+    ...matchResult,
+    moves: moveHistory
+  });
+  const resolvedParticipants = resolveParticipantIds(rawState.players, matchResult);
+  await removePlayersFromQueues(resolvedParticipants, reason);
+  rawState.outcomePersisted = true;
+
+  logger.info('[MATCH-FINALIZED]', {
+    matchId,
+    winner: matchResult.winner,
+    loser: matchResult.loser,
+    reason
+  });
+
+  return spectatorState;
+};
+
+const queueKey = (mode: MatchMode, userId: string) => ({
+  Mode: mode,
+  UserId: userId
+});
+
+const normalizePlayerId = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+};
+
+const resolveParticipantIds = (players: PlayerState[], matchResult?: MatchResult) => {
+  const ids = new Set<string>();
+  players.forEach((player) => {
+    const normalized = normalizePlayerId(player?.playerId);
+    if (normalized) {
+      ids.add(normalized);
+    }
+  });
+  const register = (candidate?: string | null) => {
+    const normalized = normalizePlayerId(candidate);
+    if (normalized) {
+      ids.add(normalized);
+    }
+  };
+  if (matchResult) {
+    register(matchResult.winner);
+    register(matchResult.loser);
+    if (Array.isArray(matchResult.players)) {
+      matchResult.players.forEach((entry: any) => register(entry?.playerId ?? entry));
+    }
+  }
+  return Array.from(ids.values());
+};
+
+const removePlayersFromQueues = async (playerIds: string[], reason: string) => {
+  const uniqueIds = Array.from(
+    new Set(playerIds.map((id) => normalizePlayerId(id)).filter((id): id is string => Boolean(id)))
+  );
+  if (!uniqueIds.length) {
+    return;
+  }
+  await Promise.all(
+    MATCHMAKING_MODES.map(async (mode) => {
+      await Promise.all(
+        uniqueIds.map(async (playerId) => {
+          try {
+            const result = await dynamodb
+              .delete({
+                TableName: MATCHMAKING_QUEUE_TABLE,
+                Key: queueKey(mode, playerId),
+                ReturnValues: 'ALL_OLD'
+              })
+              .promise();
+            if (result.Attributes) {
+              logger.info('[MATCHMAKING] Removed player from queue after match resolution', {
+                mode,
+                playerId,
+                reason
+              });
+            }
+          } catch (error) {
+            logger.warn('[MATCHMAKING] Failed to remove player from queue after match resolution', {
+              mode,
+              playerId,
+              reason,
+              error
+            });
+          }
+        })
+      );
+    })
+  );
+};
+
 const summarizeLocation = (location?: BoardCard['location']) => {
   if (!location) {
     return null;
@@ -136,6 +290,9 @@ const summarizeCombatContext = (state: GameState) => {
   return {
     battlefieldId: context.battlefieldId,
     initiatedBy: context.initiatedBy,
+    defendingPlayerId: context.defendingPlayerId ?? null,
+    attackingUnitIds: context.attackingUnitIds ?? [],
+    defendingUnitIds: context.defendingUnitIds ?? [],
     priorityStage: context.priorityStage
   };
 };
@@ -456,7 +613,7 @@ matchRouter.post('/matches/:matchId/actions/play-card', async (req: Request, res
   const operation = context.operation ?? getOperationLabel(req);
   try {
     const { matchId } = req.params;
-    const { playerId, cardIndex, targets, destinationId } = req.body;
+    const { playerId, cardIndex, targets, destinationId, useAccelerate } = req.body;
 
     const { engine } = await loadEngineState(matchId, context);
 
@@ -475,7 +632,9 @@ matchRouter.post('/matches/:matchId/actions/play-card', async (req: Request, res
     const tappedRunesBefore = actingPlayer.channeledRunes.filter((rune) => rune.isTapped).length;
     const channeledRunesBefore = actingPlayer.channeledRunes.length;
 
-    engine.playCard(playerId, cardIndex, targets, destinationId);
+    engine.playCard(playerId, cardIndex, targets, destinationId, {
+      useAccelerate: Boolean(useAccelerate)
+    });
 
     await saveGameState(matchId, engine);
 
@@ -507,12 +666,23 @@ matchRouter.post('/matches/:matchId/actions/play-card', async (req: Request, res
     }
     const tappedRunesAfter = updatedPlayer.channeledRunes.filter((rune) => rune.isTapped).length;
     const channeledRunesAfter = updatedPlayer.channeledRunes.length;
+    const powerSpent: Record<string, number> = { ...(cardInHand?.powerCost ?? {}) };
     const runePayment = {
       energySpent: cardInHand?.energyCost ?? cardInHand?.manaCost ?? 0,
-      powerSpent: cardInHand?.powerCost ?? {},
+      powerSpent,
       tappedRunes: Math.max(tappedRunesAfter - tappedRunesBefore, 0),
       recycledRunes: Math.max(channeledRunesBefore - channeledRunesAfter, 0)
     };
+    if (useAccelerate) {
+      const accelerateMeta = extractAccelerateMetadata(cardInHand);
+      if (accelerateMeta) {
+        runePayment.energySpent += accelerateMeta.energy;
+        if (accelerateMeta.rune) {
+          const domainKey = accelerateMeta.rune.toLowerCase();
+          powerSpent[domainKey] = (powerSpent[domainKey] ?? 0) + 1;
+        }
+      }
+    }
     const playerView = buildPlayerViewSnapshot(engine, rawState, playerId);
     const gameStateDetail = {
       phase: rawState.currentPhase,
@@ -688,6 +858,114 @@ matchRouter.post('/matches/:matchId/actions/mulligan', async (req: Request, res:
       requestId: context.requestId ?? null
     });
     res.status(400).json({ error: error.message || 'Failed to submit mulligan' });
+  }
+});
+
+/**
+ * Resolve discard selection prompts
+ * POST /matches/:matchId/actions/discard
+ * Body: { playerId, promptId, cardInstanceIds }
+ */
+matchRouter.post('/matches/:matchId/actions/discard', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, promptId, cardInstanceIds } = req.body;
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    engine.submitDiscardSelection(
+      playerId,
+      promptId,
+      Array.isArray(cardInstanceIds) ? cardInstanceIds : []
+    );
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info(`[MATCH] Player ${playerId} resolved discard prompt ${promptId} for match ${matchId}`, {
+      matchId,
+      playerId,
+      promptId,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[DISCARD] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to resolve discard selection' });
+  }
+});
+
+/**
+ * Resolve generic target selection prompts
+ * POST /matches/:matchId/actions/target
+ * Body: { playerId, promptId, selectionIds }
+ */
+matchRouter.post('/matches/:matchId/actions/target', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, promptId, selectionIds } = req.body;
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    engine.submitTargetSelection(
+      playerId,
+      promptId,
+      Array.isArray(selectionIds) ? selectionIds : []
+    );
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info(`[MATCH] Player ${playerId} resolved target prompt ${promptId} for match ${matchId}`, {
+      matchId,
+      playerId,
+      promptId,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[TARGET] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to resolve target selection' });
   }
 });
 
@@ -1008,6 +1286,62 @@ matchRouter.post('/matches/:matchId/actions/move', async (req: Request, res: Res
 });
 
 /**
+ * Commence combat on a battlefield
+ * POST /matches/:matchId/actions/commence-battle
+ * Body: { playerId, battlefieldId }
+ */
+matchRouter.post('/matches/:matchId/actions/commence-battle', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, battlefieldId } = req.body;
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    if (!engine.canPlayerAct(playerId)) {
+      res.status(403).json({ error: 'Not your turn' });
+      return;
+    }
+
+    engine.commenceBattle(playerId, battlefieldId);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Player commenced battle', {
+      matchId,
+      playerId,
+      battlefieldId,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[COMMENCE-BATTLE] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to commence battle' });
+  }
+});
+
+/**
  * Activate champion legend/leader ability
  * POST /matches/:matchId/actions/activate-legend
  * Body: { playerId, target, destinationId }
@@ -1197,7 +1531,6 @@ matchRouter.post('/matches/:matchId/result', async (req: Request, res: Response)
     }
 
     const rawState = engine.getGameState();
-    const spectatorState = serializeGameState(rawState);
 
     // Get final game state
     const fallbackLoser =
@@ -1212,30 +1545,12 @@ matchRouter.post('/matches/:matchId/result', async (req: Request, res: Response)
       moves: rawState.moveHistory
     };
 
-    // Save final state to DynamoDB
-    await dynamodb
-      .put({
-        TableName: MATCH_TABLE,
-        Item: {
-          MatchId: matchId,
-          Players: rawState.players.map((p) => p.playerId),
-          Winner: matchResult.winner,
-          Loser: matchResult.loser,
-          Reason: matchResult.reason,
-          Duration: matchResult.duration,
-          Turns: matchResult.turns,
-          MoveCount: matchResult.moves.length,
-          Moves: matchResult.moves,
-          DuelLog: spectatorState.duelLog ?? [],
-          ChatLog: spectatorState.chatLog ?? [],
-          FinalState: spectatorState,
-          CreatedAt: Date.now(),
-          Status: 'completed'
-        }
-      })
-      .promise();
-
-    await recordMatchHistoryEntries(matchId, rawState.players, matchResult);
+    const spectatorState = await persistMatchFinalState(
+      matchId,
+      rawState,
+      matchResult,
+      'match_completed'
+    );
 
     logger.info(`[MATCH-COMPLETE] Match ${matchId} completed. Winner: ${winner}`, {
       matchId,
@@ -1289,32 +1604,12 @@ matchRouter.post('/matches/:matchId/concede', async (req: Request, res: Response
     await saveGameState(matchId, engine);
 
     const rawState = engine.getGameState();
-    const spectatorState = serializeGameState(rawState);
-
-    // Save to DynamoDB
-    await dynamodb
-      .put({
-        TableName: MATCH_TABLE,
-        Item: {
-          MatchId: matchId,
-          Players: rawState.players.map((p) => p.playerId),
-          Winner: matchResult.winner,
-          Loser: matchResult.loser,
-          Reason: matchResult.reason,
-          Duration: matchResult.duration,
-          Turns: matchResult.turns,
-          MoveCount: matchResult.moves.length,
-          Moves: matchResult.moves,
-          DuelLog: spectatorState.duelLog ?? [],
-          ChatLog: spectatorState.chatLog ?? [],
-          FinalState: spectatorState,
-          CreatedAt: Date.now(),
-          Status: 'completed'
-        }
-      })
-      .promise();
-
-    await recordMatchHistoryEntries(matchId, rawState.players, matchResult);
+    const spectatorState = await persistMatchFinalState(
+      matchId,
+      rawState,
+      matchResult,
+      'match_conceded'
+    );
 
     logger.info(`[MATCH-CONCEDE] Match ${matchId} ended. Winner: ${matchResult.winner}`, {
       matchId,
@@ -1410,6 +1705,19 @@ const writeSnapshot = async (matchId: string, gameState: GameState): Promise<voi
 async function saveGameState(matchId: string, engine: RiftboundGameEngine): Promise<void> {
   try {
     const gameState = JSON.parse(JSON.stringify(engine.getGameState())) as GameState;
+    if (gameState.status === GameStatus.WINNER_DETERMINED) {
+      const matchResult = engine.getMatchResult();
+      if (matchResult) {
+        try {
+          await persistMatchFinalState(matchId, gameState, matchResult, 'auto_finalize');
+        } catch (persistError) {
+          logger.error('[MATCH-AUTO-FINALIZE] Failed to persist match outcome', {
+            error: persistError,
+            matchId
+          });
+        }
+      }
+    }
     await writeSnapshot(matchId, gameState);
   } catch (error) {
     logger.error('[STATE-SAVE] Failed to save game state:', {

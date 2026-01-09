@@ -11,6 +11,7 @@ import { queryResolvers, mutationResolvers, subscriptionResolvers } from './grap
 import { startMatchmakingQueueWorker } from './matchmaking-queue-worker';
 import { decodeJwtPayload, requireAuthenticatedUser } from './auth-utils';
 import { registerMatchRoutes } from './match-routes';
+import { TABLE_NAMES } from './config/tableNames';
 
 const awsRegion = process.env.AWS_REGION || 'us-east-1';
 const environment = process.env.ENVIRONMENT || 'dev';
@@ -24,7 +25,7 @@ const cognito = new AWS.CognitoIdentityServiceProvider({
   region: awsRegion
 });
 
-const USERS_TABLE = process.env.USERS_TABLE || 'riftbound-online-users-dev';
+const USERS_TABLE = TABLE_NAMES.USERS;
 const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
 const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID;
 
@@ -598,10 +599,12 @@ app.post('/api/matches', async (req: Request, res: Response) => {
       Duration: duration
     };
 
-    await dynamodb.put({
-      TableName: process.env.MATCH_HISTORY_TABLE || 'riftbound-online-match-history-dev',
-      Item: matchRecord
-    }).promise();
+    await dynamodb
+      .put({
+        TableName: TABLE_NAMES.MATCH_HISTORY,
+        Item: matchRecord
+      })
+      .promise();
 
     res.status(201).json(matchRecord);
   } catch (error) {
@@ -616,16 +619,18 @@ app.get('/api/users/:userId/matches', async (req: Request, res: Response) => {
     const { userId } = req.params;
     const { limit = '10' } = req.query;
 
-    const result = await dynamodb.query({
-      TableName: process.env.MATCH_HISTORY_TABLE || 'riftbound-online-match-history-dev',
-      IndexName: 'UserIdIndex',
-      KeyConditionExpression: 'UserId = :userId',
-      ExpressionAttributeValues: {
-        ':userId': userId
-      },
-      Limit: parseInt(limit as string),
-      ScanIndexForward: false // Most recent first
-    }).promise();
+    const result = await dynamodb
+      .query({
+        TableName: TABLE_NAMES.MATCH_HISTORY,
+        IndexName: 'UserIdIndex',
+        KeyConditionExpression: 'UserId = :userId',
+        ExpressionAttributeValues: {
+          ':userId': userId
+        },
+        Limit: parseInt(limit as string),
+        ScanIndexForward: false // Most recent first
+      })
+      .promise();
 
     res.json(result.Items as MatchRecord[]);
   } catch (error) {

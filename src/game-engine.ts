@@ -1,22 +1,22 @@
 import {
   ActivationProfile,
-  ActivationTiming,
+  CardAbility,
   CardActivationState,
   CardAssetInfo,
   CardCostProfile,
-  EffectClassId,
   EffectOperation,
   EffectProfile,
   EnrichedCardRecord,
-  PriorityHint,
   RuleClause,
-  TargetingProfile,
   TokenSpec,
   buildActivation,
   buildActivationStateIndex,
   buildEffectProfile,
   findCardById,
-  findCardBySlug
+  findCardByName,
+  findCardBySlug,
+  parseAssaultBonus,
+  parseTokenSpecs
 } from './card-catalog';
 import {
   ChampionAbilityCost,
@@ -99,22 +99,6 @@ export interface Card {
   effectProfile?: EffectProfile;
   instanceId?: string;
   isTapped?: boolean;
-}
-
-export interface CardAbility {
-  name: string;
-  description: string;
-  triggerType?: 'play' | 'attack' | 'damage' | 'heal' | 'death';
-  keyword?: string;
-  timing?: ActivationTiming;
-  requiresTarget?: boolean;
-  triggerWindows?: string[];
-  reactionWindows?: string[];
-  effectClasses?: EffectClassId[];
-  references?: string[];
-  targeting?: TargetingProfile;
-  priorityHint?: PriorityHint;
-  operations?: EffectOperation[];
 }
 
 export interface PlayerHand {
@@ -238,6 +222,11 @@ interface CardCost {
   power: DomainCost;
 }
 
+interface AccelerateCost {
+  energy: number;
+  rune?: Domain;
+}
+
 export interface ActivationHistoryEntry {
   at: number;
   reason: string;
@@ -277,7 +266,8 @@ export type PromptType =
   | 'reaction'
   | 'priority'
   | 'battlefield'
-  | 'coin_flip';
+  | 'coin_flip'
+  | 'discard';
 
 export interface GamePrompt {
   id: string;
@@ -302,6 +292,9 @@ export interface PriorityWindow {
 export interface CombatContext {
   battlefieldId: string;
   initiatedBy: string;
+  defendingPlayerId?: string | null;
+  attackingUnitIds: string[];
+  defendingUnitIds: string[];
   priorityStage: 'action' | 'reaction';
   lastActionPlayerId?: string;
   actionPasses: number;
@@ -349,6 +342,7 @@ type EffectOperationContext = {
   battlefieldTarget?: BattlefieldState;
   abilityName?: string | null;
   triggerType?: string | null;
+  targets?: string[] | null;
 };
 
 export enum GamePhase {
@@ -392,6 +386,7 @@ export interface GameState {
   currentPhase: GamePhase;
   turnNumber: number;
   status: GameStatus;
+  outcomePersisted?: boolean;
   winner?: string;
   moveHistory: GameMove[];
   timestamp: number;
@@ -412,6 +407,7 @@ export interface GameState {
   turnSequenceStep: TurnSequenceStep | null;
   focusPlayerId?: string | null;
   combatContext?: CombatContext | null;
+  pendingEffects: PendingEffect[];
 }
 
 export interface GameMove {
@@ -424,6 +420,38 @@ export interface GameMove {
   timestamp: number;
 }
 
+interface EffectContextSnapshot {
+  sourceCardId?: string | null;
+  sourceInstanceId?: string | null;
+  boardTargetInstanceId?: string | null;
+  battlefieldId?: string | null;
+  targetIds?: string[] | null;
+}
+
+interface ReturnCriteria {
+  allowUnits: boolean;
+  allowGear: boolean;
+  friendlyOnly: boolean;
+  enemyOnly: boolean;
+  battlefieldOnly: boolean;
+  maxMight?: number | null;
+  optional: boolean;
+  globalAll: boolean;
+  minTargets: number;
+  maxTargets: number;
+}
+
+interface PendingEffect {
+  id: string;
+  type: 'discard' | 'target';
+  casterId: string;
+  targetPlayerId: string;
+  operations?: EffectOperation[];
+  nextIndex?: number;
+  context?: EffectContextSnapshot;
+  metadata?: Record<string, unknown>;
+}
+
 export interface MatchResult {
   matchId: string;
   winner: string;
@@ -432,6 +460,7 @@ export interface MatchResult {
   duration: number;
   turns: number;
   moves: GameMove[];
+  players?: { playerId: string; name?: string | null }[];
 }
 
 export interface BattlefieldState {
@@ -446,6 +475,8 @@ export interface BattlefieldState {
   lastHoldTurn?: number;
   lastCombatTurn?: number;
   lastHoldScoreTurn?: number;
+  combatTurnByPlayer?: Record<string, number>;
+  effectState?: Record<string, unknown>;
 }
 
 export interface BattlefieldPresence {
@@ -529,8 +560,37 @@ export class RiftboundGameEngine {
       pendingMainPhaseEntry: false,
       turnSequenceStep: null,
       focusPlayerId: null,
-      combatContext: null
+      combatContext: null,
+      pendingEffects: []
     };
+  }
+
+  public commenceBattle(playerId: string, battlefieldId: string): void {
+    const player = this.getPlayerById(playerId);
+    if (player.playerId !== this.getCurrentPlayer().playerId) {
+      throw new Error('Not your turn');
+    }
+    if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+      throw new Error('Game is not in progress');
+    }
+    if (this.gameState.combatContext) {
+      throw new Error('A combat is already in progress');
+    }
+    const battlefield = this.findBattlefieldState(battlefieldId);
+    if (!battlefield) {
+      throw new Error('Battlefield not found');
+    }
+    if (this.hasPlayerBattledOnBattlefieldThisTurn(player.playerId, battlefield)) {
+      throw new Error('You already resolved combat on this battlefield this turn.');
+    }
+    const units = this.getUnitsOnBattlefield(battlefieldId);
+    const friendlyUnits = units.filter(
+      (unit) => this.getPlayerByCard(unit.instanceId).playerId === player.playerId
+    );
+    if (friendlyUnits.length === 0) {
+      throw new Error('You must have a unit on this battlefield to commence combat.');
+    }
+    this.initiateBattlefieldEngagement(player, battlefield);
   }
 
   private static cloneGameState(state: GameState): GameState {
@@ -544,6 +604,63 @@ export class RiftboundGameEngine {
     }));
     const engine = new RiftboundGameEngine(state.matchId, players);
     engine.gameState = RiftboundGameEngine.cloneGameState(state);
+    const ensureBoardCardRuntimeState = (card: BoardCard) => {
+      const activationTemplate = engine.cardActivationTemplates[card.id];
+      const fallbackStateful =
+        activationTemplate?.isStateful ?? Boolean(card.activationProfile?.stateful);
+      if (!card.activationState || typeof card.activationState !== 'object') {
+        card.activationState = {
+          cardId: card.id,
+          isStateful: fallbackStateful,
+          active: fallbackStateful,
+          lastChangedAt: Date.now(),
+          history: []
+        };
+      } else {
+        if (!card.activationState.cardId) {
+          card.activationState.cardId = card.id;
+        }
+        if (typeof card.activationState.isStateful !== 'boolean') {
+          card.activationState.isStateful = fallbackStateful;
+        }
+        if (typeof card.activationState.active !== 'boolean') {
+          card.activationState.active = card.activationState.isStateful;
+        }
+        if (typeof card.activationState.lastChangedAt !== 'number') {
+          card.activationState.lastChangedAt = Date.now();
+        }
+        if (!Array.isArray(card.activationState.history)) {
+          card.activationState.history = [];
+        }
+      }
+      if (!Array.isArray(card.ruleLog)) {
+        card.ruleLog = [];
+      }
+    };
+    if (!Array.isArray(engine.gameState.prompts)) {
+      engine.gameState.prompts = [];
+    }
+    if (!Array.isArray(engine.gameState.snapshots)) {
+      engine.gameState.snapshots = [];
+    }
+    if (!Array.isArray(engine.gameState.duelLog)) {
+      engine.gameState.duelLog = [];
+    }
+    if (!Array.isArray(engine.gameState.chatLog)) {
+      engine.gameState.chatLog = [];
+    }
+    if (!Array.isArray(engine.gameState.scoreLog)) {
+      engine.gameState.scoreLog = [];
+    }
+    if (!Array.isArray(engine.gameState.moveHistory)) {
+      engine.gameState.moveHistory = [];
+    }
+    if (!Array.isArray(engine.gameState.battlefields)) {
+      engine.gameState.battlefields = [];
+    }
+    if (!Array.isArray(engine.gameState.pendingEffects)) {
+      engine.gameState.pendingEffects = [];
+    }
     engine.promptCounter = engine.gameState.prompts.length;
     if (typeof engine.gameState.pendingMainPhaseEntry !== 'boolean') {
       engine.gameState.pendingMainPhaseEntry = false;
@@ -560,6 +677,76 @@ export class RiftboundGameEngine {
     for (const player of engine.gameState.players) {
       if (typeof player.championLeaderDeployed !== 'boolean') {
         player.championLeaderDeployed = false;
+      }
+      if (!Array.isArray(player.hand)) {
+        player.hand = [];
+      }
+      if (!Array.isArray(player.deck)) {
+        player.deck = [];
+      }
+      if (!Array.isArray(player.runeDeck)) {
+        player.runeDeck = [];
+      }
+      if (!Array.isArray(player.channeledRunes)) {
+        player.channeledRunes = [];
+      }
+      if (!Array.isArray(player.graveyard)) {
+        player.graveyard = [];
+      }
+      if (!Array.isArray(player.exile)) {
+        player.exile = [];
+      }
+      if (!Array.isArray(player.temporaryEffects)) {
+        player.temporaryEffects = [];
+      }
+      if (!Array.isArray(player.battlefieldPool)) {
+        player.battlefieldPool = [];
+      }
+      if (!player.board) {
+        player.board = {
+          playerId: player.playerId,
+          creatures: [],
+          artifacts: [],
+          enchantments: []
+        };
+      } else {
+        if (!Array.isArray(player.board.creatures)) {
+          player.board.creatures = [];
+        }
+        if (!Array.isArray(player.board.artifacts)) {
+          player.board.artifacts = [];
+        }
+        if (!Array.isArray(player.board.enchantments)) {
+          player.board.enchantments = [];
+        }
+      }
+      player.board.creatures.forEach(ensureBoardCardRuntimeState);
+      player.board.artifacts.forEach(ensureBoardCardRuntimeState);
+      player.board.enchantments.forEach(ensureBoardCardRuntimeState);
+      if (!player.resources) {
+        player.resources = {
+          energy: 0,
+          universalPower: 0,
+          power: engine.createEmptyPowerPool()
+        };
+      } else {
+        player.resources.energy = Number(player.resources.energy ?? 0);
+        player.resources.universalPower = Number(player.resources.universalPower ?? 0);
+        player.resources.power = {
+          ...engine.createEmptyPowerPool(),
+          ...(player.resources.power ?? {})
+        } as Record<Domain, number>;
+      }
+    }
+    for (const battlefield of engine.gameState.battlefields) {
+      if (!Array.isArray(battlefield.contestedBy)) {
+        battlefield.contestedBy = [];
+      }
+      if (!battlefield.combatTurnByPlayer) {
+        battlefield.combatTurnByPlayer = {};
+      }
+      if (!battlefield.effectState) {
+        battlefield.effectState = {};
       }
     }
     return engine;
@@ -852,9 +1039,17 @@ export class RiftboundGameEngine {
       .map((state) => this.cloneBattlefieldState(state))
       .slice(0, this.DEFAULT_BATTLEFIELD_COUNT);
     this.gameState.battlefields = orderedSelections;
+    this.initializeBattlefieldEffects(orderedSelections);
     this.gameState.status = GameStatus.MULLIGAN;
     this.recordSnapshot('battlefields-ready');
     this.startMulliganPhase();
+  }
+
+  private initializeBattlefieldEffects(battlefields: BattlefieldState[]): void {
+    for (const battlefield of battlefields) {
+      const owner = this.getPlayerById(battlefield.ownerId);
+      this.triggerBattlefieldAbility(battlefield, 'setup', owner);
+    }
   }
 
   private startMulliganPhase(): void {
@@ -906,6 +1101,145 @@ export class RiftboundGameEngine {
     this.beginTurn();
   }
 
+  public submitDiscardSelection(
+    playerId: string,
+    promptId: string,
+    cardInstanceIds: string[]
+  ): void {
+    const prompt = this.gameState.prompts.find(
+      (entry) => entry.id === promptId && entry.type === 'discard'
+    );
+    if (!prompt) {
+      throw new Error('Discard prompt not found');
+    }
+    if (prompt.playerId !== playerId) {
+      throw new Error('Discard prompt does not belong to this player');
+    }
+    const pendingIndex = this.gameState.pendingEffects.findIndex(
+      (entry) => entry.id === promptId && entry.type === 'discard'
+    );
+    if (pendingIndex === -1) {
+      throw new Error('No pending discard effect to resolve');
+    }
+    const pending = this.gameState.pendingEffects[pendingIndex];
+    if (!pending.operations || pending.nextIndex === undefined || !pending.context) {
+      throw new Error('Pending discard effect is missing execution context');
+    }
+    const player = this.getPlayerById(playerId);
+    const discardCount = Math.max(
+      1,
+      Number(
+        (prompt.data?.count as number | undefined) ?? (pending.metadata?.count as number | undefined) ?? 1
+      )
+    );
+    const uniqueSelections = Array.from(new Set(cardInstanceIds));
+    const discarded: Card[] = [];
+    for (const instanceId of uniqueSelections) {
+      if (discarded.length >= discardCount) {
+        break;
+      }
+      const index = player.hand.findIndex((card) => card.instanceId === instanceId);
+      if (index === -1) {
+        continue;
+      }
+      const [card] = player.hand.splice(index, 1);
+      if (card) {
+        discarded.push(card);
+      }
+    }
+    while (discarded.length < discardCount && player.hand.length > 0) {
+      const card = player.hand.shift();
+      if (card) {
+        discarded.push(card);
+      }
+    }
+    const contextSnapshot = this.restoreEffectContext(pending.context);
+    discarded.forEach((card) => {
+      player.graveyard.push(card);
+      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+      const suffix = this.describeEffectSuffix(contextSnapshot);
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${playerName} discards ${card.name ?? 'a card'}${suffix}.`,
+        tone: 'warning'
+      });
+    });
+    this.resolvePrompt(prompt, {
+      discarded: discarded.length
+    });
+    this.gameState.pendingEffects.splice(pendingIndex, 1);
+    const caster = this.getPlayerById(pending.casterId);
+    this.executeEffectOperations(pending.operations, caster, contextSnapshot, pending.nextIndex + 1);
+  }
+
+  public submitTargetSelection(playerId: string, promptId: string, selectionIds: string[]): void {
+    const prompt = this.gameState.prompts.find(
+      (entry) => entry.id === promptId && entry.type === 'target'
+    );
+    if (!prompt) {
+      throw new Error('Target prompt not found');
+    }
+    if (prompt.playerId !== playerId) {
+      throw new Error('Target prompt does not belong to this player');
+    }
+    const pendingIndex = this.gameState.pendingEffects.findIndex(
+      (entry) => entry.id === promptId && entry.type === 'target'
+    );
+    if (pendingIndex === -1) {
+      throw new Error('No pending target effect to resolve');
+    }
+    const pending = this.gameState.pendingEffects[pendingIndex];
+    const sanitizedSelections = Array.from(new Set(selectionIds.filter(Boolean)));
+    if (pending.operations && pending.context && pending.nextIndex !== undefined) {
+      const caster = this.getPlayerById(pending.casterId);
+      const contextSnapshot = this.restoreEffectContext(pending.context);
+      contextSnapshot.targets = sanitizedSelections;
+      this.executeEffectOperations(pending.operations, caster, contextSnapshot, pending.nextIndex + 1);
+    } else {
+      const handler = String(pending.metadata?.handler ?? '');
+      const caster = this.getPlayerById(pending.casterId);
+      switch (handler) {
+        case 'graveyard_return': {
+          const requireUnit = Boolean(pending.metadata?.requireUnit);
+          const spellRef = this.buildSpellReference(
+            (pending.metadata?.sourceCardId as string) ?? null,
+            (pending.metadata?.sourceCardName as string) ?? null
+          );
+          this.tryReturnGraveyardCards(spellRef, caster, sanitizedSelections, requireUnit);
+          break;
+        }
+        case 'multi_damage': {
+          const damage = Math.max(1, Number(pending.metadata?.damage) || 0);
+          if (damage > 0) {
+            const spellRef = this.buildSpellReference(
+              (pending.metadata?.sourceCardId as string) ?? null,
+              (pending.metadata?.sourceCardName as string) ?? null
+            );
+            this.applySpellDamageToTargets(spellRef, caster, damage, sanitizedSelections);
+          }
+          break;
+        }
+        case 'play_from_graveyard': {
+          const requireUnit = Boolean(pending.metadata?.requireUnit);
+          const spellRef = this.buildSpellReference(
+            (pending.metadata?.sourceCardId as string) ?? null,
+            (pending.metadata?.sourceCardName as string) ?? null
+          );
+          this.playCardFromGraveyard(caster, sanitizedSelections, {
+            requireUnit,
+            ignoreEnergy: pending.metadata?.ignoreEnergy !== false,
+            source: spellRef
+          });
+          break;
+        }
+        default:
+          throw new Error('Target selection handler is not supported yet');
+      }
+    }
+    this.gameState.pendingEffects.splice(pendingIndex, 1);
+    this.resolvePrompt(prompt, { selectedIds: sanitizedSelections });
+  }
+
   // ========================================================================
   // PHASE MANAGEMENT
   // ========================================================================
@@ -930,6 +1264,7 @@ export class RiftboundGameEngine {
     this.updateTurnSequenceStep('begin', currentPlayer, 'turn-begin-step');
     this.resolveTemporaryEffects(currentPlayer);
     this.checkBattlefieldHoldBonuses(currentPlayer);
+    this.triggerBattlefieldTurnStart(currentPlayer);
 
     // C — Channel
     this.updateTurnSequenceStep('channel', currentPlayer, 'turn-channel');
@@ -951,8 +1286,15 @@ export class RiftboundGameEngine {
     this.promoteBeginPhaseToMainPhase(currentPlayer);
   }
 
-  private channelRunes(player: PlayerState, maxRunes: number, options?: { tapped?: boolean }): void {
+  private triggerBattlefieldTurnStart(player: PlayerState): void {
+    for (const battlefield of this.gameState.battlefields) {
+      this.triggerBattlefieldAbility(battlefield, 'turn_start', player);
+    }
+  }
+
+  private channelRunes(player: PlayerState, maxRunes: number, options?: { tapped?: boolean }): number {
     const enterTapped = Boolean(options?.tapped);
+    let channeled = 0;
     for (let i = 0; i < maxRunes; i++) {
       if (player.runeDeck.length === 0) {
         break;
@@ -965,8 +1307,10 @@ export class RiftboundGameEngine {
 
       rune.isTapped = enterTapped;
       player.channeledRunes.push(rune);
+      channeled += 1;
     }
     this.recalculateResources(player);
+    return channeled;
   }
 
   public addDuelLogEntry(entry: {
@@ -1083,6 +1427,28 @@ export class RiftboundGameEngine {
     if (changed) {
       this.recalculateResources(player);
     }
+  }
+
+  private readyRunes(player: PlayerState, count: number): number {
+    if (count <= 0) {
+      return 0;
+    }
+    let remaining = count;
+    let changed = false;
+    for (const rune of player.channeledRunes) {
+      if (remaining <= 0) {
+        break;
+      }
+      if (rune.isTapped) {
+        rune.isTapped = false;
+        remaining--;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.recalculateResources(player);
+    }
+    return count - remaining;
   }
 
   private recalculateResources(player: PlayerState): void {
@@ -1431,7 +1797,8 @@ export class RiftboundGameEngine {
     playerId: string,
     cardIndex: number,
     targets?: string[],
-    destinationId?: string | null
+    destinationId?: string | null,
+    options?: { useAccelerate?: boolean }
   ): void {
     const player = this.getPlayerById(playerId);
     const hasCombatPriority = this.hasCombatPriority(playerId);
@@ -1461,6 +1828,17 @@ export class RiftboundGameEngine {
     }
 
     const cardCost = this.getCardCost(card);
+    const accelerateConfig =
+      options?.useAccelerate === true ? this.getAccelerateCost(card) : null;
+    if (accelerateConfig) {
+      cardCost.energy += accelerateConfig.energy;
+      if (accelerateConfig.rune) {
+        cardCost.power = {
+          ...(cardCost.power ?? {}),
+          [accelerateConfig.rune]: (cardCost.power?.[accelerateConfig.rune] ?? 0) + 1
+        };
+      }
+    }
     if (!this.canPayCost(player, cardCost)) {
       throw new Error('Insufficient resources');
     }
@@ -1478,7 +1856,11 @@ export class RiftboundGameEngine {
       case CardType.CREATURE:
       case CardType.ARTIFACT:
       case CardType.ENCHANTMENT:
-        this.deployPermanentCard(player, card, { destinationId, targets });
+        this.deployPermanentCard(player, card, {
+          destinationId,
+          targets,
+          accelerated: Boolean(accelerateConfig)
+        });
         break;
       case CardType.SPELL:
         this.resolveSpell(card, player, targets);
@@ -1489,6 +1871,14 @@ export class RiftboundGameEngine {
     }
 
     this.recordMove('play_card', card.id, destinationId ?? targets?.[0]);
+    if (accelerateConfig) {
+      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${playerName} accelerates ${card.name ?? 'a unit'} to enter ready.`,
+        tone: 'info'
+      });
+    }
     this.advanceCombatPriorityAfterPlay(player, combatStage);
   }
 
@@ -1538,6 +1928,26 @@ export class RiftboundGameEngine {
     }, {});
   }
 
+  private getAccelerateCost(card: Card): AccelerateCost | null {
+    if (!card.metadata || typeof card.metadata !== 'object') {
+      return null;
+    }
+    const payload = card.metadata as Record<string, unknown>;
+    const raw = payload.accelerateCost as { energy?: number; rune?: string } | undefined;
+    if (!raw) {
+      return null;
+    }
+    const energy = Number(raw.energy ?? 0);
+    if (!Number.isFinite(energy) || energy <= 0) {
+      return null;
+    }
+    const rune = raw.rune ? this.mapDomain(raw.rune) : undefined;
+    return {
+      energy: Math.round(energy),
+      rune
+    };
+  }
+
   private canPayCost(player: PlayerState, cost: CardCost): boolean {
     return this.tryAllocateRunesForCost(player, cost, false);
   }
@@ -1552,6 +1962,21 @@ export class RiftboundGameEngine {
   // ========================================================================
   // COMBAT
   // ========================================================================
+
+  private hasPlayerBattledOnBattlefieldThisTurn(
+    playerId: string,
+    battlefield: BattlefieldState
+  ): boolean {
+    const record = battlefield.combatTurnByPlayer?.[playerId];
+    return typeof record === 'number' && record === this.turnNumber;
+  }
+
+  private registerBattlefieldBattleForPlayer(playerId: string, battlefield: BattlefieldState): void {
+    if (!battlefield.combatTurnByPlayer) {
+      battlefield.combatTurnByPlayer = {};
+    }
+    battlefield.combatTurnByPlayer[playerId] = this.turnNumber;
+  }
 
   /**
    * Move a unit between the base and a battlefield
@@ -1579,6 +2004,9 @@ export class RiftboundGameEngine {
       throw new Error('Creature is tapped');
     }
 
+    const originBattlefieldId =
+      creature.location.zone === 'battlefield' ? creature.location.battlefieldId : null;
+
     if (destinationId === 'base') {
       if (
         this.currentPhase !== GamePhase.MAIN_1 &&
@@ -1597,13 +2025,27 @@ export class RiftboundGameEngine {
       throw new Error('Battlefield not found');
     }
 
+    if (this.hasPlayerBattledOnBattlefieldThisTurn(player.playerId, battlefield)) {
+      throw new Error('You already resolved combat on this battlefield this turn.');
+    }
+
+    if (
+      originBattlefieldId &&
+      originBattlefieldId !== battlefield.battlefieldId &&
+      !this.cardHasMechanic(creature, 'ganking')
+    ) {
+      throw new Error('Only units with Ganking can move between battlefields');
+    }
+
     const canEnterBattlefieldPhase =
       this.currentPhase === GamePhase.MAIN_1 || this.currentPhase === GamePhase.COMBAT;
     if (!canEnterBattlefieldPhase) {
       throw new Error('Units can only enter battlefields during the main phase or combat');
     }
 
-    this.moveUnitToBattlefield(player, creature, battlefield);
+    this.moveUnitToBattlefield(player, creature, battlefield, {
+      autoEngage: false
+    });
     this.recordMove('move', creature.id, battlefield.battlefieldId);
   }
 
@@ -1802,14 +2244,17 @@ export class RiftboundGameEngine {
 
     if (!blocked) {
       this.applyBattlefieldControl(attackerController, inferredBattlefield, 'combat', {
-        sourceCardId: attacker.id
+        sourceCardId: attacker.id,
+        initiatedAttack: true
       });
       this.markBattlefieldEngagement(inferredBattlefield);
+      this.registerBattlefieldBattleForPlayer(attackerController.playerId, inferredBattlefield);
       return;
     }
 
     this.markBattlefieldContested(inferredBattlefield, attackerController.playerId);
     this.markBattlefieldEngagement(inferredBattlefield);
+    this.registerBattlefieldBattleForPlayer(attackerController.playerId, inferredBattlefield);
   }
 
   private awardVictoryPoints(
@@ -1827,6 +2272,9 @@ export class RiftboundGameEngine {
 
     const gained = player.victoryPoints - previous;
     if (gained > 0) {
+      if (!Array.isArray(this.gameState.scoreLog)) {
+        this.gameState.scoreLog = [];
+      }
       this.gameState.scoreLog.push({
         playerId: player.playerId,
         amount: gained,
@@ -1915,8 +2363,40 @@ export class RiftboundGameEngine {
     }
   }
 
+  private millCards(
+    player: PlayerState,
+    amount: number,
+    context: EffectOperationContext | undefined
+  ): void {
+    const total = Math.max(1, amount);
+    const moved: Card[] = [];
+    for (let i = 0; i < total; i++) {
+      if (player.deck.length === 0) {
+        break;
+      }
+      const card = player.deck.shift();
+      if (!card) {
+        break;
+      }
+      player.graveyard.push(card);
+      moved.push(card);
+    }
+    if (moved.length > 0) {
+      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+      const suffix = context ? this.describeEffectSuffix(context) : '';
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${playerName} mills ${moved.length} card${moved.length === 1 ? '' : 's'}${suffix}.`,
+        tone: 'warning'
+      });
+    }
+  }
+
   private burnOut(player: PlayerState): void {
     const opponent = this.getOtherPlayer(player);
+    if (!Array.isArray(this.gameState.scoreLog)) {
+      this.gameState.scoreLog = [];
+    }
     this.gameState.scoreLog.push({
       playerId: opponent.playerId,
       amount: 0,
@@ -1935,6 +2415,9 @@ export class RiftboundGameEngine {
    * Resolve spell effects
    */
   private resolveSpell(spell: Card, caster: PlayerState, targets?: string[]): void {
+    if (this.handleSpecialSpell(spell, caster, targets)) {
+      return;
+    }
     const targetId = targets?.[0];
     const boardTarget = targetId ? this.findCardInstance(targetId) : undefined;
     const playerTarget = targetId ? this.gameState.players.find((p) => p.playerId === targetId) : undefined;
@@ -1947,7 +2430,8 @@ export class RiftboundGameEngine {
         boardTarget,
         playerTarget,
         battlefieldTarget,
-        triggerType: 'spell'
+        triggerType: 'spell',
+        targets: targets ?? null
       });
     } else {
       const profile = spell.activationProfile;
@@ -2015,65 +2499,129 @@ export class RiftboundGameEngine {
   private executeEffectOperations(
     operations: EffectOperation[],
     caster: PlayerState,
-    context: EffectOperationContext
+    context: EffectOperationContext,
+    startIndex = 0
   ): void {
-    for (const operation of operations) {
+    const resolveBoardTargets = (): BoardCard[] => {
+      if (context.targets && context.targets.length > 0) {
+        return context.targets
+          .map((targetId) => this.findCardInstance(targetId))
+          .filter((card): card is BoardCard => Boolean(card));
+      }
+      return context.boardTarget ? [context.boardTarget] : [];
+    };
+    for (let index = startIndex; index < operations.length; index++) {
+      const operation = operations[index];
       switch (operation.type) {
         case 'draw_cards': {
+          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
           const count = Math.max(1, operation.magnitudeHint ?? 1);
-          this.drawCards(caster, count);
+          this.drawCards(targetPlayer, count);
+          this.logCardDraw(targetPlayer, count, context);
+          break;
+        }
+        case 'mill_cards': {
+          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
+          const metadataCount =
+            typeof operation.metadata === 'object' && operation.metadata
+              ? Number((operation.metadata as { count?: number }).count)
+              : undefined;
+          const count = Math.max(1, metadataCount ?? operation.magnitudeHint ?? 1);
+          this.millCards(targetPlayer, count, context);
           break;
         }
         case 'discard_cards': {
-          const targetPlayer = context.playerTarget ?? this.getOtherPlayer(caster);
+          const targetPlayer = this.resolveOperationPlayer(operation, caster, context, {
+            defaultToOpponent: true
+          });
+          if (
+            context.battlefieldTarget &&
+            context.source &&
+            targetPlayer.hand.length > 0
+          ) {
+            if (
+              this.deferDiscardOperation(operation, operations, index, caster, targetPlayer, context)
+            ) {
+              return;
+            }
+          }
           const discarded = targetPlayer.hand.shift();
           if (discarded) {
             targetPlayer.graveyard.push(discarded);
+            const playerName = this.resolvePlayerName(targetPlayer.playerId) ?? 'Player';
+            const suffix = this.describeEffectSuffix(context);
+            this.addDuelLogEntry({
+              playerId: targetPlayer.playerId,
+              message: `${playerName} discards ${discarded.name ?? 'a card'}${suffix}.`,
+              tone: 'warning'
+            });
           }
           break;
         }
         case 'modify_stats': {
-          const target = context.boardTarget;
-          if (!target) {
+          const targetsToBuff = resolveBoardTargets();
+          if (targetsToBuff.length === 0) {
             break;
           }
           const amount = operation.magnitudeHint ?? 2;
-          const value = operation.targetHint === 'enemy' ? -Math.abs(amount) : Math.abs(amount);
-          this.applyTemporaryEffect(target.instanceId, {
-            id: `mod_${Date.now()}`,
-            affectedCards: [target.instanceId],
-            duration: 1,
-            effect: {
-              type: 'damage_boost',
-              value
-            }
+          targetsToBuff.forEach((target) => {
+            const value = operation.targetHint === 'enemy' ? -Math.abs(amount) : Math.abs(amount);
+            this.applyTemporaryEffect(target.instanceId, {
+              id: `mod_${Date.now()}`,
+              affectedCards: [target.instanceId],
+              duration: 1,
+              effect: {
+                type: 'damage_boost',
+                value
+              }
+            });
           });
           break;
         }
         case 'deal_damage': {
           const amount = operation.magnitudeHint ?? 2;
-          const damageTarget = this.ensureDamageableTarget(context.boardTarget, context.source);
-          this.damageCreature(damageTarget, amount, context.source);
+          const targetsToDamage = resolveBoardTargets();
+          if (targetsToDamage.length === 0) {
+            const damageTarget = this.ensureDamageableTarget(context.boardTarget, context.source);
+            this.damageCreature(damageTarget, amount, context.source);
+            break;
+          }
+          targetsToDamage.forEach((target) => {
+            const damageTarget = this.ensureDamageableTarget(target, context.source);
+            this.damageCreature(damageTarget, amount, context.source);
+          });
           break;
         }
         case 'heal': {
-          const target = context.boardTarget;
-          if (!target || target.type !== CardType.CREATURE) {
+          const targetsToHeal = resolveBoardTargets().filter(
+            (target) => target.type === CardType.CREATURE
+          );
+          if (targetsToHeal.length === 0) {
             break;
           }
           const healAmount = Math.max(1, operation.magnitudeHint ?? 1);
-          this.restoreCreature(target, healAmount);
+          targetsToHeal.forEach((target) => {
+            this.restoreCreature(target, healAmount);
+          });
           break;
         }
         case 'remove_permanent': {
-          if (context.boardTarget) {
-            this.damageCreature(context.boardTarget, context.boardTarget.currentToughness, context.source);
+          const removalTargets = resolveBoardTargets();
+          if (removalTargets.length === 0 && context.boardTarget) {
+            removalTargets.push(context.boardTarget);
           }
+          removalTargets.forEach((target) => {
+            this.damageCreature(
+              target,
+              target.currentToughness,
+              context.source
+            );
+          });
           break;
         }
         case 'summon_unit':
         case 'create_token': {
-          const tokenSpec = this.getTokenSpec(operation);
+          const tokenSpec = this.getTokenSpec(operation, context.source);
           if (!tokenSpec) {
             this.logRuleUsage(context.source, `${operation.type}-manual`);
             break;
@@ -2085,20 +2633,106 @@ export class RiftboundGameEngine {
           this.spawnTokenUnits(caster, tokenSpec, context);
           break;
         }
+        case 'return_from_graveyard': {
+          const effectText = this.stripRichText(context.source?.text ?? '');
+          const optional = /\bup to\b/i.test(effectText) || /\bmay\b/i.test(effectText);
+          const requireUnit = this.requiresUnitForGraveyardReturn(context.source);
+          const maxTargets =
+            operation.magnitudeHint && operation.magnitudeHint > 0
+              ? operation.magnitudeHint
+              : this.detectReturnCountFromText(effectText) ?? 1;
+          const minTargets = optional ? 0 : 1;
+          const selections = context.targets ?? [];
+          if (selections.length === 0) {
+            if (
+              this.deferTargetSelectionForOperation(operations, index, caster, context, {
+                scope: 'graveyard',
+                min: minTargets,
+                max: maxTargets,
+                allowFriendly: true,
+                allowOpponent: false,
+                metadata: {
+                  handler: 'return_from_graveyard',
+                  requireUnit,
+                  maxTargets
+                }
+              })
+            ) {
+              return;
+            }
+            break;
+          }
+          const moved = this.tryReturnGraveyardCards(
+            context.source ?? this.buildSpellReference(),
+            caster,
+            selections,
+            requireUnit,
+            context
+          );
+          if (!moved) {
+            this.addDuelLogEntry({
+              playerId: caster.playerId,
+              message: `${context.source?.name ?? 'Spell'} failed to find the selected card in the graveyard.`,
+              tone: 'warning'
+            });
+          }
+          break;
+        }
+        case 'return_to_hand': {
+          if (!context.source) {
+            break;
+          }
+          const criteria = this.buildReturnCriteria(context.source, operation);
+          if (criteria.globalAll) {
+            const globalTargets = this.collectReturnTargets(caster, criteria);
+            if (globalTargets.length === 0) {
+              this.addDuelLogEntry({
+                playerId: caster.playerId,
+                message: `${context.source.name} finds no cards to return.`,
+                tone: 'info'
+              });
+              break;
+            }
+            globalTargets.forEach((target) => this.returnCardToOwnerHand(target, context));
+            break;
+          }
+          const resolvedTargets = resolveBoardTargets().filter((target) =>
+            this.matchesReturnCriteria(target, caster, criteria)
+          );
+          if (resolvedTargets.length === 0) {
+            if (
+              this.deferTargetSelectionForOperation(operations, index, caster, context, {
+                scope: 'unit',
+                min: criteria.minTargets,
+                max: criteria.maxTargets,
+                allowFriendly: !criteria.enemyOnly,
+                allowOpponent: !criteria.friendlyOnly
+              })
+            ) {
+              return;
+            }
+            break;
+          }
+          const limit =
+            criteria.maxTargets > 0 ? resolvedTargets.slice(0, criteria.maxTargets) : resolvedTargets;
+          limit.forEach((target) => this.returnCardToOwnerHand(target, context));
+          break;
+        }
         case 'gain_resource': {
+          const recipient = this.resolveOperationPlayer(operation, caster, context);
           const amount = operation.magnitudeHint ?? 1;
           if (amount > 0) {
             const normalized = Math.max(1, Math.round(amount));
-            this.channelRunes(caster, normalized);
-            this.logRuneChange(caster, normalized, {
+            this.channelRunes(recipient, normalized);
+            this.logRuneChange(recipient, normalized, {
               direction: 'channel',
               exhausted: false,
               context
             });
           } else if (amount < 0) {
             const normalized = Math.max(1, Math.round(Math.abs(amount)));
-            this.exhaustRunes(caster, normalized);
-            this.logRuneChange(caster, normalized, {
+            this.exhaustRunes(recipient, normalized);
+            this.logRuneChange(recipient, normalized, {
               direction: 'exhaust',
               context
             });
@@ -2122,13 +2756,14 @@ export class RiftboundGameEngine {
           break;
         }
         case 'channel_rune': {
+          const recipient = this.resolveOperationPlayer(operation, caster, context);
           const amount = Math.max(1, operation.magnitudeHint ?? 1);
           const enterTapped =
             typeof operation.metadata === 'object' && operation.metadata
               ? Boolean((operation.metadata as { enterTapped?: boolean }).enterTapped)
               : false;
-          this.channelRunes(caster, amount, { tapped: enterTapped });
-          this.logRuneChange(caster, amount, {
+          this.channelRunes(recipient, amount, { tapped: enterTapped });
+          this.logRuneChange(recipient, amount, {
             direction: 'channel',
             exhausted: enterTapped,
             context
@@ -2136,16 +2771,16 @@ export class RiftboundGameEngine {
           break;
         }
         case 'move_unit': {
-          const unit =
-            context.boardTarget && context.boardTarget.type === CardType.CREATURE
-              ? context.boardTarget
+          const unitTargets = resolveBoardTargets();
+          const unitsToMove =
+            unitTargets.length > 0
+              ? unitTargets
               : this.isBoardCard(context.source) && context.source.type === CardType.CREATURE
-                ? (context.source as BoardCard)
-                : null;
-          if (!unit) {
+                ? [(context.source as BoardCard)]
+                : [];
+          if (unitsToMove.length === 0) {
             break;
           }
-          const owner = this.getPlayerByCard(unit.instanceId);
           const destination =
             typeof operation.metadata === 'object' && operation.metadata
               ? (operation.metadata as { destination?: 'base' | 'battlefield' }).destination
@@ -2153,27 +2788,27 @@ export class RiftboundGameEngine {
           const prefersBattlefield =
             destination === 'battlefield' ||
             (destination === undefined &&
-              unit.location.zone === 'base' &&
+              unitsToMove[0].location.zone === 'base' &&
               operation.targetHint !== 'enemy');
-          if (prefersBattlefield && context.battlefieldTarget) {
-            if (
-              unit.location.zone !== 'battlefield' ||
-              unit.location.battlefieldId !== context.battlefieldTarget.battlefieldId
-            ) {
-              this.moveUnitToBattlefield(owner, unit, context.battlefieldTarget);
+          unitsToMove.forEach((unit) => {
+            const owner = this.getPlayerByCard(unit.instanceId);
+            if (prefersBattlefield && context.battlefieldTarget) {
+              if (
+                unit.location.zone !== 'battlefield' ||
+                unit.location.battlefieldId !== context.battlefieldTarget.battlefieldId
+              ) {
+                this.moveUnitToBattlefield(owner, unit, context.battlefieldTarget);
+              }
+            } else if (unit.location.zone !== 'base') {
+              this.moveUnitToBase(owner, unit);
             }
-            break;
-          }
-          if (unit.location.zone !== 'base') {
-            this.moveUnitToBase(owner, unit);
-          }
+          });
           break;
         }
         case 'recycle_card': {
           const iterations = Math.max(1, operation.magnitudeHint ?? 1);
+          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
           for (let i = 0; i < iterations; i++) {
-            const targetPlayer =
-              operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
             const recovered = targetPlayer.graveyard.shift();
             if (!recovered) {
               break;
@@ -2181,9 +2816,7 @@ export class RiftboundGameEngine {
             targetPlayer.deck.push(recovered);
             this.logRuleUsage(context.source, 'recycle-card');
           }
-          const affectedPlayer =
-            operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
-          this.shuffle(affectedPlayer.deck);
+          this.shuffle(targetPlayer.deck);
           break;
         }
         case 'search_deck': {
@@ -2205,7 +2838,9 @@ export class RiftboundGameEngine {
           const baseType =
             this.gameState.currentPhase === GamePhase.COMBAT ? 'combat' : 'main';
           const windowHolder =
-            operation.targetHint === 'enemy' ? this.getOtherPlayer(caster).playerId : caster.playerId;
+            operation.targetHint === 'enemy'
+              ? this.getOtherPlayer(caster).playerId
+              : caster.playerId;
           this.gameState.focusPlayerId = windowHolder;
           this.openPriorityWindow(baseType, windowHolder, `effect-${context.source.id}`);
           break;
@@ -2294,6 +2929,332 @@ export class RiftboundGameEngine {
     }
   }
 
+  private handleSpecialSpell(spell: Card, caster: PlayerState, targets?: string[]): boolean {
+    const effectText = (spell.text ?? '').toLowerCase();
+    if (!effectText) {
+      return false;
+    }
+    if (this.tryHandleChannelFallbackSpell(spell, caster, effectText)) {
+      return true;
+    }
+    if (this.tryHandleGraveyardReturnSpell(spell, caster, effectText, targets)) {
+      return true;
+    }
+    if (this.tryHandlePlayFromGraveyardSpell(spell, caster, effectText, targets)) {
+      return true;
+    }
+    if (this.tryHandleMultiTargetDamageSpell(spell, caster, effectText, targets)) {
+      return true;
+    }
+    return false;
+  }
+
+  private tryHandleChannelFallbackSpell(spell: Card, caster: PlayerState, effectText: string): boolean {
+    const channelMatch = effectText.match(/channel\s+(\d+)\s+rune/i);
+    const fallbackMatch = effectText.match(/if you can'?t,\s*draw\s+(\d+)/i);
+    if (!channelMatch || !fallbackMatch) {
+      return false;
+    }
+    const channelAmount = Math.max(1, parseInt(channelMatch[1], 10) || 1);
+    const drawAmount = Math.max(1, parseInt(fallbackMatch[1], 10) || 1);
+    const exhausted = /\bexhausted\b/.test(effectText);
+    const before = caster.channeledRunes.length;
+    const channeled = this.channelRunes(caster, channelAmount, exhausted ? { tapped: true } : undefined);
+    const after = caster.channeledRunes.length;
+    const actual = channeled || after - before;
+    if (actual < channelAmount) {
+      this.drawCards(caster, drawAmount);
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} channels ${actual} rune${actual === 1 ? '' : 's'} before drawing ${drawAmount}.`,
+        tone: 'info'
+      });
+    } else {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} channels ${channelAmount} rune${channelAmount === 1 ? '' : 's'}.`,
+        tone: 'success'
+      });
+    }
+    return true;
+  }
+
+  private tryHandleGraveyardReturnSpell(
+    spell: Card,
+    caster: PlayerState,
+    effectText: string,
+    targets?: string[]
+  ): boolean {
+    if (spell.effectProfile?.operations?.some((op) => op.type === 'return_from_graveyard')) {
+      return false;
+    }
+    if (!/\breturn\b/.test(effectText) || !/\b(hand|hands)\b/.test(effectText)) {
+      return false;
+    }
+    if (!/\bgraveyard\b/.test(effectText) && !/\btrash\b/.test(effectText)) {
+      return false;
+    }
+    const requireUnit = /\bunit\b/.test(effectText);
+    const candidates = caster.graveyard.filter((card) =>
+      requireUnit ? card.type === CardType.CREATURE : true
+    );
+    if (candidates.length === 0) {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} fizzles with no valid cards in the graveyard.`,
+        tone: 'warning'
+      });
+      return true;
+    }
+    if (targets && targets.length > 0) {
+      const moved = this.tryReturnGraveyardCards(spell, caster, targets, requireUnit);
+      if (!moved) {
+        this.addDuelLogEntry({
+          playerId: caster.playerId,
+          message: `${spell.name} failed to find the chosen card in the graveyard.`,
+          tone: 'warning'
+        });
+      }
+      return true;
+    }
+    this.deferTargetPrompt({
+      caster,
+      spell,
+      scope: 'graveyard',
+      min: 1,
+      max: 1,
+      allowFriendly: true,
+      allowOpponent: false,
+      handler: 'graveyard_return',
+      metadata: {
+        requireUnit
+      }
+    });
+    return true;
+  }
+
+  private tryHandlePlayFromGraveyardSpell(
+    spell: Card,
+    caster: PlayerState,
+    effectText: string,
+    targets?: string[]
+  ): boolean {
+    if (!/\bplay\b/.test(effectText) || !/\bfrom your\b/.test(effectText)) {
+      return false;
+    }
+    if (!/\bgraveyard\b/.test(effectText) && !/\btrash\b/.test(effectText)) {
+      return false;
+    }
+    const requireUnit = /\bunit\b/.test(effectText) || /\bcreature\b/.test(effectText);
+    const ignoreEnergy = /ignore[s]? its energy cost/i.test(effectText);
+    const eligible = caster.graveyard.filter((card) =>
+      requireUnit ? card.type === CardType.CREATURE : true
+    );
+    if (eligible.length === 0) {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} fizzles with no valid cards to play from the graveyard.`,
+        tone: 'warning'
+      });
+      return true;
+    }
+    if (targets && targets.length > 0) {
+      const success = this.playCardFromGraveyard(caster, targets, {
+        requireUnit,
+        ignoreEnergy,
+        source: spell
+      });
+      if (!success) {
+        this.addDuelLogEntry({
+          playerId: caster.playerId,
+          message: `${spell.name} failed to play the selected card from the graveyard.`,
+          tone: 'warning'
+        });
+      }
+      return true;
+    }
+    this.deferTargetPrompt({
+      caster,
+      spell,
+      scope: 'graveyard',
+      min: 1,
+      max: 1,
+      allowFriendly: true,
+      allowOpponent: false,
+      handler: 'play_from_graveyard',
+      metadata: {
+        requireUnit,
+        ignoreEnergy
+      }
+    });
+    return true;
+  }
+
+  private tryReturnGraveyardCards(
+    spell: Card,
+    caster: PlayerState,
+    selectionIds: string[],
+    requireUnit: boolean,
+    context?: EffectOperationContext
+  ): boolean {
+    const uniqueSelections = Array.from(new Set(selectionIds.filter(Boolean)));
+    if (uniqueSelections.length === 0) {
+      return false;
+    }
+    const recovered: Card[] = [];
+    for (const chosenId of uniqueSelections) {
+      const index = caster.graveyard.findIndex((card) => card.instanceId === chosenId);
+      const card =
+        index >= 0
+          ? caster.graveyard[index]
+          : caster.graveyard.find(
+              (entry) =>
+                entry.id === chosenId && (!requireUnit || entry.type === CardType.CREATURE)
+            );
+      if (!card || (requireUnit && card.type !== CardType.CREATURE)) {
+        continue;
+      }
+      const removalIndex = index >= 0 ? index : caster.graveyard.indexOf(card);
+      if (removalIndex >= 0) {
+        caster.graveyard.splice(removalIndex, 1);
+      }
+      card.isTapped = false;
+      recovered.push(card);
+    }
+    if (recovered.length === 0) {
+      return false;
+    }
+    recovered.forEach((card) => caster.hand.push(card));
+    const playerName = this.resolvePlayerName(caster.playerId) ?? 'Player';
+    const suffix = context
+      ? this.describeEffectSuffix(context)
+      : ` with ${spell.name}`;
+    const label =
+      recovered.length === 1
+        ? recovered[0].name ?? 'a card'
+        : `${recovered.length} card${recovered.length === 1 ? '' : 's'}`;
+    this.addDuelLogEntry({
+      playerId: caster.playerId,
+      message: `${playerName} returns ${label} to their hand${suffix}.`,
+      tone: 'success'
+    });
+    return true;
+  }
+
+  private playCardFromGraveyard(
+    player: PlayerState,
+    selectionIds: string[],
+    options: { requireUnit: boolean; ignoreEnergy?: boolean; source?: Card }
+  ): boolean {
+    const chosenId = selectionIds.find(Boolean);
+    if (!chosenId) {
+      return false;
+    }
+    const index = player.graveyard.findIndex((card) => card.instanceId === chosenId);
+    if (index === -1) {
+      return false;
+    }
+    const card = player.graveyard[index];
+    if (!card || (options.requireUnit && card.type !== CardType.CREATURE)) {
+      return false;
+    }
+    const cost: CardCost = {
+      energy: options.ignoreEnergy ? 0 : card.energyCost ?? card.manaCost ?? 0,
+      power: this.normalizePowerCost(card.powerCost)
+    };
+    if (!this.tryAllocateRunesForCost(player, cost, true)) {
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} lacks the resources to play ${
+          card.name ?? 'a card'
+        } from their graveyard.`,
+        tone: 'warning'
+      });
+      return false;
+    }
+    player.graveyard.splice(index, 1);
+    this.deployPermanentCard(player, card, {});
+    const suffix = options.source ? ` due to ${options.source.name}` : '';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} plays ${
+        card.name ?? 'a card'
+      } from their graveyard${suffix}.`,
+      tone: 'success'
+    });
+    return true;
+  }
+
+  private tryHandleMultiTargetDamageSpell(
+    spell: Card,
+    caster: PlayerState,
+    effectText: string,
+    targets?: string[]
+  ): boolean {
+    const pattern = /deal\s+(\d+)\s+to\s+each\s+of\s+up to\s+(\d+)\s+units?/;
+    const match = effectText.match(pattern);
+    if (!match) {
+      return false;
+    }
+    const damage = Math.max(1, parseInt(match[1], 10) || 1);
+    const maxTargets = Math.max(1, parseInt(match[2], 10) || 1);
+    if (targets && targets.length > 0) {
+      this.applySpellDamageToTargets(spell, caster, damage, targets);
+      return true;
+    }
+    this.deferTargetPrompt({
+      caster,
+      spell,
+      scope: 'unit',
+      min: 1,
+      max: maxTargets,
+      allowFriendly: true,
+      allowOpponent: true,
+      handler: 'multi_damage',
+      metadata: {
+        damage
+      }
+    });
+    return true;
+  }
+
+  private applySpellDamageToTargets(
+    spell: Card,
+    caster: PlayerState,
+    damage: number,
+    selectionIds: string[]
+  ): void {
+    const appliedTargets = new Set<string>();
+    for (const targetId of selectionIds) {
+      if (!targetId || appliedTargets.has(targetId)) {
+        continue;
+      }
+      const boardTarget = this.findCardInstance(targetId);
+      if (!boardTarget) {
+        continue;
+      }
+      const damageTarget = this.ensureDamageableTarget(boardTarget, spell);
+      this.damageCreature(damageTarget, damage, spell);
+      appliedTargets.add(targetId);
+    }
+    if (appliedTargets.size > 0) {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} deals ${damage} damage to ${appliedTargets.size} unit${
+          appliedTargets.size === 1 ? '' : 's'
+        }.`,
+        tone: 'success'
+      });
+    } else {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} has no valid targets to damage.`,
+        tone: 'warning'
+      });
+    }
+  }
+
+
   /**
    * Damage a creature
    */
@@ -2320,15 +3281,21 @@ export class RiftboundGameEngine {
     if (removed.location.zone === 'battlefield' && removed.location.battlefieldId) {
       this.removeContestant(removed.location.battlefieldId, player.playerId);
     }
-    player.graveyard.push(removed);
-    this.announceUnitDeath(removed, player, { cause, source });
+    const tokenUnit = this.isTokenCard(removed);
+    if (!tokenUnit) {
+      player.graveyard.push(removed);
+    }
+    this.announceUnitDeath(removed, player, { cause, source, token: tokenUnit });
     this.triggerAbilities(removed, 'death', player);
+    if (cause === 'combat') {
+      this.triggerAbilities(removed, 'death_combat', player);
+    }
   }
 
   private announceUnitDeath(
     unit: BoardCard,
     owner: PlayerState,
-    context: { cause: 'combat' | 'effect'; source?: Card }
+    context: { cause: 'combat' | 'effect'; source?: Card; token?: boolean }
   ): void {
     const cardName = unit.name ?? 'Unit';
     const ownerName = this.resolvePlayerName(owner.playerId);
@@ -2339,9 +3306,13 @@ export class RiftboundGameEngine {
     } else if (context.cause === 'combat') {
       causeSuffix = ' in combat';
     }
+    const tokenDescriptor = context.token ? ' token' : '';
+    const removalClause = context.token
+      ? 'is destroyed and removed from play (tokens do not enter the graveyard)'
+      : 'is sent to the graveyard';
     this.addDuelLogEntry({
       playerId: owner.playerId,
-      message: `${cardName}${ownerSuffix} is sent to the graveyard${causeSuffix}.`,
+      message: `${cardName}${tokenDescriptor}${ownerSuffix} ${removalClause}${causeSuffix}.`,
       tone: 'warning'
     });
   }
@@ -2358,20 +3329,109 @@ export class RiftboundGameEngine {
     this.updateActivationState(creature, true, 'healed');
   }
 
+  private stripTriggerPrefix(text: string): string {
+    return text.replace(/^(when|whenever|after|before|while|during)\b[^,]*,\s*/i, '').trim();
+  }
+
+  private shouldDefaultDiscardToSelf(text: string): boolean {
+    const normalized = text.toLowerCase();
+    if (!/\bdiscard\b/.test(normalized)) {
+      return false;
+    }
+    if (/\b(opponent|enemy)\b/.test(normalized)) {
+      return false;
+    }
+    if (/\b(each|both)\s+players?\b/.test(normalized)) {
+      return false;
+    }
+    if (/\b(target|choose|select)\b/.test(normalized)) {
+      return false;
+    }
+    return true;
+  }
+
+  private normalizeEffectOperations(
+    text: string,
+    operations?: EffectOperation[]
+  ): EffectOperation[] | undefined {
+    if (!operations || operations.length === 0) {
+      return operations;
+    }
+    if (!this.shouldDefaultDiscardToSelf(text)) {
+      return operations;
+    }
+    return operations.map((operation) => {
+      if (operation.type !== 'discard_cards' || operation.targetHint !== 'enemy') {
+        return { ...operation };
+      }
+      return {
+        ...operation,
+        targetHint: 'self'
+      };
+    });
+  }
+
+  private normalizeAbilityOperations(ability: CardAbility): EffectOperation[] | undefined {
+    if (!ability.operations || ability.operations.length === 0) {
+      return ability.operations;
+    }
+    const description = ability.description ?? '';
+    const normalizedDescription = description.toLowerCase();
+    const effectText = this.stripTriggerPrefix(normalizedDescription);
+    let operations = ability.operations.map((operation) => ({
+      ...operation,
+      metadata: operation.metadata ? { ...operation.metadata } : undefined
+    }));
+    const isMoveTrigger =
+      ability.triggerType === 'move' ||
+      ability.triggerType === 'move_to_battlefield' ||
+      ability.triggerType === 'move_from_battlefield';
+    if (isMoveTrigger && !/\b(move|relocate|swap)\b/.test(effectText)) {
+      operations = operations.filter((operation) => operation.type !== 'move_unit');
+    }
+    if (this.shouldDefaultDiscardToSelf(normalizedDescription)) {
+      operations = operations.map((operation) => {
+        if (operation.type !== 'discard_cards' || operation.targetHint !== 'enemy') {
+          return operation;
+        }
+        return {
+          ...operation,
+          targetHint: 'self'
+        };
+      });
+    }
+    return operations;
+  }
+
   private deriveCardAbilities(record: EnrichedCardRecord): CardAbility[] {
     if (!record.rules || record.rules.length === 0) {
       return [];
     }
     const abilities: CardAbility[] = [];
+    const isBattlefield = (record.type ?? '').toLowerCase() === 'battlefield';
     for (const clause of record.rules) {
-      const match = clause.text.match(ABILITY_KEYWORD_PATTERN);
-      if (!match) {
+      const clauseText = clause.text ?? '';
+      if (!clauseText) {
         continue;
       }
-      const keyword = (match.groups?.keyword ?? '').trim();
-      const rawBody = (match.groups?.body ?? '').trim();
-      if (!keyword || !rawBody) {
+      const match = clauseText.match(ABILITY_KEYWORD_PATTERN);
+      let keyword: string | null = null;
+      let rawBody: string | null = null;
+      if (match) {
+        keyword = (match.groups?.keyword ?? '').trim();
+        rawBody = (match.groups?.body ?? '').trim();
+      } else if (isBattlefield) {
+        keyword = this.deriveBattlefieldAbilityKeyword(clauseText);
+        rawBody = clauseText;
+      } else if (this.clauseSuggestsTriggeredAbility(clauseText)) {
+        keyword = this.deriveImplicitAbilityKeyword(clauseText, abilities.length + 1);
+        rawBody = clauseText;
+      }
+      if (!rawBody) {
         continue;
+      }
+      if (!keyword) {
+        keyword = `Ability ${abilities.length + 1}`;
       }
       const description = this.stripRichText(rawBody);
       if (!description) {
@@ -2380,13 +3440,20 @@ export class RiftboundGameEngine {
       const normalizedKeyword = keyword.toLowerCase();
       const supportedTrigger = SUPPORTED_KEYWORD_TRIGGERS[normalizedKeyword];
       const clauseActivation = buildActivation(description);
-      const clauseProfile = buildEffectProfile(description, clauseActivation);
-      const operations =
+      const clauseTokenSpecs = parseTokenSpecs(description);
+      const clauseProfile = buildEffectProfile(description, clauseActivation, clauseTokenSpecs);
+      const baseOperations =
         clauseProfile.operations.length > 0
           ? this.enhanceAbilityOperationsFromText(clauseProfile.operations, description)
-          : undefined;
+          : [];
+      let operations = this.supplementOperationsFromText(baseOperations, description);
+      operations =
+        this.ensureTokenOperationMetadata(description, operations) ?? operations;
       const triggerType =
         supportedTrigger ?? this.inferAbilityTriggerFromText(keyword, description);
+      if (!triggerType) {
+        continue;
+      }
       abilities.push({
         name: keyword,
         keyword,
@@ -2400,7 +3467,7 @@ export class RiftboundGameEngine {
         references: clauseProfile.references,
         priorityHint: clauseProfile.priority,
         targeting: clauseProfile.targeting,
-        operations
+        operations: operations.length > 0 ? operations : undefined
       });
     }
     return abilities;
@@ -2533,14 +3600,37 @@ export class RiftboundGameEngine {
     }
   }
 
-  private getTokenSpec(operation: EffectOperation): TokenSpec | null {
+  private getTokenSpec(operation: EffectOperation, source?: Card): TokenSpec | null {
     if (operation.metadata && typeof operation.metadata === 'object') {
       const candidate = (operation.metadata as { tokenSpec?: TokenSpec }).tokenSpec;
       if (candidate) {
         return candidate;
       }
     }
+    if (
+      (operation.type === 'create_token' || operation.type === 'summon_unit') &&
+      source?.text
+    ) {
+      const derived = parseTokenSpecs(source.text);
+      if (derived.length > 0) {
+        return derived[0];
+      }
+    }
     return null;
+  }
+
+  private isTokenCard(card?: Card | BoardCard | null): boolean {
+    if (!card) {
+      return false;
+    }
+    const tagMatch = (card.tags ?? []).some(
+      (tag) => typeof tag === 'string' && tag.trim().toLowerCase() === 'token'
+    );
+    if (tagMatch) {
+      return true;
+    }
+    const name = (card.name ?? '').toLowerCase();
+    return name.includes('token');
   }
 
   private resolveTokenPlacement(
@@ -2626,6 +3716,176 @@ export class RiftboundGameEngine {
     });
   }
 
+  private detectReturnCountFromText(text: string): number | null {
+    const match = text.match(/return\s+(?:up to\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|\d+)/i);
+    if (!match || !match[1]) {
+      return null;
+    }
+    const token = match[1].toLowerCase();
+    const wordMap: Record<string, number> = {
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+      five: 5,
+      six: 6,
+      seven: 7,
+      eight: 8,
+      nine: 9,
+      ten: 10
+    };
+    if (wordMap[token]) {
+      return wordMap[token];
+    }
+    const numeric = Number(token);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  private buildReturnCriteria(source: Card, operation: EffectOperation): ReturnCriteria {
+    const text = this.stripRichText(source.text ?? '');
+    const normalized = text.toLowerCase();
+    const includesGear = /\bgear\b/.test(normalized);
+    const includesUnit = /\bunit\b|\bcreature\b/.test(normalized);
+    const friendlyOnly = /\bfriendly\b|\byou control\b/.test(normalized);
+    const enemyOnly = /\benemy\b|\bopponent'?s\b/.test(normalized);
+    const battlefieldOnly =
+      /\bat\b\s*(?:a|the)?\s*battlefield\b/.test(normalized) ||
+      /\bon\b\s*(?:a|the)?\s*battlefield\b/.test(normalized);
+    const optional = /\bup to\b/i.test(normalized) || /\bmay\b/i.test(normalized);
+    const globalAll =
+      /\breturn\b[\s\S]+\ball\b/i.test(normalized) || /\breturn\b[\s\S]+\beach\b/i.test(normalized);
+    const magnitude =
+      operation.magnitudeHint && operation.magnitudeHint > 0
+        ? operation.magnitudeHint
+        : this.detectReturnCountFromText(normalized);
+    const maxTargets = globalAll ? 0 : Math.max(1, magnitude ?? 1);
+    let maxMight: number | null = null;
+    const mightMatch = normalized.match(
+      /(\d+)\s*(?:[:]?rb_might:?|might)\s*(?:or less|or fewer|and under|or lower)?/
+    );
+    if (mightMatch) {
+      maxMight = Number(mightMatch[1]);
+    }
+    return {
+      allowUnits: !includesGear || includesUnit,
+      allowGear: includesGear,
+      friendlyOnly,
+      enemyOnly,
+      battlefieldOnly,
+      maxMight,
+      optional,
+      globalAll,
+      minTargets: optional ? 0 : 1,
+      maxTargets
+    };
+  }
+
+  private matchesReturnCriteria(
+    card: BoardCard,
+    caster: PlayerState,
+    criteria: ReturnCriteria
+  ): boolean {
+    const owner = this.getPlayerByCard(card.instanceId);
+    const isFriendly = owner.playerId === caster.playerId;
+    if (criteria.friendlyOnly && !isFriendly) {
+      return false;
+    }
+    if (criteria.enemyOnly && isFriendly) {
+      return false;
+    }
+    if (criteria.battlefieldOnly && card.location.zone !== 'battlefield') {
+      return false;
+    }
+    const isGear = this.isGearCard(card);
+    if (!criteria.allowGear && isGear) {
+      return false;
+    }
+    if (!criteria.allowUnits && card.type === CardType.CREATURE) {
+      return false;
+    }
+    if (!isGear && card.type !== CardType.CREATURE) {
+      return false;
+    }
+    if (criteria.maxMight != null && card.type === CardType.CREATURE) {
+      const cardMight = card.power ?? card.currentToughness ?? 0;
+      if (cardMight > criteria.maxMight) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private collectReturnTargets(caster: PlayerState, criteria: ReturnCriteria): BoardCard[] {
+    const matches: BoardCard[] = [];
+    for (const player of this.gameState.players) {
+      const pool = [
+        ...player.board.creatures,
+        ...player.board.artifacts,
+        ...player.board.enchantments
+      ];
+      pool.forEach((card) => {
+        if (this.matchesReturnCriteria(card, caster, criteria)) {
+          matches.push(card);
+        }
+      });
+    }
+    return matches;
+  }
+
+  private returnCardToOwnerHand(target: BoardCard, context: EffectOperationContext): void {
+    const owner = this.getPlayerByCard(target.instanceId);
+    this.removeCardFromBoard(owner, target);
+    if (target.location.zone === 'battlefield' && target.location.battlefieldId) {
+      this.removeContestant(target.location.battlefieldId, owner.playerId);
+    }
+    const tokenUnit = this.isTokenCard(target);
+    this.updateActivationState(target, false, 'return-hand');
+    const suffix = this.describeEffectSuffix(context);
+    if (tokenUnit) {
+      this.addDuelLogEntry({
+        playerId: owner.playerId,
+        message: `${target.name ?? 'Token'} dissipates instead of returning${suffix}.`,
+        tone: 'warning'
+      });
+      return;
+    }
+    target.isTapped = false;
+    target.summoned = true;
+    target.location = { zone: 'base' };
+    owner.hand.push(target);
+    const ownerName = this.resolvePlayerName(owner.playerId) ?? 'Player';
+    this.addDuelLogEntry({
+      playerId: owner.playerId,
+      message: `${ownerName} returns ${target.name ?? 'a card'} to their hand${suffix}.`,
+      tone: 'info'
+    });
+  }
+
+  private removeCardFromBoard(player: PlayerState, card: BoardCard): void {
+    const pools = [player.board.creatures, player.board.artifacts, player.board.enchantments];
+    for (const pool of pools) {
+      const index = pool.findIndex((entry) => entry.instanceId === card.instanceId);
+      if (index !== -1) {
+        pool.splice(index, 1);
+        break;
+      }
+    }
+  }
+
+  private isGearCard(card: Card | BoardCard): boolean {
+    return (card.tags ?? []).some(
+      (tag) => typeof tag === 'string' && tag.trim().toLowerCase() === 'gear'
+    );
+  }
+
+  private requiresUnitForGraveyardReturn(source?: Card): boolean {
+    if (!source) {
+      return true;
+    }
+    const text = this.stripRichText(source.text ?? '');
+    return /\bunit\b|\bcreature\b/i.test(text);
+  }
+
   private describeEffectAttribution(context: EffectOperationContext): string | null {
     const abilityLabel = (context.abilityName ?? '').trim();
     const sourceName = context.source?.name ?? null;
@@ -2667,6 +3927,45 @@ export class RiftboundGameEngine {
     });
   }
 
+  private logCardDraw(player: PlayerState, count: number, context: EffectOperationContext): void {
+    if (count <= 0) {
+      return;
+    }
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    const suffix = this.describeEffectSuffix(context);
+    const cardLabel = count === 1 ? 'a card' : `${count} cards`;
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} draws ${cardLabel}${suffix}.`,
+      tone: 'info'
+    });
+  }
+
+  private resolveOperationPlayer(
+    operation: EffectOperation,
+    caster: PlayerState,
+    context: EffectOperationContext,
+    options?: { defaultToOpponent?: boolean }
+  ): PlayerState {
+    if (context.playerTarget) {
+      return context.playerTarget;
+    }
+    const hint = (operation.targetHint ?? '').toString().toLowerCase();
+    switch (hint) {
+      case 'enemy':
+      case 'opponent':
+        return this.getOtherPlayer(caster);
+      case 'self':
+      case 'ally':
+      case 'friendly':
+      case 'controller':
+      case 'owner':
+        return caster;
+      default:
+        return options?.defaultToOpponent ? this.getOtherPlayer(caster) : caster;
+    }
+  }
+
   private stripRichText(text: string): string {
     return text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
@@ -2680,11 +3979,68 @@ export class RiftboundGameEngine {
       return SUPPORTED_KEYWORD_TRIGGERS[normalizedKeyword];
     }
     const normalizedText = clauseText.toLowerCase();
+    if (/\bwhen i die in combat\b/.test(normalizedText)) {
+      return 'death_combat';
+    }
     if (/\bwhen i die\b/.test(normalizedText) || /\bdeathknell\b/.test(normalizedText)) {
       return 'death';
     }
     if (/\bwhen i enter\b|\bwhen this enters\b|\bwhen you play\b/.test(normalizedText)) {
       return 'play';
+    }
+    if (/when i attack or defend one on one/.test(normalizedText)) {
+      return 'duel';
+    }
+    if (/when i attack or defend/.test(normalizedText)) {
+      return 'attack_defend';
+    }
+    if (/when i attack\b/.test(normalizedText)) {
+      return 'attack';
+    }
+    if (/when i defend\b/.test(normalizedText)) {
+      return 'defend';
+    }
+    if (/when i win a combat/.test(normalizedText)) {
+      return 'combat_win';
+    }
+    if (/when i conquer after an attack/.test(normalizedText)) {
+      return 'conquer_after_attack';
+    }
+    if (/when i conquer an open battlefield/.test(normalizedText)) {
+      return 'conquer_open';
+    }
+    if (/when i conquer\b/.test(normalizedText)) {
+      return 'conquer';
+    }
+    if (/\bwhen (?:i|you)\s+hold\b/.test(normalizedText)) {
+      return 'hold';
+    }
+    if (/when i move to [^.,;]+battlefield/.test(normalizedText)) {
+      return 'move_to_battlefield';
+    }
+    if (/when i move from [^.,;]+battlefield/.test(normalizedText)) {
+      return 'move_from_battlefield';
+    }
+    if (/\bwhen i move\b/.test(normalizedText)) {
+      return 'move';
+    }
+    if (/\bwhen (?:a|any) unit moves from here\b/.test(normalizedText)) {
+      return 'unit_move_from';
+    }
+    if (/\bwhile you control this battlefield\b/.test(normalizedText)) {
+      return 'control';
+    }
+    if (/\bat the start of each player'?s first beginning phase\b/.test(normalizedText)) {
+      return 'turn_start';
+    }
+    if (/\bat the start of each player'?s beginning phase\b/.test(normalizedText)) {
+      return 'turn_start';
+    }
+    if (/\bincrease the points needed to win the game\b/.test(normalizedText)) {
+      return 'setup';
+    }
+    if (/\byou may hide an additional card here\b/.test(normalizedText)) {
+      return 'setup';
     }
     return undefined;
   }
@@ -2725,6 +4081,115 @@ export class RiftboundGameEngine {
     });
   }
 
+  private deriveBattlefieldAbilityKeyword(clauseText: string): string {
+    const normalized = this.stripRichText(clauseText).toLowerCase();
+    if (/when you hold/.test(normalized)) {
+      return 'Hold';
+    }
+    if (/when you conquer/.test(normalized)) {
+      return 'Conquer';
+    }
+    if (/when you defend/.test(normalized)) {
+      return 'Defend';
+    }
+    if (/at the start/.test(normalized)) {
+      return 'Start';
+    }
+    if (/while you control/.test(normalized)) {
+      return 'Control';
+    }
+    return 'Battlefield';
+  }
+
+  private clauseSuggestsTriggeredAbility(clauseText: string): boolean {
+    const normalized = this.stripRichText(clauseText).toLowerCase();
+    return (
+      /\bwhen\b/.test(normalized) ||
+      /\bwhenever\b/.test(normalized) ||
+      /\bafter\b/.test(normalized) ||
+      /\bdeathknell\b/.test(normalized)
+    );
+  }
+
+  private deriveImplicitAbilityKeyword(clauseText: string, sequence: number): string {
+    const normalized = this.stripRichText(clauseText).toLowerCase();
+    if (/when you play\b/.test(normalized) || /when i play\b/.test(normalized)) {
+      return 'Play';
+    }
+    if (/when you hold\b/.test(normalized) || /when i hold\b/.test(normalized)) {
+      return 'Hold';
+    }
+    if (/when you conquer\b/.test(normalized) || /when i conquer\b/.test(normalized)) {
+      return 'Conquer';
+    }
+    if (/when you attack\b/.test(normalized) || /when i attack\b/.test(normalized)) {
+      return 'Attack';
+    }
+    if (/when you defend\b/.test(normalized) || /when i defend\b/.test(normalized)) {
+      return 'Defend';
+    }
+    if (/when you move\b/.test(normalized) || /when i move\b/.test(normalized)) {
+      return 'Move';
+    }
+    if (/when you win a combat\b/.test(normalized) || /when i win a combat\b/.test(normalized)) {
+      return 'Combat';
+    }
+    if (/when i die\b/.test(normalized) || /\bdeathknell\b/.test(normalized)) {
+      return 'Death';
+    }
+    return `Triggered ${sequence}`;
+  }
+
+  private supplementOperationsFromText(
+    operations: EffectOperation[],
+    description: string
+  ): EffectOperation[] {
+    const extras: EffectOperation[] = [];
+    const normalized = description.toLowerCase();
+    if (
+      !operations.some((operation) => operation.type === 'mill_cards') &&
+      /put the top\s+(\d+)\s+cards?\s+of your (?:main\s+)?deck into your trash/.test(normalized)
+    ) {
+      const match = normalized.match(
+        /put the top\s+(\d+)\s+cards?\s+of your (?:main\s+)?deck into your trash/
+      );
+      const count = match ? Math.max(1, parseInt(match[1], 10) || 1) : 1;
+      extras.push({
+        type: 'mill_cards',
+        targetHint: 'self',
+        automated: true,
+        ruleRefs: ['400'],
+        magnitudeHint: count,
+        metadata: {
+          count
+        }
+      });
+    }
+    const hasTokenOperation = operations.some(
+      (operation) => operation.type === 'create_token' || operation.type === 'summon_unit'
+    );
+    if (!hasTokenOperation) {
+      const tokenSpecs = parseTokenSpecs(description);
+      tokenSpecs.forEach((spec) => {
+        extras.push({
+          type: 'create_token',
+          targetHint: 'ally',
+          zone: 'board',
+          automated: false,
+          ruleRefs: ['340-360'],
+          magnitudeHint: spec.variableCount ? undefined : spec.count,
+          metadata: {
+            tokenSpec: spec
+          }
+        });
+      });
+    }
+    if (extras.length === 0) {
+      return operations;
+    }
+    return operations.concat(extras);
+  }
+
   // ========================================================================
   // ABILITIES
   // ========================================================================
@@ -2736,7 +4201,8 @@ export class RiftboundGameEngine {
     card: Card,
     triggerType: string,
     player: PlayerState,
-    targets?: string[]
+    targets?: string[],
+    options?: { battlefield?: BattlefieldState; boardTarget?: BoardCard; playerTarget?: PlayerState }
   ): void {
     const abilities = card.abilities ?? [];
     if (abilities.length === 0) {
@@ -2748,19 +4214,22 @@ export class RiftboundGameEngine {
 
     let resolved = false;
     for (const ability of abilities) {
-      if (ability.triggerType && ability.triggerType !== triggerType) {
+      if (!this.abilityMatchesTrigger(ability.triggerType, triggerType)) {
         continue;
       }
       resolved = true;
       if (ability.operations && ability.operations.length > 0) {
-        const boardSource = this.isBoardCard(card) ? card : undefined;
+        const boardSource = this.isBoardCard(card) ? (card as BoardCard) : undefined;
+        const boardTarget = options?.boardTarget ?? boardSource;
         const battlefieldTarget =
-          boardSource?.location.zone === 'battlefield'
-            ? this.findBattlefieldState(boardSource.location.battlefieldId)
-            : undefined;
+          options?.battlefield ??
+          (boardTarget?.location.zone === 'battlefield'
+            ? this.findBattlefieldState(boardTarget.location.battlefieldId)
+            : undefined);
         this.executeEffectOperations(ability.operations, player, {
           source: card,
-          boardTarget: boardSource,
+          boardTarget,
+          playerTarget: options?.playerTarget,
           battlefieldTarget,
           abilityName: ability.name,
           triggerType: ability.triggerType ?? null
@@ -2780,6 +4249,198 @@ export class RiftboundGameEngine {
     if (!resolved && triggerType === 'play') {
       this.logRuleUsage(card, 'static-entry');
     }
+  }
+
+  private abilityMatchesTrigger(
+    abilityTrigger: string | undefined,
+    triggerType: string
+  ): boolean {
+    if (!abilityTrigger) {
+      return triggerType === 'play';
+    }
+    if (abilityTrigger === triggerType) {
+      return true;
+    }
+    switch (abilityTrigger) {
+      case 'attack_defend':
+        return triggerType === 'attack' || triggerType === 'defend';
+      case 'move':
+        return (
+          triggerType === 'move_to_battlefield' || triggerType === 'move_from_battlefield'
+        );
+      default:
+        return false;
+    }
+  }
+
+  private deferDiscardOperation(
+    operation: EffectOperation,
+    operations: EffectOperation[],
+    index: number,
+    caster: PlayerState,
+    targetPlayer: PlayerState,
+    context: EffectOperationContext
+  ): boolean {
+    if (!context.battlefieldTarget || !context.source) {
+      return false;
+    }
+    const count = Math.max(1, operation.magnitudeHint ?? 1);
+    const prompt = this.enqueuePrompt('discard', targetPlayer.playerId, {
+      count,
+      sourceCardId: context.source.id ?? null,
+      sourceCardName: context.source.name ?? null,
+      battlefieldId: context.battlefieldTarget.battlefieldId,
+      battlefieldName: context.battlefieldTarget.name
+    });
+    const snapshot = this.snapshotEffectContext(context);
+    this.gameState.pendingEffects.push({
+      id: prompt.id,
+      type: 'discard',
+      casterId: caster.playerId,
+      targetPlayerId: targetPlayer.playerId,
+      operations: operations.map((op) => ({ ...op })),
+      nextIndex: index,
+      context: snapshot,
+      metadata: {
+        count
+      }
+    });
+    return true;
+  }
+
+  private deferTargetSelectionForOperation(
+    operations: EffectOperation[],
+    index: number,
+    caster: PlayerState,
+    context: EffectOperationContext,
+    options: {
+      scope: 'unit' | 'graveyard';
+      min: number;
+      max: number;
+      allowFriendly?: boolean;
+      allowOpponent?: boolean;
+      metadata?: Record<string, unknown>;
+    }
+  ): boolean {
+    const prompt = this.enqueuePrompt('target', caster.playerId, {
+      sourceCardId: context.source?.id ?? null,
+      sourceCardName: context.source?.name ?? null,
+      scope: options.scope,
+      min: options.min,
+      max: options.max,
+      allowFriendly: options.allowFriendly !== false,
+      allowOpponent: options.allowOpponent !== false
+    });
+    const snapshot = this.snapshotEffectContext(context);
+    this.gameState.pendingEffects.push({
+      id: prompt.id,
+      type: 'target',
+      casterId: caster.playerId,
+      targetPlayerId: caster.playerId,
+      operations: operations.map((op) => ({ ...op })),
+      nextIndex: index,
+      context: snapshot,
+      metadata: options.metadata
+    });
+    return true;
+  }
+
+  private deferTargetPrompt(options: {
+    caster: PlayerState;
+    spell: Card;
+    scope: 'unit' | 'graveyard';
+    min: number;
+    max: number;
+    allowFriendly?: boolean;
+    allowOpponent?: boolean;
+    handler: string;
+    metadata?: Record<string, unknown>;
+  }): void {
+    const prompt = this.enqueuePrompt('target', options.caster.playerId, {
+      sourceCardId: options.spell.id ?? null,
+      sourceCardName: options.spell.name ?? null,
+      scope: options.scope,
+      min: options.min,
+      max: options.max,
+      allowFriendly: options.allowFriendly !== false,
+      allowOpponent: options.allowOpponent !== false
+    });
+    this.gameState.pendingEffects.push({
+      id: prompt.id,
+      type: 'target',
+      casterId: options.caster.playerId,
+      targetPlayerId: options.caster.playerId,
+      metadata: {
+        handler: options.handler,
+        sourceCardId: options.spell.id,
+        sourceCardName: options.spell.name,
+        ...(options.metadata ?? {})
+      }
+    });
+  }
+
+  private snapshotEffectContext(context: EffectOperationContext): EffectContextSnapshot {
+    return {
+      sourceCardId: context.source?.id ?? null,
+      sourceInstanceId:
+        context.source && 'instanceId' in context.source
+          ? ((context.source as BoardCard).instanceId ?? null)
+          : null,
+      boardTargetInstanceId: context.boardTarget?.instanceId ?? null,
+      battlefieldId: context.battlefieldTarget?.battlefieldId ?? null,
+      targetIds: context.targets ? [...context.targets] : null
+    };
+  }
+
+  private restoreEffectContext(snapshot: EffectContextSnapshot): EffectOperationContext {
+    const rebuilt: Partial<EffectOperationContext> = {};
+    if (snapshot.battlefieldId) {
+      rebuilt.battlefieldTarget = this.findBattlefieldState(snapshot.battlefieldId);
+    }
+    if (snapshot.sourceInstanceId) {
+      const boardCard = this.findCardInstance(snapshot.sourceInstanceId);
+      if (boardCard) {
+        rebuilt.source = boardCard;
+      }
+    }
+    if (!rebuilt.source) {
+      if (rebuilt.battlefieldTarget?.card) {
+        rebuilt.source = rebuilt.battlefieldTarget.card;
+      } else if (snapshot.sourceCardId) {
+        rebuilt.source = this.lookupCatalogCard(snapshot.sourceCardId);
+      }
+    }
+    if (snapshot.boardTargetInstanceId) {
+      rebuilt.boardTarget = this.findCardInstance(snapshot.boardTargetInstanceId) ?? undefined;
+    }
+    if (snapshot.targetIds) {
+      rebuilt.targets = [...snapshot.targetIds];
+    }
+    if (!rebuilt.source) {
+      throw new Error('Unable to restore effect context for pending operation.');
+    }
+    return rebuilt as EffectOperationContext;
+  }
+
+  private triggerUnits(units: BoardCard[], triggerType: string): void {
+    units.forEach((unit) => {
+      const owner = this.getPlayerByCard(unit.instanceId);
+      this.triggerAbilities(unit, triggerType, owner);
+    });
+  }
+
+  private triggerUnitsOnBattlefield(
+    battlefieldId: string,
+    ownerId: string,
+    triggerType: string
+  ): void {
+    const units = this.getUnitsOnBattlefield(battlefieldId).filter(
+      (unit) => this.getPlayerByCard(unit.instanceId).playerId === ownerId
+    );
+    if (units.length === 0) {
+      return;
+    }
+    this.triggerUnits(units, triggerType);
   }
 
   /**
@@ -2853,6 +4514,37 @@ export class RiftboundGameEngine {
         this.updateActivationState(permanent, false, 'end-step-reset');
       }
     }
+
+    this.applyLegendEndOfTurnEffects(player);
+  }
+
+  private applyLegendEndOfTurnEffects(player: PlayerState): void {
+    const legend = player.championLegend;
+    if (!legend) {
+      return;
+    }
+    const effectText = legend.text ?? '';
+    if (!effectText) {
+      return;
+    }
+    const readyMatch =
+      /ready\s+(?<count>a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:of\s+their\s+|your\s+)?runes?/i.exec(
+        effectText
+      );
+    if (!readyMatch?.groups?.count) {
+      return;
+    }
+    const desired = this.parseWordNumber(readyMatch.groups.count);
+    const readied = this.readyRunes(player, desired);
+    if (readied <= 0) {
+      return;
+    }
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} readies ${readied} rune${readied === 1 ? '' : 's'} due to ${legend.name}.`,
+      tone: 'info'
+    });
   }
 
   // ========================================================================
@@ -2887,6 +4579,47 @@ export class RiftboundGameEngine {
       return legacyMatch[1];
     }
     return trimmed;
+  }
+
+  private parseWordNumber(token?: string | null): number {
+    if (!token) {
+      return 1;
+    }
+    const numeric = Number(token);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return Math.floor(numeric);
+    }
+    const normalized = token.toLowerCase();
+    switch (normalized) {
+      case 'a':
+      case 'an':
+      case 'one':
+        return 1;
+      case 'two':
+        return 2;
+      case 'three':
+        return 3;
+      case 'four':
+        return 4;
+      case 'five':
+        return 5;
+      case 'six':
+        return 6;
+      case 'seven':
+        return 7;
+      case 'eight':
+        return 8;
+      case 'nine':
+        return 9;
+      case 'ten':
+        return 10;
+      case 'eleven':
+        return 11;
+      case 'twelve':
+        return 12;
+      default:
+        return 1;
+    }
   }
 
   private normalizeRuneDeck(entries: (DeckCardEntry | RuneCard)[]): RuneCard[] {
@@ -3007,17 +4740,61 @@ export class RiftboundGameEngine {
     }
 
     if (this.isDeckCard(entry)) {
-      return [this.cloneCard(entry)];
+      const candidates = [
+        (entry as any).cardId,
+        entry.id,
+        entry.slug,
+        entry.name
+      ].filter(Boolean) as string[];
+      for (const candidate of candidates) {
+        try {
+          const catalogCard = this.lookupCatalogCard(candidate);
+          return [this.cloneCard(catalogCard)];
+        } catch {
+          // continue to next candidate
+        }
+      }
+      const cloned = this.cloneCard(entry);
+      cloned.powerCost = undefined;
+      return [cloned];
     }
 
     if (this.isDeckReference(entry)) {
-      const identifier = entry.cardId ?? entry.slug;
-      if (!identifier) {
+      const snapshot = (entry as any).cardSnapshot ?? null;
+      const candidates = [
+        entry.cardId,
+        entry.slug,
+        snapshot?.cardId,
+        snapshot?.slug,
+        snapshot?.name
+      ].filter(Boolean) as string[];
+      if (!candidates.length) {
         throw new Error('Deck entry is missing a card reference');
       }
+      for (const candidate of candidates) {
+        try {
+          const catalogCard = this.lookupCatalogCard(candidate);
+          const quantity = Math.max(1, entry.quantity ?? 1);
+          return Array.from({ length: quantity }).map(() =>
+            this.applyOverrides(catalogCard, entry.overrides)
+          );
+        } catch {
+          // try next candidate
+        }
+      }
       const quantity = Math.max(1, entry.quantity ?? 1);
-      const baseCard = this.lookupCatalogCard(identifier);
-      return Array.from({ length: quantity }).map(() => this.applyOverrides(baseCard, entry.overrides));
+      return Array.from({ length: quantity }).map(() => {
+        const fallback: Card = {
+          id: candidates[0],
+          name: snapshot?.name ?? 'Unknown Card',
+          type: this.mapCardType(snapshot?.type ?? 'creature'),
+          text: snapshot?.effect ?? 'Unknown effect',
+          power: snapshot?.power ?? undefined,
+          toughness: snapshot?.toughness ?? undefined,
+          powerCost: undefined
+        };
+        return this.applyOverrides(fallback, entry.overrides);
+      });
     }
 
     throw new Error('Unsupported deck entry type');
@@ -3038,7 +4815,8 @@ export class RiftboundGameEngine {
       return this.cloneCard(cached);
     }
 
-    const record = findCardById(identifier) ?? findCardBySlug(identifier);
+    const record =
+      findCardById(identifier) ?? findCardBySlug(identifier) ?? findCardByName(identifier);
     if (!record) {
       throw new Error(`Card not found for identifier: ${identifier}`);
     }
@@ -3048,14 +4826,55 @@ export class RiftboundGameEngine {
     if (record.slug) {
       this.catalogCardCache.set(record.slug.toLowerCase(), this.cloneCard(card));
     }
+    this.catalogCardCache.set(record.name.toLowerCase(), this.cloneCard(card));
 
     return card;
+  }
+
+  private buildSpellReference(sourceCardId?: string | null, sourceCardName?: string | null): Card {
+    if (sourceCardId) {
+      try {
+        return this.lookupCatalogCard(sourceCardId);
+      } catch {
+        // Fall through to generate a minimal reference if lookup fails
+      }
+    }
+    return {
+      id: sourceCardId ?? `spell_${Date.now()}`,
+      name: sourceCardName ?? 'Spell',
+      type: CardType.SPELL,
+      text: sourceCardName ?? 'Spell effect'
+    };
   }
 
   private convertRecordToCard(record: EnrichedCardRecord): Card {
     const domain =
       record.colors && record.colors.length > 0 ? this.mapDomain(record.colors[0]) : undefined;
-    const powerCost = this.resolvePowerCost(record.cost);
+    let powerCost = this.resolvePowerCost(record.cost);
+    const rawCost = (record.cost?.raw ?? '').toString();
+    const hasExplicitRuneSymbols = /\[[A-Za-z]+\]/.test(rawCost);
+    if (!hasExplicitRuneSymbols && !record.cost?.powerCost) {
+      powerCost = undefined;
+    }
+    const assaultSources: Array<string | null | undefined> = [
+      record.effect,
+      ...(record.rules ?? []).map((rule) => rule.text)
+    ];
+    const assaultBonus =
+      assaultSources.reduce<number | null>((value, text) => {
+        if (value != null) {
+          return value;
+        }
+        return parseAssaultBonus(text);
+      }, null) ?? null;
+    const metadata: Record<string, unknown> = {
+      setName: record.setName,
+      rarity: record.rarity,
+      ...(record.behaviorHints ?? {})
+    };
+    if (assaultBonus != null) {
+      metadata.assaultBonus = assaultBonus;
+    }
     const baseCard: Card = {
       id: record.id,
       slug: record.slug,
@@ -3075,18 +4894,33 @@ export class RiftboundGameEngine {
       activationProfile: record.activation,
       rules: record.rules,
       assets: record.assets,
-      metadata: {
-        setName: record.setName,
-        rarity: record.rarity,
-        ...(record.behaviorHints ?? {})
-      },
+      metadata,
       text: record.effect,
       flavorText: record.flavor,
       effectProfile: record.effectProfile
     };
-    const derivedAbilities = this.deriveCardAbilities(record);
-    if (derivedAbilities.length > 0) {
-      baseCard.abilities = derivedAbilities;
+    const abilitySource =
+      record.abilities && record.abilities.length > 0
+        ? record.abilities
+        : this.deriveCardAbilities(record);
+    if (abilitySource.length > 0) {
+      baseCard.abilities = abilitySource.map((ability) => {
+        const normalized = {
+          ...ability,
+          operations: this.normalizeAbilityOperations(ability)
+        };
+        return this.cloneAbility(normalized);
+      });
+    }
+    if (baseCard.effectProfile?.operations) {
+      const effectText = record.effect ?? baseCard.text ?? '';
+      const enrichedOperations =
+        this.ensureTokenOperationMetadata(effectText, baseCard.effectProfile.operations) ??
+        baseCard.effectProfile.operations;
+      baseCard.effectProfile = {
+        ...baseCard.effectProfile,
+        operations: this.normalizeEffectOperations(effectText, enrichedOperations)
+      };
     }
     return baseCard;
   }
@@ -3097,17 +4931,7 @@ export class RiftboundGameEngine {
       instanceId: card.instanceId,
       powerCost: card.powerCost ? { ...card.powerCost } : undefined,
       abilities: card.abilities
-        ? card.abilities.map((ability) => ({
-            ...ability,
-            triggerWindows: ability.triggerWindows ? [...ability.triggerWindows] : undefined,
-            reactionWindows: ability.reactionWindows ? [...ability.reactionWindows] : undefined,
-            effectClasses: ability.effectClasses ? [...ability.effectClasses] : undefined,
-            references: ability.references ? [...ability.references] : undefined,
-            targeting: ability.targeting ? { ...ability.targeting } : undefined,
-            operations: ability.operations
-              ? ability.operations.map((operation) => ({ ...operation }))
-              : undefined
-          }))
+        ? card.abilities.map((ability) => this.cloneAbility(ability))
         : undefined,
       keywords: card.keywords ? [...card.keywords] : undefined,
       tags: card.tags ? [...card.tags] : undefined,
@@ -3128,6 +4952,23 @@ export class RiftboundGameEngine {
             ...card.effectProfile,
             operations: card.effectProfile.operations.map((operation) => ({ ...operation }))
           }
+        : undefined
+    };
+  }
+
+  private cloneAbility(ability: CardAbility): CardAbility {
+    return {
+      ...ability,
+      triggerWindows: ability.triggerWindows ? [...ability.triggerWindows] : undefined,
+      reactionWindows: ability.reactionWindows ? [...ability.reactionWindows] : undefined,
+      effectClasses: ability.effectClasses ? [...ability.effectClasses] : undefined,
+      references: ability.references ? [...ability.references] : undefined,
+      targeting: ability.targeting ? { ...ability.targeting } : undefined,
+      operations: ability.operations
+        ? ability.operations.map((operation) => ({
+            ...operation,
+            metadata: operation.metadata ? { ...operation.metadata } : undefined
+          }))
         : undefined
     };
   }
@@ -3282,6 +5123,9 @@ export class RiftboundGameEngine {
       status: this.gameState.status
     };
 
+    if (!Array.isArray(this.gameState.snapshots)) {
+      this.gameState.snapshots = [];
+    }
     this.gameState.snapshots.push({
       turn: this.turnNumber,
       phase: this.currentPhase,
@@ -3370,6 +5214,21 @@ export class RiftboundGameEngine {
       return;
     }
 
+    if (!boardCard.activationState || typeof boardCard.activationState !== 'object') {
+      const activationTemplate = this.cardActivationTemplates[boardCard.id];
+      const fallbackStateful =
+        activationTemplate?.isStateful ?? Boolean(boardCard.activationProfile?.stateful);
+      boardCard.activationState = {
+        cardId: boardCard.id,
+        isStateful: fallbackStateful,
+        active: fallbackStateful,
+        lastChangedAt: Date.now(),
+        history: []
+      };
+    } else if (!Array.isArray(boardCard.activationState.history)) {
+      boardCard.activationState.history = [];
+    }
+
     boardCard.activationState.active = active;
     boardCard.activationState.lastChangedAt = Date.now();
     boardCard.activationState.history.push({
@@ -3389,6 +5248,9 @@ export class RiftboundGameEngine {
     }
 
     const timestamp = Date.now();
+    if (!Array.isArray(card.ruleLog)) {
+      card.ruleLog = [];
+    }
     card.ruleLog.push(
       ...card.rules.map((clause) => ({
         clauseId: clause.id,
@@ -3399,7 +5261,78 @@ export class RiftboundGameEngine {
   }
 
   private isBoardCard(card: Card | BoardCard): card is BoardCard {
-    return typeof (card as BoardCard).instanceId === 'string';
+    const candidate = card as BoardCard;
+    return (
+      typeof candidate.instanceId === 'string' &&
+      Boolean(candidate.activationState && typeof candidate.activationState === 'object')
+    );
+  }
+
+  private cardHasMechanic(card: Card | BoardCard | undefined, mechanic: string): boolean {
+    if (!card || !mechanic) {
+      return false;
+    }
+    const normalized = mechanic.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    if (normalized === 'assault') {
+      const assaultBonus = this.resolveAssaultBonusValue(card);
+      if (assaultBonus && assaultBonus > 0) {
+        return true;
+      }
+    }
+    const matchesList = (values?: (string | null | undefined)[]) =>
+      (values ?? []).some((value) => (value ?? '').toLowerCase() === normalized);
+    if (matchesList(card.keywords) || matchesList(card.tags)) {
+      return true;
+    }
+    if (normalized === 'assault') {
+      return false;
+    }
+    return (card.text ?? '').toLowerCase().includes(normalized);
+  }
+
+  private resolveAssaultBonusValue(card: Card | BoardCard): number | null {
+    const metadata = card.metadata as { assaultBonus?: unknown } | undefined;
+    if (metadata && typeof metadata.assaultBonus === 'number') {
+      const stored = Number(metadata.assaultBonus);
+      if (Number.isFinite(stored)) {
+        return stored;
+      }
+    }
+    const text = (card.text ?? '').toLowerCase();
+    if (!text.includes('assault')) {
+      return null;
+    }
+    if (/\bassault\b[^.]{0,80}\bequal to\b/.test(text)) {
+      return null;
+    }
+    const bracketMatch = text.match(/\[assault(?:\s*(\d+))?\]/);
+    if (bracketMatch) {
+      if (bracketMatch[1]) {
+        const parsed = Number(bracketMatch[1]);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+      const plusMatch = text.match(/\+(\d+)\s*(?:rb[\s_]*might|might)/);
+      if (plusMatch && plusMatch[1]) {
+        const parsed = Number(plusMatch[1]);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+      return 1;
+    }
+    const inlineMatch = text.match(/assault\s+(\d+)/);
+    if (inlineMatch && inlineMatch[1]) {
+      const parsed = Number(inlineMatch[1]);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   private getCurrentPlayer(): PlayerState {
@@ -3487,7 +5420,7 @@ export class RiftboundGameEngine {
   private deployPermanentCard(
     player: PlayerState,
     card: Card,
-    options?: { destinationId?: string | null; targets?: string[] | null }
+    options?: { destinationId?: string | null; targets?: string[] | null; accelerated?: boolean }
   ): BoardCard {
     const destinationId = options?.destinationId ?? null;
     const targets = options?.targets ?? [];
@@ -3499,6 +5432,9 @@ export class RiftboundGameEngine {
       cardType === CardType.ENCHANTMENT;
     if (entersZoneTapped) {
       boardCard.isTapped = !this.cardEntersUntapped(card);
+    }
+    if (options?.accelerated) {
+      boardCard.isTapped = false;
     }
     switch (cardType) {
       case CardType.CREATURE:
@@ -3634,7 +5570,9 @@ export class RiftboundGameEngine {
       ownerId,
       controller: undefined,
       contestedBy: [],
-      lastCombatTurn: undefined
+      lastCombatTurn: undefined,
+      combatTurnByPlayer: {},
+      effectState: {}
     };
   }
 
@@ -3649,7 +5587,10 @@ export class RiftboundGameEngine {
       contestedBy: [...state.contestedBy],
       lastConqueredTurn: state.lastConqueredTurn,
       lastHoldTurn: state.lastHoldTurn,
-      lastCombatTurn: state.lastCombatTurn
+      lastCombatTurn: state.lastCombatTurn,
+      lastHoldScoreTurn: state.lastHoldScoreTurn,
+      combatTurnByPlayer: { ...(state.combatTurnByPlayer ?? {}) },
+      effectState: state.effectState ? { ...state.effectState } : undefined
     };
   }
 
@@ -3686,34 +5627,46 @@ export class RiftboundGameEngine {
     player: PlayerState,
     battlefield: BattlefieldState,
     reason: ScoreReason,
-    options?: { points?: number; sourceCardId?: string }
+    options?: { points?: number; sourceCardId?: string; initiatedAttack?: boolean }
   ): void {
-    const alreadyControlled = battlefield.controller === player.playerId;
+    const previousController = battlefield.controller ?? null;
+    const alreadyControlled = previousController === player.playerId;
     battlefield.controller = player.playerId;
     battlefield.contestedBy = [];
     if (alreadyControlled) {
       battlefield.lastHoldTurn = this.turnNumber;
-    } else {
-      battlefield.lastConqueredTurn = this.turnNumber;
-      battlefield.lastHoldTurn = undefined;
+      return;
     }
+    battlefield.lastConqueredTurn = this.turnNumber;
+    battlefield.lastHoldTurn = undefined;
     const sourceCard = options?.sourceCardId ?? battlefield.card?.id ?? battlefield.battlefieldId;
     const amount = Math.max(1, options?.points ?? 1);
-    if (!alreadyControlled) {
-      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
-      const verb =
-        reason === 'combat'
-          ? 'conquers'
-          : reason === 'objective'
-            ? 'claims'
-            : 'controls';
-      this.addDuelLogEntry({
-        playerId: player.playerId,
-        message: `${playerName} ${verb} ${battlefield.name}.`,
-        tone: 'success'
-      });
-    }
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    const verb =
+      reason === 'combat'
+        ? 'conquers'
+        : reason === 'objective'
+          ? 'claims'
+          : 'controls';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} ${verb} ${battlefield.name}.`,
+      tone: 'success'
+    });
     this.awardVictoryPoints(player, amount, reason, sourceCard);
+    this.triggerBattlefieldAbility(battlefield, 'control', player);
+    this.triggerUnitsOnBattlefield(battlefield.battlefieldId, player.playerId, 'conquer');
+    if (!previousController) {
+      this.triggerUnitsOnBattlefield(battlefield.battlefieldId, player.playerId, 'conquer_open');
+    }
+    if (reason === 'combat' && options?.initiatedAttack) {
+      this.triggerUnitsOnBattlefield(
+        battlefield.battlefieldId,
+        player.playerId,
+        'conquer_after_attack'
+      );
+    }
+    this.triggerBattlefieldAbility(battlefield, 'conquer', player);
   }
 
   private checkBattlefieldHoldBonuses(player: PlayerState): void {
@@ -3744,10 +5697,199 @@ export class RiftboundGameEngine {
         message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} holds ${battlefield.name}.`,
         tone: 'success'
       });
+      this.triggerUnitsOnBattlefield(battlefield.battlefieldId, player.playerId, 'hold');
+      this.triggerBattlefieldAbility(battlefield, 'hold', player);
     }
   }
 
+  private triggerBattlefieldAbility(
+    battlefield: BattlefieldState,
+    triggerType: CardAbility['triggerType'] | string,
+    player: PlayerState,
+    context?: { boardTarget?: BoardCard; playerTarget?: PlayerState }
+  ): void {
+    const card = battlefield.card;
+    if (!card) {
+      return;
+    }
+    const normalizedTrigger = (triggerType ?? 'play').toLowerCase();
+    const handled = this.handleSpecialBattlefieldEffect(
+      battlefield,
+      normalizedTrigger,
+      player,
+      context
+    );
+    if (handled) {
+      return;
+    }
+    if (!card.abilities || card.abilities.length === 0) {
+      return;
+    }
+    this.triggerAbilities(card, normalizedTrigger, player, undefined, {
+      battlefield,
+      boardTarget: context?.boardTarget,
+      playerTarget: context?.playerTarget
+    });
+  }
+
+  private handleSpecialBattlefieldEffect(
+    battlefield: BattlefieldState,
+    triggerType: string,
+    player: PlayerState,
+    context?: { boardTarget?: BoardCard }
+  ): boolean {
+    const cardId = battlefield.card?.id ?? battlefield.battlefieldId;
+    switch (cardId) {
+      case 'OGN-276': {
+        if (triggerType !== 'setup') {
+          return false;
+        }
+        const state = this.ensureBattlefieldEffectState(battlefield);
+        if (state.victoryBoostApplied) {
+          return true;
+        }
+        state.victoryBoostApplied = true;
+        this.gameState.victoryScore += 1;
+        this.gameState.players.forEach((entry) => {
+          entry.victoryScore += 1;
+        });
+        const ownerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+        this.addDuelLogEntry({
+          playerId: player.playerId,
+          message: `${ownerName} raises the victory threshold via ${battlefield.name}.`,
+          tone: 'info'
+        });
+        return true;
+      }
+      case 'OGN-293': {
+        if (triggerType !== 'hold' || this.gameState.status !== GameStatus.IN_PROGRESS) {
+          return false;
+        }
+        const friendlyUnits = this.getUnitsOnBattlefield(battlefield.battlefieldId).filter(
+          (unit) => this.getPlayerByCard(unit.instanceId).playerId === player.playerId
+        );
+        if (friendlyUnits.length < 7) {
+          return true;
+        }
+        const opponent = this.getOtherPlayer(player);
+        this.addDuelLogEntry({
+          playerId: player.playerId,
+          message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} commands seven units at ${
+            battlefield.name
+          } and claims an immediate victory!`,
+          tone: 'success'
+        });
+        this.endGame(player, opponent, 'victory_points');
+        return true;
+      }
+      case 'SFD-219': {
+        if (triggerType !== 'hold') {
+          return false;
+        }
+        const sourceCard = battlefield.card;
+        const effectContext: EffectOperationContext | undefined = sourceCard
+          ? {
+              source: sourceCard,
+              battlefieldTarget: battlefield,
+              abilityName: sourceCard.name,
+              triggerType: 'hold'
+            }
+          : undefined;
+        for (const target of this.gameState.players) {
+          const before = target.channeledRunes.length;
+          this.channelRunes(target, 1, { tapped: true });
+          const gained = target.channeledRunes.length - before;
+          if (gained > 0 && sourceCard && effectContext) {
+            this.logRuneChange(target, gained, {
+              direction: 'channel',
+              exhausted: true,
+              context: effectContext
+            });
+          }
+        }
+        this.addDuelLogEntry({
+          playerId: player.playerId,
+          message: `${battlefield.name} floods both players with exhausted runes.`,
+          tone: 'info'
+        });
+        return true;
+      }
+      case 'OGN-284': {
+        if (triggerType !== 'turn_start') {
+          return false;
+        }
+        const state = this.ensureBattlefieldEffectState(battlefield);
+        const recipients = (state.turnStartChannel as Record<string, boolean>) ?? {};
+        if (recipients[player.playerId]) {
+          return true;
+        }
+        recipients[player.playerId] = true;
+        state.turnStartChannel = recipients;
+        const before = player.channeledRunes.length;
+        this.channelRunes(player, 1);
+        const gained = player.channeledRunes.length - before;
+        if (gained > 0 && battlefield.card) {
+          this.logRuneChange(player, gained, {
+            direction: 'channel',
+            context: {
+              source: battlefield.card,
+              battlefieldTarget: battlefield,
+              abilityName: battlefield.card.name,
+              triggerType: 'turn_start'
+            }
+          });
+        }
+        return true;
+      }
+      case 'OGN-290': {
+        if (triggerType !== 'turn_start' || this.gameState.status !== GameStatus.IN_PROGRESS) {
+          return false;
+        }
+        const state = this.ensureBattlefieldEffectState(battlefield);
+        const rewarded = (state.turnStartPoints as Record<string, boolean>) ?? {};
+        if (rewarded[player.playerId]) {
+          return true;
+        }
+        rewarded[player.playerId] = true;
+        state.turnStartPoints = rewarded;
+        this.awardVictoryPoints(player, 1, 'objective', battlefield.card?.id);
+        return true;
+      }
+      default:
+        break;
+    }
+    if (triggerType === 'unit_move_from' && cardId === 'OGN-277' && context?.boardTarget) {
+      // Back-Alley Bar grants +1 might to the moving unit for the turn.
+      this.applyTemporaryEffect(context.boardTarget.instanceId, {
+        id: `back_alley_${Date.now()}`,
+        affectedCards: [context.boardTarget.instanceId],
+        duration: 1,
+        effect: {
+          type: 'damage_boost',
+          value: 1
+        }
+      });
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${context.boardTarget.name ?? 'Unit'} leaves ${battlefield.name} invigorated.`,
+        tone: 'info'
+      });
+      return true;
+    }
+    return false;
+  }
+
+  private ensureBattlefieldEffectState(battlefield: BattlefieldState): Record<string, any> {
+    if (!battlefield.effectState) {
+      battlefield.effectState = {};
+    }
+    return battlefield.effectState;
+  }
+
   private markBattlefieldContested(battlefield: BattlefieldState, contestantId: string): void {
+    if (!Array.isArray(battlefield.contestedBy)) {
+      battlefield.contestedBy = [];
+    }
     if (!battlefield.contestedBy.includes(contestantId)) {
       battlefield.contestedBy.push(contestantId);
     }
@@ -3799,20 +5941,41 @@ export class RiftboundGameEngine {
     this.updateActivationState(creature, true, 'move');
   }
 
-  private moveUnitToBase(player: PlayerState, creature: BoardCard): void {
+  private moveUnitToBase(
+    player: PlayerState,
+    creature: BoardCard,
+    options?: { tap?: boolean }
+  ): void {
     if (creature.location.zone === 'base') {
       throw new Error('Unit is already at your base');
     }
-    const previousBattlefield = creature.location.battlefieldId;
+    const previousBattlefieldId = creature.location.battlefieldId;
+    const previousBattlefield = previousBattlefieldId
+      ? this.findBattlefieldState(previousBattlefieldId)
+      : undefined;
     creature.location = { zone: 'base' };
-    this.tapMovedUnit(creature);
-    this.removeContestant(previousBattlefield, player.playerId);
+    this.triggerAbilities(creature, 'move_from_battlefield', player);
+    if (previousBattlefield) {
+      this.triggerBattlefieldAbility(previousBattlefield, 'unit_move_from', player, {
+        boardTarget: creature
+      });
+    }
+    if (options?.tap !== false) {
+      this.tapMovedUnit(creature);
+    } else {
+      creature.isTapped = false;
+      this.updateActivationState(creature, false, 'move');
+    }
+    if (previousBattlefieldId) {
+      this.removeContestant(previousBattlefieldId, player.playerId);
+    }
   }
 
   private moveUnitToBattlefield(
     player: PlayerState,
     creature: BoardCard,
-    battlefield: BattlefieldState
+    battlefield: BattlefieldState,
+    options?: { autoEngage?: boolean; tap?: boolean }
   ): void {
     if (
       creature.location.zone === 'battlefield' &&
@@ -3824,11 +5987,30 @@ export class RiftboundGameEngine {
     const previousLocation =
       creature.location.zone === 'battlefield' ? creature.location.battlefieldId : null;
 
+    if (previousLocation) {
+      this.triggerAbilities(creature, 'move_from_battlefield', player);
+      const previousBattlefield = this.findBattlefieldState(previousLocation);
+      if (previousBattlefield) {
+        this.triggerBattlefieldAbility(previousBattlefield, 'unit_move_from', player, {
+          boardTarget: creature
+        });
+      }
+    }
+
     creature.location = {
       zone: 'battlefield',
       battlefieldId: battlefield.battlefieldId
     };
-    this.tapMovedUnit(creature);
+    this.triggerAbilities(creature, 'move_to_battlefield', player);
+    this.triggerBattlefieldAbility(battlefield, 'unit_move_to', player, {
+      boardTarget: creature
+    });
+    if (options?.tap !== false) {
+      this.tapMovedUnit(creature);
+    } else {
+      creature.isTapped = false;
+      this.updateActivationState(creature, false, 'move');
+    }
 
     if (previousLocation) {
       this.removeContestant(previousLocation, player.playerId);
@@ -3845,19 +6027,69 @@ export class RiftboundGameEngine {
         this.markBattlefieldContested(battlefield, owner.playerId);
       });
     }
-    this.initiateBattlefieldEngagement(player, battlefield);
+    if (options?.autoEngage !== false) {
+      this.initiateBattlefieldEngagement(player, battlefield);
+    }
   }
 
   private untapAllPermanents(player: PlayerState): void {
-    for (const creature of player.board.creatures) {
-      creature.isTapped = false;
+    const untapPermanent = (permanent: BoardCard) => {
+      const wasTapped = Boolean(permanent.isTapped);
+      if (wasTapped) {
+        permanent.isTapped = false;
+      }
+      if (permanent.activationState.active || wasTapped) {
+        this.updateActivationState(permanent, false, 'turn-awaken');
+      }
+    };
+    player.board.creatures.forEach(untapPermanent);
+    player.board.artifacts.forEach(untapPermanent);
+    player.board.enchantments.forEach(untapPermanent);
+  }
+
+  private ensureTokenOperationMetadata(
+    effectText: string,
+    operations?: EffectOperation[]
+  ): EffectOperation[] | undefined {
+    if (!operations || operations.length === 0) {
+      return operations;
     }
-    for (const artifact of player.board.artifacts) {
-      artifact.isTapped = false;
+    const needsMetadata = operations.some(
+      (operation) =>
+        (operation.type === 'create_token' || operation.type === 'summon_unit') &&
+        !(operation.metadata && (operation.metadata as { tokenSpec?: TokenSpec }).tokenSpec)
+    );
+    if (!needsMetadata) {
+      return operations;
     }
-    for (const enchantment of player.board.enchantments) {
-      enchantment.isTapped = false;
+    const tokenSpecs = parseTokenSpecs(effectText ?? '');
+    if (!tokenSpecs.length) {
+      return operations;
     }
+    let cursor = 0;
+    return operations.map((operation) => {
+      if (
+        (operation.type === 'create_token' || operation.type === 'summon_unit') &&
+        !(operation.metadata && (operation.metadata as { tokenSpec?: TokenSpec }).tokenSpec) &&
+        cursor < tokenSpecs.length
+      ) {
+        const tokenSpec = tokenSpecs[cursor++];
+        const metadata = {
+          ...(operation.metadata ?? {}),
+          tokenSpec
+        };
+        const magnitudeHint =
+          operation.magnitudeHint == null && !tokenSpec.variableCount
+            ? tokenSpec.count
+            : operation.magnitudeHint;
+        return {
+          ...operation,
+          metadata,
+          magnitudeHint
+        };
+      }
+      return { ...operation };
+    });
   }
 
   private initiateBattlefieldEngagement(player: PlayerState, battlefield: BattlefieldState): void {
@@ -3867,10 +6099,28 @@ export class RiftboundGameEngine {
     ) {
       this.completeCombatEngagement();
     }
+    const contestingUnits = this.getUnitsOnBattlefield(battlefield.battlefieldId);
+    const attackers: BoardCard[] = [];
+    const defenders: BoardCard[] = [];
+    let defendingPlayerId: string | null = null;
+    if (contestingUnits.length > 0) {
+      contestingUnits.forEach((unit) => {
+        const owner = this.getPlayerByCard(unit.instanceId);
+        if (owner.playerId === player.playerId) {
+          attackers.push(unit);
+        } else {
+          defenders.push(unit);
+          defendingPlayerId = defendingPlayerId ?? owner.playerId;
+        }
+      });
+    }
     this.currentPhase = GamePhase.COMBAT;
     this.gameState.combatContext = {
       battlefieldId: battlefield.battlefieldId,
       initiatedBy: player.playerId,
+      defendingPlayerId,
+      attackingUnitIds: attackers.map((unit) => unit.instanceId),
+      defendingUnitIds: defenders.map((unit) => unit.instanceId),
       priorityStage: 'action',
       actionPasses: 0
     };
@@ -3882,6 +6132,25 @@ export class RiftboundGameEngine {
         battlefield.name
       }.`
     });
+    if (contestingUnits.length > 0) {
+      if (attackers.length > 0) {
+        this.triggerUnits(attackers, 'attack');
+      }
+      if (defenders.length > 0) {
+        this.triggerUnits(defenders, 'defend');
+        const defenderOwners = Array.from(
+          new Set(defenders.map((unit) => this.getPlayerByCard(unit.instanceId).playerId))
+        );
+        defenderOwners.forEach((ownerId) => {
+          const defenderPlayer = this.getPlayerById(ownerId);
+          this.triggerBattlefieldAbility(battlefield, 'defend', defenderPlayer);
+        });
+      }
+      if (attackers.length === 1 && defenders.length === 1) {
+        this.triggerUnits(attackers, 'duel');
+        this.triggerUnits(defenders, 'duel');
+      }
+    }
   }
 
   private completeCombatEngagement(): void {
@@ -3900,6 +6169,9 @@ export class RiftboundGameEngine {
       tone: 'info'
     });
     this.resolveBattlefieldOutcome(battlefield);
+    if (context.initiatedBy) {
+      this.registerBattlefieldBattleForPlayer(context.initiatedBy, battlefield);
+    }
     this.resetCombatContext();
     this.currentPhase = GamePhase.MAIN_1;
     const currentPlayer = this.getCurrentPlayer();
@@ -3928,7 +6200,25 @@ export class RiftboundGameEngine {
     return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
   }
 
+  private getAssaultBonus(unit: BoardCard): number {
+    const context = this.gameState.combatContext;
+    if (!context) {
+      return 0;
+    }
+    const bonus = this.resolveAssaultBonusValue(unit);
+    if (!bonus || bonus <= 0) {
+      return 0;
+    }
+    const attackers = context.attackingUnitIds ?? [];
+    return attackers.includes(unit.instanceId) ? bonus : 0;
+  }
+
   private resolveBattlefieldOutcome(battlefield: BattlefieldState): void {
+    const context = this.gameState.combatContext;
+    const attackInitiator = context?.initiatedBy ?? null;
+    const defendersPresent = Boolean(context?.defendingUnitIds?.length);
+    const didInitiateAttack = (playerId: string): boolean =>
+      Boolean(defendersPresent && attackInitiator && attackInitiator === playerId);
     const presence = new Map<
       string,
       { player: PlayerState; units: BoardCard[]; totalMight: number }
@@ -3948,6 +6238,10 @@ export class RiftboundGameEngine {
       if (Number.isFinite(might)) {
         entry.totalMight += might;
       }
+      const assaultBonus = this.getAssaultBonus(unit);
+      if (assaultBonus > 0) {
+        entry.totalMight += assaultBonus;
+      }
       presence.set(owner.playerId, entry);
     });
     if (presence.size === 0) {
@@ -3965,8 +6259,10 @@ export class RiftboundGameEngine {
         message: `${playerName}'s ${unitsLabel} secure ${battlefield.name} uncontested (${uncontested.totalMight} might).`,
         tone: 'info'
       });
+      this.triggerUnits(uncontested.units, 'combat_win');
       this.applyBattlefieldControl(groups[0].player, battlefield, 'combat', {
-        sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId
+        sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
+        initiatedAttack: didInitiateAttack(uncontested.player.playerId)
       });
       return;
     }
@@ -3999,8 +6295,10 @@ export class RiftboundGameEngine {
         this.destroyUnit(unit, 'combat');
       })
     );
+    this.triggerUnits(winner.units, 'combat_win');
     this.applyBattlefieldControl(winner.player, battlefield, 'combat', {
-      sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId
+      sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
+      initiatedAttack: didInitiateAttack(winner.player.playerId)
     });
   }
 

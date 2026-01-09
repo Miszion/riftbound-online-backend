@@ -16,6 +16,7 @@
     "scrape:piltover": "ts-node scripts/data/scrapePiltover.ts",
     "apply:piltover-costs": "ts-node scripts/data/applyPiltoverCosts.ts",
     "generate:taxonomy": "ts-node scripts/data/buildEffectIndex.ts",
+    "analyze:tokens": "node scripts/data/run-token-creators.js",
     "upload:cards": "ts-node scripts/data/uploadCardCatalog.ts",
     "sync:cards": "npm run generate:cards && npm run scrape:piltover && npm run apply:piltover-costs && npm run generate:taxonomy && npm run upload:cards",
     "docker:publish": "bash scripts/deploy/publish-ecr.sh",

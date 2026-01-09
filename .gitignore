@@ -50,3 +50,4 @@ cdk/lib
 .container-image
 raw/
 data/
+!scripts/data/

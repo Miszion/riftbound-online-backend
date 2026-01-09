@@ -18,11 +18,13 @@ export type ZoneHint = 'hand' | 'deck' | 'board' | 'battlefield' | 'graveyard';
 export type EffectOperationType =
   | 'draw_cards'
   | 'discard_cards'
+  | 'mill_cards'
   | 'modify_stats'
   | 'deal_damage'
   | 'heal'
   | 'summon_unit'
   | 'create_token'
+  | 'return_to_hand'
   | 'remove_permanent'
   | 'move_unit'
   | 'control_battlefield'
@@ -36,6 +38,7 @@ export type EffectOperationType =
   | 'manipulate_priority'
   | 'adjust_mulligan'
   | 'shield'
+  | 'return_from_graveyard'
   | 'generic';
 
 export interface EffectOperation {
@@ -58,6 +61,7 @@ export type EffectClassId =
   | 'heal'
   | 'summon'
   | 'token'
+  | 'hand_return'
   | 'movement'
   | 'battlefield_control'
   | 'removal'
@@ -70,6 +74,7 @@ export type EffectClassId =
   | 'attachment'
   | 'transform'
   | 'mulligan'
+  | 'graveyard_return'
   | 'generic';
 
 export interface EffectClassDefinition {
@@ -133,10 +138,53 @@ export interface CardAssetInfo {
   localPath: string;
 }
 
+export interface CardAbility {
+  name: string;
+  description: string;
+  keyword?: string;
+  triggerType?:
+    | 'play'
+    | 'attack'
+    | 'defend'
+    | 'attack_defend'
+    | 'duel'
+    | 'move'
+    | 'move_to_battlefield'
+    | 'move_from_battlefield'
+    | 'damage'
+    | 'heal'
+    | 'death'
+    | 'death_combat'
+    | 'combat_win'
+    | 'conquer'
+    | 'conquer_after_attack'
+    | 'conquer_open'
+    | 'hold'
+    | 'control'
+    | 'setup'
+    | 'turn_start'
+    | 'unit_move_from'
+    | 'unit_move_to'
+    | string;
+  timing?: ActivationTiming;
+  requiresTarget?: boolean;
+  triggerWindows?: string[];
+  reactionWindows?: string[];
+  effectClasses?: EffectClassId[];
+  references?: string[];
+  targeting?: TargetingProfile;
+  priorityHint?: PriorityHint;
+  operations?: EffectOperation[];
+}
+
 export interface CardBehaviorHints {
   entersUntapped?: boolean;
   entersTapped?: boolean;
   ruleWarnings?: string[];
+  accelerateCost?: {
+    energy: number;
+    rune?: string | null;
+  };
 }
 
 export interface EnrichedCardRecord {
@@ -167,6 +215,7 @@ export interface EnrichedCardRecord {
     source: string;
   };
   behaviorHints?: CardBehaviorHints;
+  abilities?: CardAbility[];
 }
 
 type StoredCardRecord = Omit<EnrichedCardRecord, 'effectProfile' | 'activation'> & {
@@ -294,6 +343,14 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     operation: { type: 'summon_unit', targetHint: 'ally', zone: 'board', automated: false }
   },
   {
+    id: 'hand_return',
+    label: 'Return to hand',
+    description: 'Returns permanents from the board to their owners’ hands (rules 430-450).',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([/return[\s\S]+hand/i]),
+    operation: { type: 'return_to_hand', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
     id: 'token',
     label: 'Token creation',
     description: 'Creates token units or copies (rules 340-360).',
@@ -332,6 +389,18 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     ruleRefs: ['403', '409'],
     patterns: buildPatterns([/\brecycle\b/i, /\bshuffle\b/i, /\bput\b.*bottom\b/i]),
     operation: { type: 'recycle_card', targetHint: 'self', zone: 'deck', automated: true }
+  },
+  {
+    id: 'graveyard_return',
+    label: 'Graveyard recursion',
+    description: 'Returns cards from the trash/graveyard to a hand (rules 408-410).',
+    ruleRefs: ['408', '409', '410'],
+    patterns: buildPatterns([
+      /\breturn\b.*\bgraveyard\b/i,
+      /\breturn\b.*\btrash\b/i,
+      /\breturn\b.*\bfrom your\b.*\bhand\b/i
+    ]),
+    operation: { type: 'return_from_graveyard', targetHint: 'ally', zone: 'graveyard', automated: false }
   },
   {
     id: 'search',
@@ -470,9 +539,12 @@ const detectPriority = (text: string, activation: ActivationProfile): PriorityHi
 };
 
 const matchEffectClasses = (text: string, activation: ActivationProfile): EffectClassDefinition[] => {
-  const matches = EFFECT_CLASS_DEFINITIONS.filter((definition) =>
-    definition.patterns.some((pattern) => pattern.test(text))
-  );
+  const matches = EFFECT_CLASS_DEFINITIONS.filter((definition) => {
+    if (definition.id === 'hand_return' && /\b(trash|graveyard)\b/i.test(text)) {
+      return false;
+    }
+    return definition.patterns.some((pattern) => pattern.test(text));
+  });
   if (matches.length > 0) {
     return matches;
   }
@@ -485,19 +557,63 @@ const matchEffectClasses = (text: string, activation: ActivationProfile): Effect
   return [GENERIC_EFFECT_CLASS];
 };
 
+const normalizeTokenOperations = (profile: EffectProfile): EffectProfile => {
+  if (!profile.classes.includes('token')) {
+    return profile;
+  }
+  const hasSummonClass = profile.classes.includes('summon');
+  const filteredOperations = profile.operations.filter((operation) => {
+    if (operation.type !== 'summon_unit') {
+      return true;
+    }
+    // Drop redundant summon operations when token classes already cover the effect.
+    return !hasSummonClass;
+  });
+  if (!hasSummonClass) {
+    return {
+      ...profile,
+      operations: filteredOperations
+    };
+  }
+  const sanitizedClasses = profile.classes.filter((entry) => entry !== 'summon');
+  const primaryClass =
+    profile.primaryClass === 'summon'
+      ? sanitizedClasses[0] ?? profile.primaryClass
+      : profile.primaryClass;
+  return {
+    ...profile,
+    classes: sanitizedClasses,
+    primaryClass,
+    operations: filteredOperations
+  };
+};
+
 export const buildEffectProfile = (
   effect: string,
-  activation: ActivationProfile
+  activation: ActivationProfile,
+  tokenSpecsOverride?: TokenSpec[]
 ): EffectProfile => {
   const text = effect || '';
-  const classes = matchEffectClasses(text, activation);
-  const tokenSpecs = extractTokenSpecs(text);
+  const matchedClasses = matchEffectClasses(text, activation);
+  const tokenSpecs = tokenSpecsOverride ?? extractTokenSpecs(text);
+  const hasExplicitTokenClass = matchedClasses.some((definition) => definition.id === 'token');
+  const classes =
+    hasExplicitTokenClass && tokenSpecs.length > 0
+      ? matchedClasses.filter((definition) => definition.id !== 'summon')
+      : matchedClasses;
   let tokenCursor = 0;
   const operations = classes.map((definition) => {
     const operation = {
       ...definition.operation,
       ruleRefs: definition.ruleRefs
     };
+    if (
+      operation.type === 'discard_cards' &&
+      operation.targetHint === 'enemy' &&
+      /\bwhen\s*i\b/.test(text.toLowerCase())
+    ) {
+      operation.targetHint = 'self';
+    }
     const magnitude = extractMagnitudeFromEffect(text, operation.type);
     if (magnitude !== null) {
       operation.magnitudeHint = magnitude;
@@ -525,7 +641,7 @@ export const buildEffectProfile = (
     requiresSelection: activation.requiresTarget
   };
 
-  return {
+  return normalizeTokenOperations({
     classes: classes.map((definition) => definition.id),
     primaryClass: classes[0]?.id ?? null,
     operations,
@@ -533,22 +649,17 @@ export const buildEffectProfile = (
     priority: detectPriority(text, activation),
     references,
     reliability: classes.some((definition) => definition.id === 'generic') ? 'heuristic' : 'exact'
-  };
+  });
 };
 const ENRICHED_DATA_PATH = path.resolve(process.cwd(), 'data', 'cards.enriched.json');
-
-const DOMAIN_SYMBOL_BY_COLOR: Record<string, string> = {
-  fury: 'R',
-  calm: 'G',
-  mind: 'B',
-  body: 'O',
-  chaos: 'P',
-  order: 'Y'
-};
 
 const ACTION_PREFIX_CARD_TYPES = new Set<string>(['spell', 'action']);
 const UNTAPPED_PATTERN = /\b(enters?|enter)\b[^.]*\b(untapped|ready|stand)\b/i;
 const TAPPED_PATTERN = /\b(enters?|enter)\b[^.]*\b(tapped|exhausted)\b/i;
+const ACCELERATE_CLAUSE_REGEX = /\[Accelerate\][^)]*\(([^)]+)\)/i;
+const ENERGY_SYMBOL_REGEX = /:rb_energy_(\d+):/i;
+const RUNE_SYMBOL_REGEX = /:rb_rune_([a-z]+):/i;
+const ACCELERATE_RUNES = new Set(['fury', 'calm', 'mind', 'body', 'chaos', 'order']);
 const WORD_NUMBER_REGEX = 'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve';
 const NUMBER_WORDS: Record<string, number> = {
   one: 1,
@@ -590,20 +701,7 @@ const listify = (value: unknown): string[] => {
     .filter(Boolean);
 };
 
-const deriveDomainSymbolsFromColors = (colors: string[]): string[] => {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  colors.forEach((color) => {
-    const symbol = DOMAIN_SYMBOL_BY_COLOR[color?.toLowerCase()];
-    if (symbol && !seen.has(symbol)) {
-      seen.add(symbol);
-      resolved.push(symbol);
-    }
-  });
-  return resolved;
-};
-
-const parseCost = (raw: unknown, colors: string[]): CardCostProfile => {
+const parseCost = (raw: unknown, _colors: string[]): CardCostProfile => {
   const normalized = normalize(raw);
   const digits = normalized ? normalized.match(/\d+/g) : null;
   const energy = digits ? Number(digits.join('')) : null;
@@ -615,12 +713,9 @@ const parseCost = (raw: unknown, colors: string[]): CardCostProfile => {
         .map((symbol) => symbol[0]?.toUpperCase() ?? '')
         .filter(Boolean)
     : [];
-  const fallbackSymbols =
-    explicitSymbols.length > 0 ? explicitSymbols : deriveDomainSymbolsFromColors(colors);
-
   return {
     energy: Number.isFinite(energy) ? energy : null,
-    powerSymbols: fallbackSymbols,
+    powerSymbols: explicitSymbols,
     raw: normalized || null
   };
 };
@@ -723,7 +818,7 @@ const extractMagnitudeFromEffect = (
 };
 
 const TOKEN_REGEX =
-  /play\s+(?<quantifier>a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)?\s*(?<ready>ready)?\s*(?<might>\d+)\s*(?::rb_might:|\[might\])\s*(?<name>[A-Za-z' -]+?)\s+unit token/gi;
+  /play\s+(?<quantifier>a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)?\s*(?<ready>ready)?\s*(?<might>\d+)\s*(?::rb[\s_]*might:|\[might\])\s*(?<name>[A-Za-z' -]+?)\s+unit token/gi;
 const FLEXIBLE_PLACEMENT_REGEX =
   /\bdifferent locations\b|\bchoose\b.*\blocation\b|\bbattlefields you control\b|\bto each\b/i;
 const VARIABLE_COUNT_REGEX =
@@ -808,6 +903,45 @@ const extractTokenSpecs = (effect: string): TokenSpec[] => {
   return specs;
 };
 
+export const parseTokenSpecs = (effect: string): TokenSpec[] => extractTokenSpecs(effect);
+
+export const parseAssaultBonus = (effect?: string | null): number | null => {
+  if (!effect) {
+    return null;
+  }
+  const normalized = sanitizeEffectText(effect);
+  if (!normalized) {
+    return null;
+  }
+  const lowered = normalized.toLowerCase();
+  const referencesSelf = /\b(i|i'm|im|me|my|mine)\b/.test(lowered);
+  if (!referencesSelf) {
+    return null;
+  }
+  if (/\bassault\b[^.]{0,80}\bequal to\b/.test(lowered)) {
+    return null;
+  }
+  const bracketMatch = lowered.match(/\[assault(?:\s*(\d+))?\]/);
+  if (bracketMatch) {
+    if (bracketMatch[1]) {
+      const parsed = Number(bracketMatch[1]);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    const plusMatch = lowered.match(/\+(\d+)\s*(?::?rb[\s_]*might:?|\[might\]|\bmight\b)/);
+    if (plusMatch && plusMatch[1]) {
+      const parsed = Number(plusMatch[1]);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+  const inlineMatch = lowered.match(/assault\s+(\d+)/);
+  if (inlineMatch && inlineMatch[1]) {
+    const parsed = Number(inlineMatch[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 const ensureRulesCompliantEffect = (effect: string, rawType: unknown) => {
   const warnings: string[] = [];
   let text = effect.trim();
@@ -829,6 +963,36 @@ const ensureRulesCompliantEffect = (effect: string, rawType: unknown) => {
   return { text, warnings };
 };
 
+const normalizeAccelerateRune = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.toLowerCase();
+  return ACCELERATE_RUNES.has(normalized) ? normalized : null;
+};
+
+const extractAccelerateCost = (effectText: string): CardBehaviorHints['accelerateCost'] | null => {
+  const clauseMatch = ACCELERATE_CLAUSE_REGEX.exec(effectText);
+  if (!clauseMatch || !clauseMatch[1]) {
+    return null;
+  }
+  const clause = clauseMatch[1];
+  const energyMatch = ENERGY_SYMBOL_REGEX.exec(clause);
+  if (!energyMatch || !energyMatch[1]) {
+    return null;
+  }
+  const energy = parseInt(energyMatch[1], 10);
+  if (!Number.isFinite(energy) || energy <= 0) {
+    return null;
+  }
+  const runeMatch = RUNE_SYMBOL_REGEX.exec(clause);
+  const rune = runeMatch && runeMatch[1] ? normalizeAccelerateRune(runeMatch[1]) : null;
+  return {
+    energy,
+    rune
+  };
+};
+
 const buildBehaviorHints = (effectText: string, warnings: string[]): CardBehaviorHints => {
   const hints: CardBehaviorHints = {};
   if (UNTAPPED_PATTERN.test(effectText)) {
@@ -836,6 +1000,10 @@ const buildBehaviorHints = (effectText: string, warnings: string[]): CardBehavio
   }
   if (TAPPED_PATTERN.test(effectText)) {
     hints.entersTapped = true;
+  }
+  const accelerateCost = extractAccelerateCost(effectText);
+  if (accelerateCost) {
+    hints.accelerateCost = accelerateCost;
   }
   if (warnings.length > 0) {
     hints.ruleWarnings = warnings;
@@ -928,7 +1096,7 @@ const deriveTiming = (effect: string): ActivationTiming => {
 
 export const buildActivation = (effect: string): ActivationProfile => {
   const text = effect || '';
-  return {
+  const profile: ActivationProfile = {
     timing: deriveTiming(text),
     triggers: deriveTriggers(text),
     actions: deriveActions(text),
@@ -936,6 +1104,17 @@ export const buildActivation = (effect: string): ActivationProfile => {
     reactionWindows: deriveReactionWindows(text),
     stateful: /\bbuff\b|\bheal\b|\btransform\b|\bsummon\b/i.test(text)
   };
+  if (
+    !profile.requiresTarget &&
+    /\breturn\b/i.test(text) &&
+    /\bhand\b/i.test(text) &&
+    !/\breturn\b[\s\S]+\ball\b/i.test(text) &&
+    !/\breturn\b[\s\S]+\beach\b/i.test(text) &&
+    !/\b(trash|graveyard)\b/i.test(text)
+  ) {
+    profile.requiresTarget = true;
+  }
+  return profile;
 };
 
 export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
@@ -1001,8 +1180,8 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
 };
 
 const normalizeCatalogRecord = (record: StoredCardRecord): EnrichedCardRecord => {
-  const activation = record.activation ?? buildActivation(record.effect);
-  const effectProfile = record.effectProfile ?? buildEffectProfile(record.effect, activation);
+  const activation = buildActivation(record.effect);
+  const effectProfile = normalizeTokenOperations(buildEffectProfile(record.effect, activation));
   return {
     ...record,
     activation,
@@ -1055,6 +1234,11 @@ export const findCardById = (id: string): EnrichedCardRecord | undefined => {
 
 export const findCardBySlug = (slug: string): EnrichedCardRecord | undefined => {
   return getCachedCatalog().find((card) => card.slug.toLowerCase() === slug.toLowerCase());
+};
+
+export const findCardByName = (name: string): EnrichedCardRecord | undefined => {
+  const normalized = name.trim().toLowerCase();
+  return getCachedCatalog().find((card) => card.name.trim().toLowerCase() === normalized);
 };
 
 export const getImageManifest = (): ImageManifestEntry[] => {

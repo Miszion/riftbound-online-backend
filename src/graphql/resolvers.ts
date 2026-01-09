@@ -18,9 +18,10 @@ import {
   findCardById as findCatalogCardById,
   findCardBySlug as findCatalogCardBySlug,
   getImageManifest,
-  buildActivationStateIndex,
+  buildActivationStateIndex
 } from '../card-catalog';
 import type { EnrichedCardRecord } from '../card-catalog';
+import { TABLE_NAMES } from '../config/tableNames';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -338,10 +339,7 @@ type DeckCardRecord = {
   cardSnapshot?: CardSnapshotRecord;
 };
 
-const decklistsTableName =
-  process.env.DECKLISTS_TABLE ||
-  process.env.DECKS_TABLE ||
-  'riftbound-online-decklists-dev';
+const decklistsTableName = TABLE_NAMES.DECKLISTS;
 const deckIdIndexName = 'DeckIdIndex';
 const MIN_DECK_SIZE = 39;
 const MAX_DECK_SIZE = 39;
@@ -350,10 +348,7 @@ const MAX_RUNE_COPIES = 12;
 const MAX_RUNE_TOTAL = 12;
 const MAX_SIDE_DECK_CARDS = 8;
 const BATTLEFIELD_SLOTS = 3;
-const matchTableName =
-  process.env.MATCH_TABLE ||
-  process.env.MATCH_HISTORY_TABLE ||
-  'riftbound-online-matches-dev';
+const matchTableName = TABLE_NAMES.MATCHES;
 export type MatchMode = 'ranked' | 'free';
 const rankedMatchmakingQueueUrl =
   process.env.MATCHMAKING_RANKED_QUEUE_URL ||
@@ -368,8 +363,7 @@ const matchmakingQueueUrls: Record<MatchMode, string | null> = {
   ranked: rankedMatchmakingQueueUrl,
   free: quickPlayMatchmakingQueueUrl
 };
-const MATCHMAKING_QUEUE_TABLE =
-  process.env.MATCHMAKING_QUEUE_TABLE || 'riftbound-online-matchmaking-queue-dev';
+const MATCHMAKING_QUEUE_TABLE = TABLE_NAMES.MATCHMAKING_QUEUE;
 const MATCHMAKING_MODES: MatchMode[] = ['ranked', 'free'];
 const MATCHMAKING_STATE = {
   QUEUED: 'queued',
@@ -619,7 +613,8 @@ const queueKey = (mode: MatchMode, userId: string) => ({
   UserId: userId
 });
 
-const queueTtlSeconds = () => Math.floor((Date.now() + 15 * 60 * 1000) / 1000);
+const queueTtlSeconds = (durationMs = 15 * 60 * 1000) =>
+  Math.floor((Date.now() + durationMs) / 1000);
 
 const emitMatchmakingQueueEvent = async (
   mode: MatchMode,
@@ -764,6 +759,81 @@ const publishMatchmakingStatusUpdate = async (userId: string, mode: MatchMode) =
       error,
     });
   }
+};
+
+const normalizePlayerId = (value: any): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const resolveMatchPlayerIds = (
+  gameState?: { players?: any[] } | null,
+  matchResult?: { players?: any[]; winner?: string; loser?: string } | null
+): string[] => {
+  const ids = new Set<string>();
+  const register = (candidate: any) => {
+    const normalized = normalizePlayerId(
+      candidate?.playerId ?? candidate?.userId ?? candidate?.id ?? candidate
+    );
+    if (normalized) {
+      ids.add(normalized);
+    }
+  };
+  if (gameState?.players && Array.isArray(gameState.players)) {
+    gameState.players.forEach(register);
+  }
+  if (matchResult?.players && Array.isArray(matchResult.players)) {
+    matchResult.players.forEach(register);
+  }
+  register(matchResult?.winner);
+  register(matchResult?.loser);
+  return Array.from(ids.values());
+};
+
+const removePlayersFromMatchmaking = async (playerIds: string[], reason: string) => {
+  const uniqueIds = Array.from(
+    new Set(playerIds.map((id) => normalizePlayerId(id)).filter((id): id is string => Boolean(id)))
+  );
+  if (!uniqueIds.length) {
+    return;
+  }
+  await Promise.all(
+    MATCHMAKING_MODES.map(async (mode) => {
+      await Promise.all(
+        uniqueIds.map(async (playerId) => {
+          try {
+            const result = await dynamodb
+              .delete({
+                TableName: MATCHMAKING_QUEUE_TABLE,
+                Key: queueKey(mode, playerId),
+                ReturnValues: 'ALL_OLD'
+              })
+              .promise();
+            if (result.Attributes) {
+              await Promise.all([
+                emitMatchmakingQueueEvent(mode, {
+                  type: 'exit_queue',
+                  userId: playerId,
+                  reason
+                }),
+                publishMatchmakingStatusUpdate(playerId, mode)
+              ]);
+            }
+          } catch (error) {
+            logger.warn(
+              `[MATCHMAKING] Failed to remove player ${playerId} from ${mode} queue after ${reason}`,
+              {
+                error
+              }
+            );
+          }
+        })
+      );
+    })
+  );
 };
 
 const getMmrTolerance = (mode: MatchMode, waitMs: number): number => {
@@ -975,6 +1045,39 @@ const attemptMatch = async (mode: MatchMode) => {
             continue;
           }
 
+          const extendMatchedPlayersTtl = async () => {
+            const extendedTtl = queueTtlSeconds(60 * 60 * 1000);
+            const touchedAt = Date.now();
+            await Promise.all(
+              playerIds.map(async (playerId) => {
+                try {
+                  await dynamodb
+                    .update({
+                      TableName: MATCHMAKING_QUEUE_TABLE,
+                      Key: queueKey(mode, playerId),
+                      ConditionExpression: '#state = :matched AND MatchId = :matchId',
+                      UpdateExpression: 'SET ExpiresAt = :expires, UpdatedAt = :now',
+                      ExpressionAttributeNames: {
+                        '#state': 'State'
+                      },
+                      ExpressionAttributeValues: {
+                        ':matched': MATCHMAKING_STATE.MATCHED,
+                        ':matchId': matchId,
+                        ':expires': extendedTtl,
+                        ':now': touchedAt
+                      }
+                    })
+                    .promise();
+                } catch (error) {
+                  logger.warn(
+                    `[MATCHMAKING] Failed to extend TTL for player ${playerId} after match init`,
+                    error
+                  );
+                }
+              })
+            );
+          };
+
           try {
             await spawnMatchService({
               matchId,
@@ -984,6 +1087,7 @@ const attemptMatch = async (mode: MatchMode) => {
               authToken: authTokenForInit,
               playerProfiles
             });
+            await extendMatchedPlayersTtl();
             await Promise.all(
               playerIds.map((playerId) => publishMatchmakingStatusUpdate(playerId, mode))
             );
@@ -1150,16 +1254,19 @@ export const queryResolvers = {
     const targetUserId = userId || requireUser(context);
     requireUser(context, targetUserId);
     try {
-      const result = await dynamodb.query({
-        TableName: process.env.MATCH_HISTORY_TABLE || 'riftbound-online-match-history-dev',
-        IndexName: 'UserIdIndex',
-        KeyConditionExpression: 'UserId = :userId',
-        ExpressionAttributeValues: {
-          ':userId': targetUserId,
-        },
-        Limit: limit,
-        ScanIndexForward: false,
-      }).promise();
+      const safeLimit = Math.min(Math.max(limit, 1), 50);
+      const result = await dynamodb
+        .query({
+          TableName: TABLE_NAMES.MATCH_HISTORY,
+          IndexName: 'UserIdIndex',
+          KeyConditionExpression: 'UserId = :userId',
+          ExpressionAttributeValues: {
+            ':userId': targetUserId
+          },
+          Limit: safeLimit,
+          ScanIndexForward: false
+        })
+        .promise();
 
       return (result.Items || []).map((item: any) => ({
         matchId: item.MatchId,
@@ -1526,6 +1633,78 @@ export const mutationResolvers = {
     }
   },
 
+  async submitDiscardSelection(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      promptId,
+      cardInstanceIds
+    }: { matchId: string; playerId: string; promptId: string; cardInstanceIds: string[] },
+    context: ResolverContext
+  ) {
+    const targetUser = requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'discard',
+        {
+          playerId,
+          promptId,
+          cardInstanceIds: Array.isArray(cardInstanceIds) ? cardInstanceIds : []
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      logger.info(
+        `[DISCARD] Player ${playerId} (${targetUser}) resolved discard prompt ${promptId} for match ${matchId}`
+      );
+
+      return spectatorState;
+    } catch (error) {
+      logger.error('[DISCARD] Error:', error);
+      throw error;
+    }
+  },
+
+  async submitTargetSelection(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      promptId,
+      selectionIds
+    }: { matchId: string; playerId: string; promptId: string; selectionIds: string[] },
+    context: ResolverContext
+  ) {
+    const targetUser = requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'target',
+        {
+          playerId,
+          promptId,
+          selectionIds: Array.isArray(selectionIds) ? selectionIds : []
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      logger.info(
+        `[TARGET] Player ${playerId} (${targetUser}) resolved target prompt ${promptId} for match ${matchId}`
+      );
+
+      return spectatorState;
+    } catch (error) {
+      logger.error('[TARGET] Error:', error);
+      throw error;
+    }
+  },
+
   async selectBattlefield(
     _parent: any,
     { matchId, playerId, battlefieldId }: { matchId: string; playerId: string; battlefieldId: string },
@@ -1559,12 +1738,14 @@ export const mutationResolvers = {
       cardIndex,
       targets,
       destinationId,
+      useAccelerate
     }: {
       matchId: string;
       playerId: string;
       cardIndex: number;
       targets?: string[];
       destinationId?: string | null;
+      useAccelerate?: boolean | null;
     },
     context: ResolverContext
   ) {
@@ -1600,6 +1781,7 @@ export const mutationResolvers = {
           cardIndex,
           targets: targets ?? [],
           destinationId,
+          useAccelerate: Boolean(useAccelerate),
         },
         context.authToken
       );
@@ -1727,6 +1909,44 @@ export const mutationResolvers = {
       };
     } catch (error: any) {
       logger.error('[MOVE-UNIT] Error:', error);
+      throw error;
+    }
+  },
+
+  async commenceBattle(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      battlefieldId
+    }: {
+      matchId: string;
+      playerId: string;
+      battlefieldId: string;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'commence-battle',
+        {
+          playerId,
+          battlefieldId
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase
+      };
+    } catch (error: any) {
+      logger.error('[COMMENCE-BATTLE] Error:', error);
       throw error;
     }
   },
@@ -1968,6 +2188,8 @@ export const mutationResolvers = {
       );
 
       publishMatchCompletion(matchId, response.matchResult);
+      const resolvedPlayers = resolveMatchPlayerIds(response.gameState, response.matchResult);
+      await removePlayersFromMatchmaking(resolvedPlayers, 'match_completed');
 
       logger.info(`[MATCH-COMPLETE] Match ${matchId} completed. Winner: ${winner}`);
 
@@ -2002,6 +2224,8 @@ export const mutationResolvers = {
       );
 
       publishMatchCompletion(matchId, response.matchResult);
+      const resolvedPlayers = resolveMatchPlayerIds(response.gameState, response.matchResult);
+      await removePlayersFromMatchmaking(resolvedPlayers, 'match_conceded');
 
       logger.info(
         `[MATCH-CONCEDE] Match ${matchId} ended. Winner: ${response.matchResult.winner}`
