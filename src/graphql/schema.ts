@@ -350,6 +350,7 @@ export const typeDefs = `#graphql
 
   type ChampionAbilityState {
     canActivate: Boolean!
+    hasManualActivation: Boolean!
     reason: String
     costSummary: String
     cost: ChampionAbilityCostState

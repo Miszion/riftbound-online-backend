@@ -272,6 +272,7 @@ const serializeChampionAbilityState = (
   state?: ChampionAbilityRuntimeState | null
 ): {
   canActivate: boolean;
+  hasManualActivation: boolean;
   reason: string | null;
   costSummary: string | null;
   cost: {
@@ -285,6 +286,7 @@ const serializeChampionAbilityState = (
   }
   return {
     canActivate: state.canActivate,
+    hasManualActivation: state.hasManualActivation,
     reason: state.reason ?? null,
     costSummary: state.costSummary ?? null,
     cost: state.cost

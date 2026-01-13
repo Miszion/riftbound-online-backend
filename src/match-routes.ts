@@ -124,20 +124,79 @@ const persistMatchFinalState = async (
   reason: string
 ) => {
   const spectatorState = serializeGameState(rawState);
+  
+  // Always resolve participant IDs for queue cleanup
+  const resolvedParticipants = resolveParticipantIds(rawState.players, matchResult);
+  
+  // Helper to ensure queue cleanup happens (with error handling to not fail the main operation)
+  const ensureQueueCleanup = async () => {
+    if (resolvedParticipants.length > 0) {
+      try {
+        logger.info('[MATCH-FINALIZED] Ensuring players removed from queues', {
+          matchId,
+          resolvedParticipants,
+          reason
+        });
+        await removePlayersFromQueues(resolvedParticipants, reason);
+      } catch (cleanupError) {
+        logger.error('[MATCH-FINALIZED] Queue cleanup failed but continuing', {
+          matchId,
+          resolvedParticipants,
+          reason,
+          error: cleanupError
+        });
+      }
+    }
+  };
+  
   if (rawState.outcomePersisted) {
+    // Match already persisted by this engine instance, but still ensure queue cleanup
+    await ensureQueueCleanup();
     return spectatorState;
+  }
+
+  // Check if match has already been persisted to avoid duplicate writes
+  try {
+    const existingMatch = await dynamodb
+      .query({
+        TableName: MATCH_TABLE,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        ProjectionExpression: '#status',
+        ExpressionAttributeNames: { '#status': 'Status' },
+        Limit: 1
+      })
+      .promise();
+    
+    if (existingMatch.Items?.length && existingMatch.Items[0]?.Status === 'completed') {
+      logger.info('[MATCH-FINALIZED] Match already persisted, skipping duplicate write', {
+        matchId,
+        reason
+      });
+      rawState.outcomePersisted = true;
+      // Still ensure queue cleanup even if match was already persisted
+      await ensureQueueCleanup();
+      return spectatorState;
+    }
+  } catch (checkError) {
+    logger.warn('[MATCH-FINALIZE] Failed to check existing match record, proceeding with write', {
+      matchId,
+      error: checkError
+    });
   }
 
   const moveHistory = Array.isArray(matchResult.moves)
     ? matchResult.moves
     : rawState.moveHistory ?? [];
   const moveCount = moveHistory.length;
+  const timestamp = Date.now();
 
   await dynamodb
     .put({
       TableName: MATCH_TABLE,
       Item: {
         MatchId: matchId,
+        Timestamp: timestamp,
         Players: rawState.players.map((p) => p.playerId),
         Winner: matchResult.winner,
         Loser: matchResult.loser,
@@ -149,7 +208,7 @@ const persistMatchFinalState = async (
         DuelLog: spectatorState.duelLog ?? [],
         ChatLog: spectatorState.chatLog ?? [],
         FinalState: spectatorState,
-        CreatedAt: Date.now(),
+        CreatedAt: timestamp,
         Status: 'completed'
       }
     })
@@ -159,8 +218,9 @@ const persistMatchFinalState = async (
     ...matchResult,
     moves: moveHistory
   });
-  const resolvedParticipants = resolveParticipantIds(rawState.players, matchResult);
-  await removePlayersFromQueues(resolvedParticipants, reason);
+  
+  // Use the helper that was defined at the top of the function
+  await ensureQueueCleanup();
   rawState.outcomePersisted = true;
 
   logger.info('[MATCH-FINALIZED]', {
@@ -214,34 +274,63 @@ const removePlayersFromQueues = async (playerIds: string[], reason: string) => {
   const uniqueIds = Array.from(
     new Set(playerIds.map((id) => normalizePlayerId(id)).filter((id): id is string => Boolean(id)))
   );
+  
+  logger.info('[MATCHMAKING] removePlayersFromQueues called', {
+    inputPlayerIds: playerIds,
+    normalizedUniqueIds: uniqueIds,
+    reason,
+    tableName: MATCHMAKING_QUEUE_TABLE,
+    modes: MATCHMAKING_MODES
+  });
+  
   if (!uniqueIds.length) {
+    logger.warn('[MATCHMAKING] No valid player IDs to remove from queue', {
+      inputPlayerIds: playerIds,
+      reason
+    });
     return;
   }
   await Promise.all(
     MATCHMAKING_MODES.map(async (mode) => {
       await Promise.all(
         uniqueIds.map(async (playerId) => {
+          const key = queueKey(mode, playerId);
+          logger.info('[MATCHMAKING] Attempting to delete queue entry', {
+            mode,
+            playerId,
+            key,
+            tableName: MATCHMAKING_QUEUE_TABLE,
+            reason
+          });
           try {
             const result = await dynamodb
               .delete({
                 TableName: MATCHMAKING_QUEUE_TABLE,
-                Key: queueKey(mode, playerId),
+                Key: key,
                 ReturnValues: 'ALL_OLD'
               })
               .promise();
             if (result.Attributes) {
-              logger.info('[MATCHMAKING] Removed player from queue after match resolution', {
+              logger.info('[MATCHMAKING] Successfully removed player from queue after match resolution', {
+                mode,
+                playerId,
+                reason,
+                deletedAttributes: result.Attributes
+              });
+            } else {
+              logger.info('[MATCHMAKING] No queue entry found to delete (may already be removed)', {
                 mode,
                 playerId,
                 reason
               });
             }
           } catch (error) {
-            logger.warn('[MATCHMAKING] Failed to remove player from queue after match resolution', {
+            logger.error('[MATCHMAKING] Failed to remove player from queue after match resolution', {
               mode,
               playerId,
               reason,
-              error
+              error,
+              tableName: MATCHMAKING_QUEUE_TABLE
             });
           }
         })
@@ -1634,13 +1723,26 @@ matchRouter.post('/matches/:matchId/concede', async (req: Request, res: Response
       });
       return;
     }
+    
+    // Log full error details for debugging
     logger.error('[CONCEDE] Error:', {
-      error,
+      error: {
+        message: error?.message,
+        name: error?.name,
+        stack: error?.stack,
+        code: error?.code
+      },
       matchId: req.params.matchId,
       playerId: req.body?.playerId,
       requestId: context.requestId ?? null
     });
-    res.status(500).json({ error: 'Failed to concede match' });
+    
+    // Return more specific error message
+    const errorMessage = error?.message || 'Failed to concede match';
+    res.status(500).json({ 
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+    });
   }
 });
 

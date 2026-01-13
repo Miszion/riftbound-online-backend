@@ -22,6 +22,7 @@ import {
   ChampionAbilityCost,
   DomainKey,
   canSatisfyChampionCost,
+  hasManualActivation,
   parseChampionAbilityCost,
   summarizeChampionCost
 } from './champion-utils';
@@ -183,6 +184,7 @@ export interface PlayerState {
 
 export interface ChampionAbilityRuntimeState {
   canActivate: boolean;
+  hasManualActivation: boolean;
   reason?: string | null;
   cost: ChampionAbilityCost;
   costSummary: string;
@@ -2187,7 +2189,8 @@ export class RiftboundGameEngine {
 
   private resolveDeploymentLocation(
     player: PlayerState,
-    destinationId?: string | null
+    destinationId?: string | null,
+    card?: Card | null
   ): CardLocation {
     if (!destinationId || destinationId === 'base') {
       return { zone: 'base' };
@@ -2196,13 +2199,39 @@ export class RiftboundGameEngine {
     if (!battlefield) {
       throw new Error('Battlefield not found');
     }
-    if (battlefield.controller !== player.playerId) {
-      throw new Error('You must control a battlefield to deploy there');
+    
+    // If player controls the battlefield, always allow deployment
+    if (battlefield.controller === player.playerId) {
+      return {
+        zone: 'battlefield',
+        battlefieldId: battlefield.battlefieldId
+      };
     }
-    return {
-      zone: 'battlefield',
-      battlefieldId: battlefield.battlefieldId
-    };
+    
+    // Check card-specific deployment permissions
+    const cardPerms = card ? this.getCardBattlefieldDeploymentPermissions(card) : null;
+    const hasAllyGrant = this.hasAllyGrantingOpenBattlefieldDeploy(player);
+    const isOpenBattlefield = !battlefield.controller;
+    const isEnemyOccupied = battlefield.controller && battlefield.controller !== player.playerId;
+    
+    // Can deploy to open battlefield if card says so OR if an ally grants the ability
+    if (isOpenBattlefield && (cardPerms?.canPlayToOpenBattlefield || hasAllyGrant)) {
+      return {
+        zone: 'battlefield',
+        battlefieldId: battlefield.battlefieldId
+      };
+    }
+    
+    // Can deploy to occupied enemy battlefield if card says so
+    if (isEnemyOccupied && cardPerms?.canPlayToOccupiedEnemyBattlefield) {
+      return {
+        zone: 'battlefield',
+        battlefieldId: battlefield.battlefieldId
+      };
+    }
+    
+    // Default: must control battlefield
+    throw new Error('You must control a battlefield to deploy there');
   }
 
   /**
@@ -3538,20 +3567,29 @@ export class RiftboundGameEngine {
     if (!champion) {
       return null;
     }
-    const abilityCost = parseChampionAbilityCost(champion.text ?? '');
+    const championText = champion.text ?? '';
+    const isManuallyActivatable = hasManualActivation(championText);
+    const abilityCost = parseChampionAbilityCost(championText);
     const reasons: string[] = [];
+    
+    // If the champion doesn't have a manual activation, it can never be activated
+    if (!isManuallyActivatable) {
+      reasons.push('Passive ability only');
+    }
+    
     if (abilityCost.requiresExhaust && champion.isTapped) {
       reasons.push('Champion is exhausted');
     }
     const canAfford = canSatisfyChampionCost(player.channeledRunes, abilityCost);
-    if (!canAfford) {
+    if (!canAfford && isManuallyActivatable) {
       reasons.push('Insufficient energy');
     }
     return {
-      canActivate: reasons.length === 0,
+      canActivate: reasons.length === 0 && isManuallyActivatable,
+      hasManualActivation: isManuallyActivatable,
       reason: reasons.length ? reasons.join('; ') : null,
       cost: abilityCost,
-      costSummary: summarizeChampionCost(abilityCost)
+      costSummary: isManuallyActivatable ? summarizeChampionCost(abilityCost) : 'Passive'
     };
   }
 
@@ -3586,6 +3624,7 @@ export class RiftboundGameEngine {
     const pseudoCost = this.cardCostToChampionAbilityCost(cardCost);
     return {
       canActivate: reasons.length === 0,
+      hasManualActivation: true, // Leaders are always deployable (manual action)
       reason: reasons.length ? reasons.join('; ') : null,
       cost: pseudoCost,
       costSummary: summarizeChampionCost(pseudoCost)
@@ -5435,9 +5474,22 @@ export class RiftboundGameEngine {
     if (options?.accelerated) {
       boardCard.isTapped = false;
     }
+    
+    // Track if we deployed to an open battlefield (for triggering combat)
+    let deployedToOpenBattlefield: BattlefieldState | null = null;
+    
     switch (cardType) {
       case CardType.CREATURE:
-        boardCard.location = this.resolveDeploymentLocation(player, destinationId);
+        boardCard.location = this.resolveDeploymentLocation(player, destinationId, card);
+        
+        // Check if deploying to an open battlefield
+        if (boardCard.location.zone === 'battlefield' && boardCard.location.battlefieldId) {
+          const battlefield = this.findBattlefieldState(boardCard.location.battlefieldId);
+          if (battlefield && !battlefield.controller) {
+            deployedToOpenBattlefield = battlefield;
+          }
+        }
+        
         player.board.creatures.push(boardCard);
         break;
       case CardType.ARTIFACT:
@@ -5453,6 +5505,18 @@ export class RiftboundGameEngine {
     }
     this.logRuleUsage(boardCard, 'enter-play');
     this.triggerAbilities(boardCard, 'play', player, targets);
+    
+    // If deployed to an open battlefield, trigger combat engagement
+    // This gives the opponent priority to respond before the unit conquers
+    if (deployedToOpenBattlefield) {
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `${this.resolvePlayerName(player.playerId) ?? 'Player'} deploys ${boardCard.name ?? 'a unit'} directly to ${deployedToOpenBattlefield.name}.`,
+        tone: 'info'
+      });
+      this.initiateBattlefieldEngagement(player, deployedToOpenBattlefield, boardCard.instanceId);
+    }
+    
     return boardCard;
   }
 
@@ -5494,6 +5558,68 @@ export class RiftboundGameEngine {
     const untappedPattern =
       /\b(enters?|enter)\b[^.]*\b(untapped|ready)\b/i;
     return textFragments.some((text) => untappedPattern.test(text));
+  }
+
+  /**
+   * Check what battlefield deployment options a card has.
+   * This analyzes card text for phrases like:
+   * - "You may play me to an open battlefield"
+   * - "You may play me to an occupied enemy battlefield"
+   * - "Friendly units may be played to open battlefields" (grants ability to others)
+   */
+  private getCardBattlefieldDeploymentPermissions(card: Card): {
+    canPlayToOpenBattlefield: boolean;
+    canPlayToOccupiedEnemyBattlefield: boolean;
+    grantsOpenBattlefieldPlayToAllies: boolean;
+  } {
+    const textFragments: string[] = [];
+    if (card.text) {
+      textFragments.push(card.text);
+    }
+    if (card.rules) {
+      card.rules.forEach((rule) => {
+        if (rule?.text) {
+          textFragments.push(rule.text);
+        }
+      });
+    }
+    if (card.abilities) {
+      card.abilities.forEach((ability) => {
+        if (ability?.description) {
+          textFragments.push(ability.description);
+        }
+      });
+    }
+    const normalizedText = textFragments.join(' ').toLowerCase();
+    
+    // "You may play me to an open battlefield"
+    const canPlayToOpenBattlefield = /you may play me to an open battlefield/i.test(normalizedText);
+    
+    // "You may play me to an occupied enemy battlefield"
+    const canPlayToOccupiedEnemyBattlefield = /you may play me to an occupied enemy battlefield/i.test(normalizedText);
+    
+    // "Friendly units may be played to open battlefields" (for cards that grant this to allies)
+    const grantsOpenBattlefieldPlayToAllies = /friendly units may be played to open battlefields/i.test(normalizedText);
+    
+    return {
+      canPlayToOpenBattlefield,
+      canPlayToOccupiedEnemyBattlefield,
+      grantsOpenBattlefieldPlayToAllies
+    };
+  }
+
+  /**
+   * Check if any ally on the board grants "friendly units may be played to open battlefields"
+   */
+  private hasAllyGrantingOpenBattlefieldDeploy(player: PlayerState): boolean {
+    for (const creature of player.board.creatures) {
+      // BoardCard extends Card, so we can pass creature directly
+      const perms = this.getCardBattlefieldDeploymentPermissions(creature);
+      if (perms.grantsOpenBattlefieldPlayToAllies) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private shuffle<T>(items: T[]): void {
@@ -5953,7 +6079,10 @@ export class RiftboundGameEngine {
       ? this.findBattlefieldState(previousBattlefieldId)
       : undefined;
     creature.location = { zone: 'base' };
-    this.triggerAbilities(creature, 'move_from_battlefield', player);
+    // Pass the previous battlefield context so move triggers can properly defer discard prompts
+    this.triggerAbilities(creature, 'move_from_battlefield', player, undefined, {
+      battlefield: previousBattlefield
+    });
     if (previousBattlefield) {
       this.triggerBattlefieldAbility(previousBattlefield, 'unit_move_from', player, {
         boardTarget: creature
@@ -6035,7 +6164,9 @@ export class RiftboundGameEngine {
       });
     }
     if (options?.autoEngage !== false) {
-      this.initiateBattlefieldEngagement(player, battlefield);
+      // Pass the creature's instanceId to skip triggering its move ability again
+      // (it was already triggered above when autoEngage is true)
+      this.initiateBattlefieldEngagement(player, battlefield, creature.instanceId);
     }
   }
 
@@ -6099,7 +6230,11 @@ export class RiftboundGameEngine {
     });
   }
 
-  private initiateBattlefieldEngagement(player: PlayerState, battlefield: BattlefieldState): void {
+  private initiateBattlefieldEngagement(
+    player: PlayerState,
+    battlefield: BattlefieldState,
+    skipTriggerForUnitId?: string
+  ): void {
     if (
       this.gameState.combatContext &&
       this.gameState.combatContext.battlefieldId !== battlefield.battlefieldId
@@ -6141,23 +6276,16 @@ export class RiftboundGameEngine {
     });
     
     // Trigger move_to_battlefield abilities for units entering combat
-    // But only if they haven't been triggered yet for this unit
+    // Skip any unit passed via skipTriggerForUnitId (already triggered in moveUnitToBattlefield)
     // This happens before attack/defend triggers
     if (contestingUnits.length > 0) {
       contestingUnits.forEach((unit) => {
-        const owner = this.getPlayerByCard(unit.instanceId);
-        // Check if move_to_battlefield has already been triggered for this unit this turn
-        const hasMoveTriggerBeenFired = (unit.activationState?.history ?? []).some(
-          (entry) => 
-            typeof entry === 'object' && 
-            entry !== null && 
-            'reason' in entry && 
-            typeof entry.reason === 'string' && 
-            entry.reason.includes('ability-Move')
-        );
-        if (!hasMoveTriggerBeenFired) {
-          this.triggerAbilities(unit, 'move_to_battlefield', owner);
+        // Skip the unit that initiated this engagement - it already had its trigger fired
+        if (unit.instanceId === skipTriggerForUnitId) {
+          return;
         }
+        const owner = this.getPlayerByCard(unit.instanceId);
+        this.triggerAbilities(unit, 'move_to_battlefield', owner);
       });
     }
     

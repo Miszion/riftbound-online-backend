@@ -8,7 +8,7 @@ type TokenCreatorRecord = {
   id: string;
   slug?: string;
   name: string;
-  type: string;
+  type: string | null;
   effect: string;
 };
 
@@ -41,7 +41,7 @@ const main = () => {
   const unmatched: TokenCreatorRecord[] = [];
 
   catalog.forEach((card) => {
-    const effectText = card.effect ?? card.text ?? '';
+    const effectText = card.effect ?? '';
     if (/unit token/i.test(effectText)) {
       tokenTextMatches.push({
         id: card.id,

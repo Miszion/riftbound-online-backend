@@ -364,6 +364,7 @@ const matchmakingQueueUrls: Record<MatchMode, string | null> = {
   free: quickPlayMatchmakingQueueUrl
 };
 const MATCHMAKING_QUEUE_TABLE = TABLE_NAMES.MATCHMAKING_QUEUE;
+const MATCH_STATES_TABLE = TABLE_NAMES.MATCH_STATES;
 const MATCHMAKING_MODES: MatchMode[] = ['ranked', 'free'];
 const MATCHMAKING_STATE = {
   QUEUED: 'queued',
@@ -685,6 +686,89 @@ const getQueueEntry = async (mode: MatchMode, userId: string) => {
     })
     .promise();
   return result.Item ?? null;
+};
+
+/**
+ * Check if a match has been completed.
+ * Checks both the match history table (Status: 'completed') and 
+ * the game state snapshot table (Status: 'winner_determined')
+ */
+const isMatchCompleted = async (matchId: string): Promise<boolean> => {
+  if (!matchId) {
+    return false;
+  }
+  try {
+    // Check match history table first (most authoritative)
+    // Use query since table has MatchId + Timestamp composite key
+    const historyResult = await dynamodb
+      .query({
+        TableName: matchTableName,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        ProjectionExpression: '#status',
+        ExpressionAttributeNames: {
+          '#status': 'Status'
+        },
+        Limit: 1
+      })
+      .promise();
+    
+    if (historyResult.Items?.length && historyResult.Items[0]?.Status === 'completed') {
+      return true;
+    }
+    
+    // Also check game state snapshot table (in case persist failed but game ended)
+    const stateResult = await dynamodb
+      .get({
+        TableName: MATCH_STATES_TABLE,
+        Key: { MatchId: matchId },
+        ProjectionExpression: '#status',
+        ExpressionAttributeNames: {
+          '#status': 'Status'
+        }
+      })
+      .promise();
+    
+    // Game state uses 'winner_determined' status
+    return stateResult.Item?.Status === 'winner_determined';
+  } catch (error) {
+    logger.warn('[MATCHMAKING] Failed to check if match is completed', {
+      matchId,
+      error
+    });
+    return false;
+  }
+};
+
+/**
+ * Remove a single player from the matchmaking queue
+ */
+const removePlayerFromQueue = async (mode: MatchMode, userId: string, reason: string): Promise<void> => {
+  try {
+    const result = await dynamodb
+      .delete({
+        TableName: MATCHMAKING_QUEUE_TABLE,
+        Key: queueKey(mode, userId),
+        ReturnValues: 'ALL_OLD'
+      })
+      .promise();
+    if (result.Attributes) {
+      logger.info('[MATCHMAKING] Removed stale player queue entry', {
+        mode,
+        userId,
+        reason,
+        previousState: result.Attributes.State,
+        previousMatchId: result.Attributes.MatchId
+      });
+    }
+  } catch (error) {
+    logger.warn('[MATCHMAKING] Failed to remove player from queue', {
+      mode,
+      userId,
+      reason,
+      error
+    });
+  }
 };
 
 const getQueueLength = async (mode: MatchMode): Promise<number> => {
@@ -1145,12 +1229,14 @@ const mapMatchReplayItem = (
 
 const getMatchReplayRecord = async (matchId: string) => {
   const result = await dynamodb
-    .get({
+    .query({
       TableName: matchTableName,
-      Key: { MatchId: matchId }
+      KeyConditionExpression: 'MatchId = :matchId',
+      ExpressionAttributeValues: { ':matchId': matchId },
+      Limit: 1
     })
     .promise();
-  return result.Item ?? null;
+  return result.Items?.[0] ?? null;
 };
 
 const fetchRecentMatches = async (limit = 10) => {
@@ -1287,23 +1373,27 @@ export const queryResolvers = {
 
   async matchResult(_parent: any, { matchId }: { matchId: string }) {
     try {
-      const result = await dynamodb.get({
+      const result = await dynamodb.query({
         TableName: matchTableName,
-        Key: { MatchId: matchId }
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        Limit: 1
       }).promise();
 
-      if (!result.Item) {
+      if (!result.Items?.length) {
         return null;
       }
+      
+      const item = result.Items[0];
 
       return {
-        matchId: result.Item.MatchId,
-        winner: result.Item.Winner,
-        loser: result.Item.Loser,
-        reason: result.Item.Reason,
-        duration: result.Item.Duration,
-        turns: result.Item.Turns,
-        moves: result.Item.MoveCount,
+        matchId: item.MatchId,
+        winner: item.Winner,
+        loser: item.Loser,
+        reason: item.Reason,
+        duration: item.Duration,
+        turns: item.Turns,
+        moves: item.MoveCount,
       };
     } catch (error) {
       logger.error('Error fetching match result:', error);
@@ -2424,20 +2514,34 @@ export const mutationResolvers = {
       const existing = await getQueueEntry(normalizedMode, userId);
 
       if (existing && existing.State === MATCHMAKING_STATE.MATCHED) {
-        const existingOpponentId = existing.OpponentId ?? null;
-        const existingOpponentName = existingOpponentId
-          ? await getUsernameForUser(existingOpponentId)
-          : null;
-        return {
-          mode: normalizedMode,
-          queued: false,
-          matchFound: true,
-          matchId: existing.MatchId ?? null,
-          opponentId: existingOpponentId,
-          opponentName: existingOpponentName,
-          mmr: existing.MMR ?? (await getUserMmr(userId)),
-          estimatedWaitSeconds: getEstimatedWaitSeconds(normalizedMode, await getQueueLength(normalizedMode))
-        };
+        const existingMatchId = existing.MatchId ?? null;
+        
+        // Check if the match has already completed - if so, clean up the stale queue entry
+        if (existingMatchId && await isMatchCompleted(existingMatchId)) {
+          logger.info('[MATCHMAKING] Found stale MATCHED entry for completed match, cleaning up', {
+            userId,
+            mode: normalizedMode,
+            matchId: existingMatchId
+          });
+          await removePlayerFromQueue(normalizedMode, userId, 'stale_completed_match');
+          // Fall through to normal queue join below
+        } else {
+          // Match is still active, return the existing match info
+          const existingOpponentId = existing.OpponentId ?? null;
+          const existingOpponentName = existingOpponentId
+            ? await getUsernameForUser(existingOpponentId)
+            : null;
+          return {
+            mode: normalizedMode,
+            queued: false,
+            matchFound: true,
+            matchId: existingMatchId,
+            opponentId: existingOpponentId,
+            opponentName: existingOpponentName,
+            mmr: existing.MMR ?? (await getUserMmr(userId)),
+            estimatedWaitSeconds: getEstimatedWaitSeconds(normalizedMode, await getQueueLength(normalizedMode))
+          };
+        }
       }
 
       const mmr = await getUserMmr(userId);

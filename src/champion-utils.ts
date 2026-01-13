@@ -9,6 +9,40 @@ export interface ChampionAbilityCost {
   rawText: string;
 }
 
+/**
+ * Determines if a champion legend has a manually activatable ability.
+ * 
+ * Manually activatable abilities have patterns like:
+ * - `:rb_exhaust::` or `[tap]:` - Exhaust to activate
+ * - `:rb_energy_X:, :rb_exhaust::` - Pay cost and exhaust
+ * - `:rb_energy_X::` - Pay cost to activate (rare)
+ * 
+ * Passive/triggered abilities are NOT manually activatable:
+ * - "When..." - Triggered by game events
+ * - "At the start/end of..." - Automatic phase triggers
+ * - Static abilities like "Your X have Y"
+ * - "While..." - Conditional static abilities
+ */
+export const hasManualActivation = (text?: string | null): boolean => {
+  const normalized = text ?? '';
+  
+  // Check for exhaust-activated abilities: `:rb_exhaust::` or `[tap]:`
+  // The double colon `::` indicates an activated ability (cost: effect)
+  const exhaustActivated = /:rb_exhaust:\s*:/i.test(normalized) || /\[tap\]\s*:/i.test(normalized);
+  if (exhaustActivated) {
+    return true;
+  }
+  
+  // Check for energy-activated abilities without exhaust: `:rb_energy_X::`
+  // Must have the double colon pattern to be an activated ability
+  const energyActivated = /:rb_energy_\d+:\s*:/i.test(normalized) || /\[\d+\]\s*:/i.test(normalized);
+  if (energyActivated) {
+    return true;
+  }
+  
+  return false;
+};
+
 export const parseChampionAbilityCost = (text?: string | null): ChampionAbilityCost => {
   const normalized = text ?? '';
   const energyMatches = normalized.match(/:rb_energy_(\d+):/gi) ?? [];
