@@ -8,7 +8,10 @@ import {
   EffectProfile,
   EnrichedCardRecord,
   RuleClause,
+  SpellTargetScope,
+  SpellTargetingProfile,
   TokenSpec,
+  analyzeSpellTargeting,
   buildActivation,
   buildActivationStateIndex,
   buildEffectProfile,
@@ -269,7 +272,9 @@ export type PromptType =
   | 'priority'
   | 'battlefield'
   | 'coin_flip'
-  | 'discard';
+  | 'discard'
+  | 'spell_reaction'
+  | 'chain_reaction';
 
 export interface GamePrompt {
   id: string;
@@ -410,6 +415,8 @@ export interface GameState {
   focusPlayerId?: string | null;
   combatContext?: CombatContext | null;
   pendingEffects: PendingEffect[];
+  pendingSpellResolution?: PendingSpellResolution | null;
+  reactionChain?: ReactionChain | null;
 }
 
 export interface GameMove {
@@ -452,6 +459,45 @@ interface PendingEffect {
   nextIndex?: number;
   context?: EffectContextSnapshot;
   metadata?: Record<string, unknown>;
+}
+
+// Chain item types for the reaction chain
+export type ChainItemType = 'spell' | 'triggered_ability' | 'activated_ability';
+
+// A single item on the chain (spell, triggered ability, or activated ability)
+export interface ChainItem {
+  id: string;
+  type: ChainItemType;
+  card: Card;                     // The spell or card with the ability
+  casterId: string;               // Player who cast/activated it
+  targets: string[];              // Target IDs
+  targetDescriptions: string[];   // Human-readable target descriptions
+  createdAt: number;
+  abilityName?: string;           // For abilities, the name of the ability
+  sourceInstanceId?: string;      // For abilities, the instanceId of the source card
+}
+
+// The reaction chain - a stack of chain items waiting to resolve
+export interface ReactionChain {
+  id: string;
+  items: ChainItem[];             // Stack of items (last = top, resolves first)
+  currentReactorId: string;       // Player who currently has the reaction window
+  originalCasterId: string;       // Player who started the chain
+  awaitingResponse: boolean;      // Whether we're waiting for a response
+  createdAt: number;
+  lastUpdatedAt: number;
+}
+
+// For backwards compatibility - keep the old interface as an alias
+export interface PendingSpellResolution {
+  id: string;
+  spell: Card;
+  casterId: string;
+  targets: string[];
+  targetDescriptions: string[];
+  createdAt: number;
+  reactorId: string;
+  resolved: boolean;
 }
 
 export interface MatchResult {
@@ -563,7 +609,9 @@ export class RiftboundGameEngine {
       turnSequenceStep: null,
       focusPlayerId: null,
       combatContext: null,
-      pendingEffects: []
+      pendingEffects: [],
+      pendingSpellResolution: null,
+      reactionChain: null
     };
   }
 
@@ -1201,6 +1249,14 @@ export class RiftboundGameEngine {
       const handler = String(pending.metadata?.handler ?? '');
       const caster = this.getPlayerById(pending.casterId);
       switch (handler) {
+        case 'spell_resolution': {
+          // Resolve deferred spell with targets
+          const spellData = pending.metadata?.spellCard as Card | undefined;
+          if (spellData) {
+            this.resolveSpell(spellData, caster, sanitizedSelections);
+          }
+          break;
+        }
         case 'graveyard_return': {
           const requireUnit = Boolean(pending.metadata?.requireUnit);
           const spellRef = this.buildSpellReference(
@@ -1803,6 +1859,34 @@ export class RiftboundGameEngine {
     options?: { useAccelerate?: boolean }
   ): void {
     const player = this.getPlayerById(playerId);
+    const card = player.hand[cardIndex];
+    if (!card) {
+      throw new Error('Card not in hand');
+    }
+
+    // Check if there's an active reaction chain
+    const activeChain = this.gameState.reactionChain;
+    if (activeChain && activeChain.awaitingResponse) {
+      // During a chain, only the current reactor can play cards
+      if (activeChain.currentReactorId !== playerId) {
+        throw new Error('You cannot play cards during opponent\'s reaction window');
+      }
+      
+      // During a chain, only REACTION cards can be played
+      const cardType = (card.type ?? '').toLowerCase();
+      const isReaction = this.canPlayAsChainReaction(card);
+      
+      if (cardType === 'spell' && isReaction) {
+        // This is a reaction spell being played in response - add it to the chain
+        this.playReactionCardToChain(player, cardIndex, card, targets ?? []);
+        return;
+      } else if (cardType !== 'spell') {
+        throw new Error('Only REACTION spells can be played during a reaction window');
+      } else {
+        throw new Error('Only cards with REACTION timing can be played during a reaction window');
+      }
+    }
+
     const hasCombatPriority = this.hasCombatPriority(playerId);
     if (!hasCombatPriority && player.playerId !== this.getCurrentPlayer().playerId) {
       throw new Error('Not your turn');
@@ -1814,11 +1898,6 @@ export class RiftboundGameEngine {
       this.currentPhase !== GamePhase.MAIN_2
     ) {
       throw new Error(`Cannot play cards during ${this.currentPhase} phase`);
-    }
-
-    const card = player.hand[cardIndex];
-    if (!card) {
-      throw new Error('Card not in hand');
     }
 
     const combatStage = hasCombatPriority
@@ -1865,8 +1944,8 @@ export class RiftboundGameEngine {
         });
         break;
       case CardType.SPELL:
-        this.resolveSpell(card, player, targets);
-        player.graveyard.push(card);
+        // Stage the spell for potential reaction before resolving
+        this.stageSpellForReaction(card, player, targets ?? []);
         break;
       default:
         throw new Error(`Unsupported card type: ${card.type}`);
@@ -1888,6 +1967,14 @@ export class RiftboundGameEngine {
    * Validate that targets are legal
    */
   private validateTargets(card: Card, targets: string[]): void {
+    const cardType = (card.type ?? '').toLowerCase();
+    
+    // For spells, use spell-specific targeting validation
+    if (cardType === 'spell') {
+      this.validateSpellTargets(card, targets);
+      return;
+    }
+
     if (card.activationProfile?.requiresTarget && targets.length === 0) {
       throw new Error(`${card.name} requires a valid target`);
     }
@@ -1905,6 +1992,127 @@ export class RiftboundGameEngine {
         throw new Error('Target not found on board, among players, or battlefields');
       }
     }
+  }
+
+  /**
+   * Validate spell targets against the spell's targeting profile
+   */
+  private validateSpellTargets(spell: Card, targets: string[]): void {
+    const catalogCard = findCardById(spell.id) ?? findCardByName(spell.name);
+    if (!catalogCard) {
+      // Fallback to basic validation
+      if (spell.activationProfile?.requiresTarget && targets.length === 0) {
+        throw new Error(`${spell.name} requires a valid target`);
+      }
+      return;
+    }
+
+    const targeting = analyzeSpellTargeting(catalogCard);
+    
+    // If spell doesn't require selection, targets are optional
+    if (!targeting.requiresSelection) {
+      return;
+    }
+
+    // Validate target count
+    if (targeting.minTargets > 0 && targets.length < targeting.minTargets) {
+      throw new Error(`${spell.name} requires at least ${targeting.minTargets} target${targeting.minTargets === 1 ? '' : 's'}`);
+    }
+
+    if (targeting.maxTargets > 0 && targets.length > targeting.maxTargets) {
+      throw new Error(`${spell.name} can only target up to ${targeting.maxTargets} target${targeting.maxTargets === 1 ? '' : 's'}`);
+    }
+
+    // Validate each target based on scope
+    for (const targetId of targets) {
+      if (!targetId) continue;
+      
+      const isValidTarget = this.validateSpellTargetByScope(targetId, targeting);
+      if (!isValidTarget) {
+        throw new Error(`Invalid target for ${spell.name}`);
+      }
+    }
+  }
+
+  /**
+   * Validates a single target against the spell's targeting scope
+   */
+  private validateSpellTargetByScope(targetId: string, targeting: SpellTargetingProfile): boolean {
+    const scope = targeting.scope;
+    
+    switch (scope) {
+      case 'none':
+        return true;
+      
+      case 'graveyard': {
+        // Target should be a card in the caster's graveyard (validated at resolution time)
+        return true;
+      }
+      
+      case 'deck':
+      case 'hand': {
+        // These are typically self-targeting searches
+        return true;
+      }
+      
+      case 'battlefield': {
+        const battlefield = this.findBattlefieldState(targetId);
+        return Boolean(battlefield);
+      }
+      
+      case 'player': {
+        const player = this.gameState.players.find((p) => p.playerId === targetId);
+        return Boolean(player);
+      }
+      
+      case 'self': {
+        // Self-targeting is validated at resolution
+        return true;
+      }
+      
+      case 'ally_unit': {
+        if (!targeting.allowFriendly) return false;
+        const unit = this.findCardInstance(targetId);
+        return Boolean(unit && unit.type === CardType.CREATURE);
+      }
+      
+      case 'enemy_unit': {
+        if (!targeting.allowEnemy) return false;
+        const unit = this.findCardInstance(targetId);
+        return Boolean(unit && unit.type === CardType.CREATURE);
+      }
+      
+      case 'any_unit': {
+        const unit = this.findCardInstance(targetId);
+        return Boolean(unit && unit.type === CardType.CREATURE);
+      }
+      
+      case 'ally_units':
+      case 'enemy_units':
+      case 'all_units': {
+        const unit = this.findCardInstance(targetId);
+        return Boolean(unit && unit.type === CardType.CREATURE);
+      }
+      
+      default:
+        return true;
+    }
+  }
+
+  /**
+   * Get the spell targeting profile for a spell card (for UI display)
+   */
+  public getSpellTargetingProfile(card: Card): SpellTargetingProfile | null {
+    if ((card.type ?? '').toLowerCase() !== 'spell') {
+      return null;
+    }
+    
+    const catalogCard = findCardById(card.id) ?? findCardByName(card.name);
+    if (!catalogCard) {
+      return null;
+    }
+    
+    return analyzeSpellTargeting(catalogCard);
   }
 
   private getCardCost(card: Card): CardCost {
@@ -2437,13 +2645,453 @@ export class RiftboundGameEngine {
   }
 
   // ========================================================================
+  // REACTION CHAIN SYSTEM
+  // ========================================================================
+
+  /**
+   * Build target descriptions for UI display
+   */
+  private buildTargetDescriptions(targets: string[]): string[] {
+    return targets.map((targetId) => {
+      const boardCard = this.findCardInstance(targetId);
+      if (boardCard) {
+        const owner = this.getPlayerByCard(targetId);
+        const ownerName = this.resolvePlayerName(owner.playerId) ?? 'Player';
+        return `${boardCard.name ?? 'Unit'} (${ownerName}'s)`;
+      }
+      const battlefield = this.findBattlefieldState(targetId);
+      if (battlefield) {
+        return battlefield.name ?? 'Battlefield';
+      }
+      const player = this.gameState.players.find((p) => p.playerId === targetId);
+      if (player) {
+        return this.resolvePlayerName(player.playerId) ?? 'Player';
+      }
+      return 'Unknown target';
+    });
+  }
+
+  /**
+   * Add a new item to the reaction chain
+   * This creates a chain if none exists, or adds to the existing chain
+   */
+  private addToReactionChain(
+    item: Omit<ChainItem, 'id' | 'createdAt'>,
+    caster: PlayerState
+  ): void {
+    const now = Date.now();
+    const chainItem: ChainItem = {
+      ...item,
+      id: `chain_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: now
+    };
+
+    const opponent = this.getOtherPlayer(caster);
+
+    if (!this.gameState.reactionChain) {
+      // Create a new chain
+      this.gameState.reactionChain = {
+        id: `chain_${now}`,
+        items: [chainItem],
+        currentReactorId: opponent.playerId,
+        originalCasterId: caster.playerId,
+        awaitingResponse: true,
+        createdAt: now,
+        lastUpdatedAt: now
+      };
+    } else {
+      // Add to existing chain
+      this.gameState.reactionChain.items.push(chainItem);
+      // Swap reactor to the other player (the one who just responded)
+      this.gameState.reactionChain.currentReactorId = opponent.playerId;
+      this.gameState.reactionChain.awaitingResponse = true;
+      this.gameState.reactionChain.lastUpdatedAt = now;
+    }
+
+    // Also maintain backwards-compatible pendingSpellResolution for the top item
+    this.syncPendingSpellFromChain();
+
+    // Create reaction prompt for the reactor
+    this.createChainReactionPrompt();
+
+    // Log the chain addition
+    const casterName = this.resolvePlayerName(caster.playerId) ?? 'Player';
+    const itemLabel = item.type === 'spell' 
+      ? item.card.name ?? 'a spell'
+      : `${item.abilityName ?? 'an ability'} (${item.card.name})`;
+    const targetText = item.targetDescriptions.length > 0
+      ? ` targeting ${item.targetDescriptions.join(', ')}`
+      : '';
+    const chainNum = this.gameState.reactionChain.items.length;
+    this.addDuelLogEntry({
+      playerId: caster.playerId,
+      message: `${casterName} adds ${itemLabel}${targetText} to the chain (Link #${chainNum}). Waiting for response...`,
+      tone: 'info'
+    });
+  }
+
+  /**
+   * Sync the pendingSpellResolution from the current chain (for backwards compatibility)
+   */
+  private syncPendingSpellFromChain(): void {
+    const chain = this.gameState.reactionChain;
+    if (!chain || chain.items.length === 0) {
+      this.gameState.pendingSpellResolution = null;
+      return;
+    }
+
+    const topItem = chain.items[chain.items.length - 1];
+    this.gameState.pendingSpellResolution = {
+      id: topItem.id,
+      spell: topItem.card,
+      casterId: topItem.casterId,
+      targets: topItem.targets,
+      targetDescriptions: topItem.targetDescriptions,
+      createdAt: topItem.createdAt,
+      reactorId: chain.currentReactorId,
+      resolved: false
+    };
+  }
+
+  /**
+   * Create a reaction prompt for the current reactor
+   */
+  private createChainReactionPrompt(): void {
+    const chain = this.gameState.reactionChain;
+    if (!chain || chain.items.length === 0) return;
+
+    const topItem = chain.items[chain.items.length - 1];
+    const casterName = this.resolvePlayerName(topItem.casterId) ?? 'Opponent';
+
+    // Remove any existing chain reaction prompts for this player
+    this.gameState.prompts = this.gameState.prompts.filter(
+      (p) => !(p.type === 'chain_reaction' && p.playerId === chain.currentReactorId && !p.resolved)
+    );
+
+    this.enqueuePrompt('chain_reaction', chain.currentReactorId, {
+      chainId: chain.id,
+      chainLength: chain.items.length,
+      topItemId: topItem.id,
+      topItemType: topItem.type,
+      topItemName: topItem.type === 'spell' 
+        ? topItem.card.name ?? 'Spell'
+        : topItem.abilityName ?? 'Ability',
+      topItemCardName: topItem.card.name ?? 'Card',
+      topItemCardId: topItem.card.id,
+      casterName,
+      casterId: topItem.casterId,
+      targets: topItem.targets,
+      targetDescriptions: topItem.targetDescriptions,
+      chainItems: chain.items.map((item, index) => ({
+        linkNumber: index + 1,
+        type: item.type,
+        cardName: item.card.name,
+        abilityName: item.abilityName,
+        casterId: item.casterId,
+        targetDescriptions: item.targetDescriptions
+      }))
+    });
+  }
+
+  /**
+   * Stage a spell for opponent reaction before resolving
+   */
+  private stageSpellForReaction(spell: Card, caster: PlayerState, targets: string[]): void {
+    const targetDescriptions = this.buildTargetDescriptions(targets);
+
+    this.addToReactionChain({
+      type: 'spell',
+      card: spell,
+      casterId: caster.playerId,
+      targets,
+      targetDescriptions
+    }, caster);
+  }
+
+  /**
+   * Stage an activated ability for opponent reaction before resolving.
+   * Called when a player activates an ability that should give the opponent a chance to respond.
+   */
+  public stageAbilityForReaction(
+    sourceCard: Card,
+    abilityName: string,
+    caster: PlayerState,
+    targets: string[],
+    sourceInstanceId?: string
+  ): void {
+    const targetDescriptions = this.buildTargetDescriptions(targets);
+
+    this.addToReactionChain({
+      type: 'activated_ability',
+      card: sourceCard,
+      casterId: caster.playerId,
+      targets,
+      targetDescriptions,
+      abilityName,
+      sourceInstanceId
+    }, caster);
+  }
+
+  /**
+   * Stage a triggered ability for opponent reaction.
+   * Called when an ability triggers and should give the opponent a chance to respond.
+   */
+  public stageTriggeredAbilityForReaction(
+    sourceCard: Card,
+    abilityName: string,
+    controller: PlayerState,
+    targets: string[],
+    sourceInstanceId?: string
+  ): void {
+    const targetDescriptions = this.buildTargetDescriptions(targets);
+
+    this.addToReactionChain({
+      type: 'triggered_ability',
+      card: sourceCard,
+      casterId: controller.playerId,
+      targets,
+      targetDescriptions,
+      abilityName,
+      sourceInstanceId
+    }, controller);
+  }
+
+  /**
+   * Respond to the chain (pass or add a reaction)
+   * If passing, check if the other player also passes to resolve the chain
+   */
+  public respondToChainReaction(playerId: string, pass: boolean): void {
+    const chain = this.gameState.reactionChain;
+    if (!chain) {
+      throw new Error('No reaction chain is active');
+    }
+    if (chain.currentReactorId !== playerId) {
+      throw new Error('You are not the current reactor');
+    }
+
+    const reactorName = this.resolvePlayerName(playerId) ?? 'Player';
+
+    // Clear the reaction prompt
+    const promptIndex = this.gameState.prompts.findIndex(
+      (p) => p.type === 'chain_reaction' && p.playerId === playerId && !p.resolved
+    );
+    if (promptIndex !== -1) {
+      this.gameState.prompts[promptIndex].resolved = true;
+      this.gameState.prompts[promptIndex].resolvedAt = Date.now();
+      this.gameState.prompts[promptIndex].resolution = { passed: pass };
+    }
+
+    if (pass) {
+      this.addDuelLogEntry({
+        playerId,
+        message: `${reactorName} passes on the chain.`,
+        tone: 'info'
+      });
+
+      // Determine who added the top item to the chain
+      const topItem = chain.items[chain.items.length - 1];
+      const topItemCasterId = topItem.casterId;
+      
+      // The rule is: after someone adds to the chain, the opponent gets ONE chance to respond.
+      // If they pass (don't add anything), the chain resolves.
+      // If they add something, then the first player gets a chance to respond to that new addition.
+      
+      // So: if the current reactor (who is passing) did NOT add the top item,
+      // then they're declining to respond to something the other player added → resolve.
+      // If the current reactor DID add the top item and is passing (shouldn't normally happen
+      // since you don't get prompted on your own cast), also resolve.
+      
+      if (topItemCasterId !== playerId) {
+        // The opponent added the top item, and this player is passing → chain resolves
+        this.resolveReactionChain();
+      } else {
+        // Edge case: player is passing on their own item (e.g., after opponent passed on counter)
+        // This means both players have effectively passed → resolve
+        this.resolveReactionChain();
+      }
+    }
+    // If not passing, the player is adding a reaction card - that's handled by playCard
+  }
+
+  /**
+   * Backwards-compatible method for responding to spell reaction
+   */
+  public respondToSpellReaction(playerId: string, pass: boolean): void {
+    // Delegate to the chain reaction system
+    this.respondToChainReaction(playerId, pass);
+  }
+
+  /**
+   * Resolve the entire chain in reverse order (LIFO)
+   */
+  private resolveReactionChain(): void {
+    const chain = this.gameState.reactionChain;
+    if (!chain || chain.items.length === 0) {
+      this.gameState.reactionChain = null;
+      this.gameState.pendingSpellResolution = null;
+      return;
+    }
+
+    this.addDuelLogEntry({
+      message: `Chain resolves! (${chain.items.length} link${chain.items.length > 1 ? 's' : ''})`,
+      tone: 'info'
+    });
+
+    // Resolve in reverse order (last in, first out)
+    const itemsToResolve = [...chain.items].reverse();
+    
+    for (let i = 0; i < itemsToResolve.length; i++) {
+      const item = itemsToResolve[i];
+      const linkNum = chain.items.length - i;
+      const caster = this.getPlayerById(item.casterId);
+
+      const itemLabel = item.type === 'spell'
+        ? item.card.name ?? 'Spell'
+        : `${item.abilityName ?? 'Ability'} (${item.card.name})`;
+
+      this.addDuelLogEntry({
+        playerId: item.casterId,
+        message: `Chain Link #${linkNum} resolves: ${itemLabel}`,
+        tone: 'info'
+      });
+
+      if (item.type === 'spell') {
+        this.resolveSpell(item.card, caster, item.targets);
+        // Move spell to graveyard
+        caster.graveyard.push(item.card);
+      } else {
+        // Resolve ability
+        this.resolveChainedAbility(item, caster);
+      }
+    }
+
+    // Clear the chain
+    this.gameState.reactionChain = null;
+    this.gameState.pendingSpellResolution = null;
+  }
+
+  /**
+   * Resolve an ability that was on the chain
+   */
+  private resolveChainedAbility(item: ChainItem, controller: PlayerState): void {
+    // Find the source card on the board (if it still exists)
+    let sourceCard: Card | BoardCard = item.card;
+    if (item.sourceInstanceId) {
+      const boardCard = this.findCardInstance(item.sourceInstanceId);
+      if (boardCard) {
+        sourceCard = boardCard;
+      }
+    }
+
+    const operations = sourceCard.effectProfile?.operations ?? [];
+    if (operations.length === 0) {
+      // No operations to execute
+      return;
+    }
+
+    // Build context for ability resolution
+    const targetId = item.targets[0];
+    const boardTarget = targetId ? this.findCardInstance(targetId) : undefined;
+    const playerTarget = targetId 
+      ? this.gameState.players.find((p) => p.playerId === targetId) 
+      : undefined;
+    const battlefieldTarget = targetId ? this.findBattlefieldState(targetId) : undefined;
+
+    this.executeEffectOperations(operations, controller, {
+      source: sourceCard,
+      boardTarget,
+      playerTarget,
+      battlefieldTarget,
+      abilityName: item.abilityName,
+      triggerType: item.type === 'triggered_ability' ? 'triggered' : 'activated',
+      targets: item.targets
+    });
+  }
+
+  /**
+   * Play a reaction card in response to the current chain
+   */
+  private playReactionCardToChain(
+    player: PlayerState,
+    cardIndex: number,
+    card: Card,
+    targets: string[]
+  ): void {
+    // Validate and pay cost
+    const cardCost = this.getCardCost(card);
+    if (!this.canPayCost(player, cardCost)) {
+      throw new Error('Insufficient resources to play reaction');
+    }
+
+    // Validate targets
+    this.validateTargets(card, targets);
+
+    // Remove from hand and pay cost
+    player.hand.splice(cardIndex, 1);
+    this.payCardCost(player, cardCost);
+
+    // Clear the current reaction prompt since player is responding
+    const chain = this.gameState.reactionChain;
+    if (chain) {
+      const promptIndex = this.gameState.prompts.findIndex(
+        (p) => p.type === 'chain_reaction' && p.playerId === player.playerId && !p.resolved
+      );
+      if (promptIndex !== -1) {
+        this.gameState.prompts[promptIndex].resolved = true;
+        this.gameState.prompts[promptIndex].resolvedAt = Date.now();
+        this.gameState.prompts[promptIndex].resolution = { playedReaction: true, cardId: card.id };
+      }
+    }
+
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message: `${playerName} responds with ${card.name ?? 'a reaction spell'}!`,
+      tone: 'info'
+    });
+
+    // Add the reaction spell to the chain
+    this.stageSpellForReaction(card, player, targets);
+
+    this.recordMove('play_card', card.id, targets?.[0]);
+  }
+
+  /**
+   * Check if there's an active chain that prevents normal actions
+   */
+  public hasActiveChain(): boolean {
+    return Boolean(this.gameState.reactionChain && this.gameState.reactionChain.items.length > 0);
+  }
+
+  /**
+   * Check if a card can be played as a reaction during a chain
+   */
+  private canPlayAsChainReaction(card: Card): boolean {
+    // Only REACTION timing cards can be played during a chain
+    const keywords = card.keywords ?? [];
+    return keywords.some((kw) => kw?.toLowerCase() === 'reaction');
+  }
+
+  // ========================================================================
   // SPELL RESOLUTION
   // ========================================================================
 
   /**
-   * Resolve spell effects
+   * Resolve spell effects with comprehensive targeting support
    */
   private resolveSpell(spell: Card, caster: PlayerState, targets?: string[]): void {
+    // Check if this spell requires target selection that wasn't provided
+    const catalogCard = findCardById(spell.id) ?? findCardByName(spell.name);
+    if (catalogCard) {
+      const targeting = analyzeSpellTargeting(catalogCard);
+      if (targeting.requiresSelection && (!targets || targets.length === 0)) {
+        // Defer to target prompt
+        if (this.deferSpellTargetSelection(spell, caster, targeting)) {
+          return;
+        }
+      }
+    }
+
     if (this.handleSpecialSpell(spell, caster, targets)) {
       return;
     }
@@ -2916,11 +3564,31 @@ export class RiftboundGameEngine {
           break;
         }
         case 'control_battlefield': {
-          const battlefield = this.resolveBattlefieldTargetForControl(
-            caster,
-            context.battlefieldTarget
-          );
+          // Only apply battlefield control if there's an explicit battlefield target
+          // Spells like "Kill a unit at a battlefield" should NOT auto-grant control
+          // Only spells that explicitly say "gain control of" or "claim" a battlefield should
+          const battlefield = context.battlefieldTarget;
           if (!battlefield) {
+            // Check if the spell text explicitly mentions controlling/claiming a battlefield
+            const effectText = (context.source?.text ?? '').toLowerCase();
+            const grantsControl = /\b(gain\s+control|claim|take\s+control|conquer)\b/.test(effectText) &&
+              /\bbattlefield\b/.test(effectText);
+            if (!grantsControl) {
+              // This operation targets a battlefield location, not control transfer
+              // Log but don't execute
+              this.logRuleUsage(context.source, 'control_battlefield-skipped-no-target');
+              break;
+            }
+            // Fallback to auto-resolve only for explicit control spells
+            const resolvedBattlefield = this.resolveBattlefieldTargetForControl(caster, undefined);
+            if (!resolvedBattlefield) {
+              break;
+            }
+            const points = Math.max(1, operation.magnitudeHint ?? 1);
+            this.applyBattlefieldControl(caster, resolvedBattlefield, 'objective', {
+              points,
+              sourceCardId: context.source.id
+            });
             break;
           }
           const points = Math.max(1, operation.magnitudeHint ?? 1);
@@ -4417,6 +5085,143 @@ export class RiftboundGameEngine {
     });
   }
 
+  /**
+   * Defer spell resolution until target selection is complete
+   * Returns true if a prompt was created, false if targeting failed
+   */
+  private deferSpellTargetSelection(
+    spell: Card,
+    caster: PlayerState,
+    targeting: SpellTargetingProfile
+  ): boolean {
+    // Map spell targeting scope to prompt scope
+    const promptScope = this.mapTargetScopeToPromptScope(targeting.scope);
+    if (!promptScope) {
+      // Non-deferrable targeting scope
+      return false;
+    }
+
+    // Check if there are valid targets available
+    const hasValidTargets = this.hasValidTargetsForScope(caster, targeting);
+    if (!hasValidTargets) {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} fizzles with no valid targets.`,
+        tone: 'warning'
+      });
+      return true; // Handled (spell fizzled)
+    }
+
+    // Create target prompt
+    const prompt = this.enqueuePrompt('target', caster.playerId, {
+      sourceCardId: spell.id ?? null,
+      sourceCardName: spell.name ?? null,
+      scope: promptScope,
+      min: targeting.minTargets,
+      max: targeting.maxTargets,
+      allowFriendly: targeting.allowFriendly,
+      allowOpponent: targeting.allowEnemy
+    });
+
+    // Store spell for deferred resolution
+    this.gameState.pendingEffects.push({
+      id: prompt.id,
+      type: 'target',
+      casterId: caster.playerId,
+      targetPlayerId: caster.playerId,
+      metadata: {
+        handler: 'spell_resolution',
+        sourceCardId: spell.id,
+        sourceCardName: spell.name,
+        spellCard: JSON.parse(JSON.stringify(spell)),
+        targetingScope: targeting.scope
+      }
+    });
+
+    return true;
+  }
+
+  /**
+   * Maps SpellTargetScope to the prompt scope type
+   */
+  private mapTargetScopeToPromptScope(scope: SpellTargetScope): 'unit' | 'graveyard' | 'battlefield' | null {
+    switch (scope) {
+      case 'ally_unit':
+      case 'enemy_unit':
+      case 'any_unit':
+      case 'ally_units':
+      case 'enemy_units':
+      case 'all_units':
+        return 'unit';
+      case 'graveyard':
+        return 'graveyard';
+      case 'battlefield':
+        return 'battlefield';
+      case 'self':
+      case 'none':
+      case 'deck':
+      case 'hand':
+      case 'player':
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Check if valid targets exist for the given targeting scope
+   */
+  private hasValidTargetsForScope(caster: PlayerState, targeting: SpellTargetingProfile): boolean {
+    const scope = targeting.scope;
+    const opponent = this.getOtherPlayer(caster);
+
+    switch (scope) {
+      case 'none':
+      case 'self':
+        return true;
+
+      case 'graveyard':
+        return caster.graveyard.length > 0;
+
+      case 'deck':
+        return caster.deck.length > 0;
+
+      case 'hand':
+        return caster.hand.length > 0;
+
+      case 'battlefield':
+        return this.gameState.battlefields.length > 0;
+
+      case 'ally_unit':
+      case 'ally_units':
+        return targeting.allowFriendly && this.getPlayerUnits(caster).length > 0;
+
+      case 'enemy_unit':
+      case 'enemy_units':
+        return targeting.allowEnemy && this.getPlayerUnits(opponent).length > 0;
+
+      case 'any_unit':
+      case 'all_units': {
+        const friendlyUnits = targeting.allowFriendly ? this.getPlayerUnits(caster).length : 0;
+        const enemyUnits = targeting.allowEnemy ? this.getPlayerUnits(opponent).length : 0;
+        return friendlyUnits + enemyUnits > 0;
+      }
+
+      case 'player':
+        return true;
+
+      default:
+        return true;
+    }
+  }
+
+  /**
+   * Get all creature units owned by a player
+   */
+  private getPlayerUnits(player: PlayerState): BoardCard[] {
+    return player.board.creatures.filter((unit) => unit.type === CardType.CREATURE);
+  }
+
   private snapshotEffectContext(context: EffectOperationContext): EffectContextSnapshot {
     return {
       sourceCardId: context.source?.id ?? null,
@@ -5473,6 +6278,7 @@ export class RiftboundGameEngine {
     }
     if (options?.accelerated) {
       boardCard.isTapped = false;
+      boardCard.summoned = false; // Accelerated units bypass summoning sickness
     }
     
     // Track if we deployed to an open battlefield (for triggering combat)

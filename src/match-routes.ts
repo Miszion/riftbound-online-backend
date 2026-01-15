@@ -1544,6 +1544,131 @@ matchRouter.post('/matches/:matchId/actions/pass-priority', async (req: Request,
 });
 
 /**
+ * Respond to a spell reaction prompt (pass or react)
+ * POST /matches/:matchId/actions/respond-to-spell-reaction
+ * Body: { playerId, pass }
+ */
+matchRouter.post('/matches/:matchId/actions/respond-to-spell-reaction', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, pass } = req.body;
+
+    if (!playerId) {
+      res.status(400).json({ error: 'playerId is required' });
+      return;
+    }
+
+    if (typeof pass !== 'boolean') {
+      res.status(400).json({ error: 'pass (boolean) is required' });
+      return;
+    }
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    engine.respondToSpellReaction(playerId, pass);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Player responded to spell reaction', {
+      matchId,
+      playerId,
+      pass,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState,
+      currentPhase: spectatorState.currentPhase
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[RESPOND-TO-SPELL-REACTION] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to respond to spell reaction' });
+  }
+});
+
+/**
+ * Respond to a chain reaction prompt (pass or play a reaction)
+ * POST /matches/:matchId/actions/respond-to-chain-reaction
+ * Body: { playerId, pass }
+ */
+matchRouter.post('/matches/:matchId/actions/respond-to-chain-reaction', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, pass } = req.body;
+
+    if (!playerId) {
+      res.status(400).json({ error: 'playerId is required' });
+      return;
+    }
+
+    if (typeof pass !== 'boolean') {
+      res.status(400).json({ error: 'pass (boolean) is required' });
+      return;
+    }
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    engine.respondToChainReaction(playerId, pass);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Player responded to chain reaction', {
+      matchId,
+      playerId,
+      pass,
+      chainLength: spectatorState.reactionChain?.items?.length ?? 0,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState,
+      currentPhase: spectatorState.currentPhase
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[RESPOND-TO-CHAIN-REACTION] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to respond to chain reaction' });
+  }
+});
+
+/**
  * End current phase and proceed to next
  * POST /matches/:matchId/actions/next-phase
  * Body: { playerId }

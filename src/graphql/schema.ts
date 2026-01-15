@@ -59,6 +59,7 @@ export const typeDefs = `#graphql
     metadata: JSON
     activationState: CardActivationStateEntry
     location: CardLocationState
+    spellTargeting: SpellTargetingProfile
   }
 
   type CardLocationState {
@@ -84,6 +85,17 @@ export const typeDefs = `#graphql
     requiresTarget: Boolean!
     reactionWindows: [String!]!
     stateful: Boolean!
+  }
+
+  type SpellTargetingProfile {
+    scope: String!
+    minTargets: Int!
+    maxTargets: Int!
+    requiresSelection: Boolean!
+    allowFriendly: Boolean!
+    allowEnemy: Boolean!
+    mode: String!
+    hint: String
   }
 
   type RuleClause {
@@ -431,6 +443,41 @@ export const typeDefs = `#graphql
     chatLog: [ChatMessage!]!
     focusPlayerId: ID
     combatContext: CombatContext
+    pendingSpellResolution: PendingSpellResolution
+    reactionChain: ReactionChain
+  }
+
+  type PendingSpellResolution {
+    id: ID!
+    spell: Card!
+    casterId: ID!
+    targets: [ID!]!
+    targetDescriptions: [String!]!
+    createdAt: DateTime!
+    reactorId: ID!
+    resolved: Boolean!
+  }
+
+  type ChainItem {
+    id: ID!
+    type: String!
+    card: Card!
+    casterId: ID!
+    targets: [ID!]!
+    targetDescriptions: [String!]!
+    createdAt: DateTime!
+    abilityName: String
+    sourceInstanceId: ID
+  }
+
+  type ReactionChain {
+    id: ID!
+    items: [ChainItem!]!
+    currentReactorId: ID!
+    originalCasterId: ID!
+    awaitingResponse: Boolean!
+    createdAt: DateTime!
+    lastUpdatedAt: DateTime!
   }
 
   type CombatContext {
@@ -673,6 +720,18 @@ export const typeDefs = `#graphql
     passPriority(
       matchId: ID!
       playerId: ID!
+    ): ActionResponse!
+
+    respondToSpellReaction(
+      matchId: ID!
+      playerId: ID!
+      pass: Boolean!
+    ): ActionResponse!
+
+    respondToChainReaction(
+      matchId: ID!
+      playerId: ID!
+      pass: Boolean!
     ): ActionResponse!
 
     recordDuelLogEntry(

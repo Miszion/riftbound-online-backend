@@ -188,6 +188,22 @@ async function waitForGridChange(page: Page, previousKey: string | null) {
 }
 
 async function main() {
+  // Check if piltover-archive.json already exists and is non-empty
+  const forceRefresh = process.argv.includes('--force');
+  if (!forceRefresh && fs.existsSync(OUTPUT_FILE)) {
+    try {
+      const content = fs.readFileSync(OUTPUT_FILE, 'utf-8');
+      const data = JSON.parse(content);
+      if (Array.isArray(data) && data.length > 0) {
+        console.log(`✅ Skipping scrape: ${OUTPUT_FILE} already exists with ${data.length} cards.`);
+        console.log(`   (Use --force to re-scrape)`);
+        return;
+      }
+    } catch {
+      // File exists but is invalid, proceed with scraping
+    }
+  }
+
   console.log(`🔍 Capturing first ${TARGET_CARDS} cards from Piltover Archive…`);
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

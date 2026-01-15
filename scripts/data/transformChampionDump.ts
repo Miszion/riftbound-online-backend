@@ -56,6 +56,8 @@ const ACTION_PATTERNS = [
 
 const TARGET_REGEX = /\btarget\b|\bchoose\b|\bselect\b/i;
 const MULTI_TARGET_REGEX = /\b(all|each|every)\b/i;
+// Patterns that indicate targeting even without explicit 'target/choose/select' words
+const UP_TO_TARGET_REGEX = /up\s+to\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:enemy\s+)?units?\b/i;
 const ABILITY_KEYWORD_PATTERN = /^\s*\[(?<keyword>[^\]]+)\]\s*[—-]\s*(?<body>.+)$/i;
 const SUPPORTED_KEYWORD_TRIGGERS = {
   deathknell: 'death'
@@ -208,6 +210,67 @@ const EFFECT_CLASS_DEFINITIONS = [
     patterns: [/\bmulligan\b/i, /\bstarting hand\b/i],
     operation: { type: 'adjust_mulligan', targetHint: 'self', zone: 'hand', automated: true },
     ruleRefs: ['117']
+  },
+  {
+    id: 'assault',
+    label: 'Assault / attack bonus',
+    patterns: [
+      /\[Assault\b/i,
+      /\bASSAULT\b/i,
+      /\+\d+.*:rb_might:.*while.*attacker/i,
+      /\+\d+.*might.*while.*attacker/i
+    ],
+    operation: { type: 'combat_bonus', targetHint: 'self', zone: 'board', automated: true },
+    ruleRefs: ['713']
+  },
+  {
+    id: 'shield_combat',
+    label: 'Shield / defense bonus',
+    patterns: [
+      /\[Shield\b/i,
+      /\bSHIELD\b/i,
+      /\+\d+.*:rb_might:.*while.*defender/i,
+      /\+\d+.*might.*while.*defender/i
+    ],
+    operation: { type: 'combat_bonus', targetHint: 'self', zone: 'board', automated: true },
+    ruleRefs: ['714']
+  },
+  {
+    id: 'combat_trigger',
+    label: 'Combat trigger effects',
+    patterns: [
+      /\bwhen I attack\b/i,
+      /\bwhen I defend\b/i,
+      /\bwhen I attack or defend\b/i,
+      /\bwhen.*attacks?\b.*deal\b/i,
+      /\bwhen.*defends?\b.*deal\b/i
+    ],
+    operation: { type: 'combat_trigger', targetHint: 'any', zone: 'board', automated: false },
+    ruleRefs: ['700-720']
+  },
+  {
+    id: 'aura_buff',
+    label: 'Aura / static buff',
+    patterns: [
+      /\bother friendly units\b.*\+\d/i,
+      /\bother friendly units\b.*have\b/i,
+      /\bfriendly units here have\b/i,
+      /\bunits you control\b.*\+\d/i,
+      /\bunits you control have\b/i
+    ],
+    operation: { type: 'aura_buff', targetHint: 'ally', zone: 'board', automated: true },
+    ruleRefs: ['430-450']
+  },
+  {
+    id: 'on_play',
+    label: 'On-play effects',
+    patterns: [
+      /\bwhen you play me\b/i,
+      /\bwhen I enter\b/i,
+      /\bwhen.*played\b/i
+    ],
+    operation: { type: 'on_play_trigger', targetHint: 'any', zone: 'board', automated: false },
+    ruleRefs: ['340-360']
   }
 ];
 
@@ -766,11 +829,13 @@ const deriveTiming = (effect) => {
 
 const buildActivation = (effect) => {
   const text = effect || '';
+  // Check for targeting patterns - include 'up to X units' patterns
+  const requiresTarget = TARGET_REGEX.test(text) || UP_TO_TARGET_REGEX.test(text);
   return {
     timing: deriveTiming(text),
     triggers: deriveTriggers(text),
     actions: deriveActions(text),
-    requiresTarget: TARGET_REGEX.test(text),
+    requiresTarget,
     reactionWindows: deriveReactionWindows(text),
     stateful: /\bbuff\b|\bheal\b|\btransform\b|\bsummon\b/i.test(text)
   };

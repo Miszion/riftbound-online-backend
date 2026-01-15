@@ -2129,6 +2129,94 @@ export const mutationResolvers = {
     }
   },
 
+  async respondToSpellReaction(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      pass,
+    }: {
+      matchId: string;
+      playerId: string;
+      pass: boolean;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'respond-to-spell-reaction',
+        {
+          playerId,
+          pass,
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      logger.info('[RESPOND-TO-SPELL-REACTION] Player responded to spell reaction', {
+        matchId,
+        playerId,
+        pass,
+      });
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[RESPOND-TO-SPELL-REACTION] Error:', error);
+      throw error;
+    }
+  },
+
+  async respondToChainReaction(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      pass,
+    }: {
+      matchId: string;
+      playerId: string;
+      pass: boolean;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'respond-to-chain-reaction',
+        {
+          playerId,
+          pass,
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      logger.info('[RESPOND-TO-CHAIN-REACTION] Player responded to chain reaction', {
+        matchId,
+        playerId,
+        pass,
+      });
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[RESPOND-TO-CHAIN-REACTION] Error:', error);
+      throw error;
+    }
+  },
+
   async recordDuelLogEntry(
     _parent: any,
     {

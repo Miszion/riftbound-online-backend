@@ -4,10 +4,13 @@ import type {
   Card,
   CardLocation,
   ChatMessage,
+  ChainItem,
   DuelLogEntry,
   GamePrompt,
   GameState,
   GameStateSnapshot,
+  PendingSpellResolution,
+  ReactionChain,
   PlayerState,
   PlayerBoard,
   PriorityWindow,
@@ -15,6 +18,12 @@ import type {
   TemporaryEffect,
   ChampionAbilityRuntimeState
 } from './game-engine';
+import {
+  findCardById,
+  findCardByName,
+  analyzeSpellTargeting,
+  SpellTargetingProfile
+} from './card-catalog';
 
 export type PlayerVisibility = 'self' | 'opponent' | 'spectator';
 
@@ -82,9 +91,41 @@ const serializeActivationState = (card: BoardCard) => {
   };
 };
 
+const getSpellTargetingInfo = (card: Card | BoardCard): SpellTargetingProfile | null => {
+  const cardType = (card.type ?? '').toLowerCase();
+  if (cardType !== 'spell') {
+    return null;
+  }
+  
+  // Look up the card in the catalog
+  const catalogCard = findCardById(card.id) ?? findCardByName(card.name);
+  if (!catalogCard) {
+    return null;
+  }
+  
+  return analyzeSpellTargeting(catalogCard);
+};
+
+const serializeSpellTargeting = (targeting: SpellTargetingProfile | null) => {
+  if (!targeting) {
+    return null;
+  }
+  return {
+    scope: targeting.scope,
+    minTargets: targeting.minTargets,
+    maxTargets: targeting.maxTargets,
+    requiresSelection: targeting.requiresSelection,
+    allowFriendly: targeting.allowFriendly,
+    allowEnemy: targeting.allowEnemy,
+    mode: targeting.mode,
+    hint: targeting.hint ?? null
+  };
+};
+
 const serializeCardSnapshot = (card: Card | BoardCard) => {
   const resolvedInstanceId =
     (isBoardCard(card) ? card.instanceId : (card as Card).instanceId) ?? null;
+  const spellTargeting = getSpellTargetingInfo(card);
   const base = {
     cardId: card.id,
     instanceId: resolvedInstanceId,
@@ -105,7 +146,8 @@ const serializeCardSnapshot = (card: Card | BoardCard) => {
     metadata: card.metadata ?? null,
     location: null as ReturnType<typeof serializeLocation>,
     isTapped: card.isTapped ?? null,
-    tapped: card.isTapped ?? null
+    tapped: card.isTapped ?? null,
+    spellTargeting: serializeSpellTargeting(spellTargeting)
   };
 
   if (!isBoardCard(card)) {
@@ -240,6 +282,49 @@ const serializePriorityWindow = (window: PriorityWindow | null) => {
     openedAt: toDate(window.openedAt),
     expiresAt: window.expiresAt ? toDate(window.expiresAt) : null,
     event: window.event ?? null
+  };
+};
+
+const serializePendingSpellResolution = (pending: PendingSpellResolution | null | undefined) => {
+  if (!pending) {
+    return null;
+  }
+  return {
+    id: pending.id,
+    spell: serializeCardSnapshot(pending.spell),
+    casterId: pending.casterId,
+    targets: pending.targets,
+    targetDescriptions: pending.targetDescriptions,
+    createdAt: toDate(pending.createdAt),
+    reactorId: pending.reactorId,
+    resolved: pending.resolved
+  };
+};
+
+const serializeChainItem = (item: ChainItem) => ({
+  id: item.id,
+  type: item.type,
+  card: serializeCardSnapshot(item.card),
+  casterId: item.casterId,
+  targets: item.targets,
+  targetDescriptions: item.targetDescriptions,
+  createdAt: toDate(item.createdAt),
+  abilityName: item.abilityName ?? null,
+  sourceInstanceId: item.sourceInstanceId ?? null
+});
+
+const serializeReactionChain = (chain: ReactionChain | null | undefined) => {
+  if (!chain) {
+    return null;
+  }
+  return {
+    id: chain.id,
+    items: chain.items.map(serializeChainItem),
+    currentReactorId: chain.currentReactorId,
+    originalCasterId: chain.originalCasterId,
+    awaitingResponse: chain.awaitingResponse,
+    createdAt: toDate(chain.createdAt),
+    lastUpdatedAt: toDate(chain.lastUpdatedAt)
   };
 };
 
@@ -392,7 +477,9 @@ export const serializeGameState = (state: GameState, options?: SerializeGameStat
           defendingUnitIds: state.combatContext.defendingUnitIds ?? [],
           priorityStage: state.combatContext.priorityStage
         }
-      : null
+      : null,
+    pendingSpellResolution: serializePendingSpellResolution(state.pendingSpellResolution),
+    reactionChain: serializeReactionChain(state.reactionChain)
   };
 };
 

@@ -5,6 +5,63 @@ export type TargetHint = 'self' | 'ally' | 'enemy' | 'any' | 'battlefield' | 'zo
 
 export type TargetingMode = 'none' | 'single' | 'multiple' | 'global';
 
+export type SpellTargetScope =
+  | 'none'
+  | 'self'
+  | 'ally_unit'
+  | 'enemy_unit'
+  | 'any_unit'
+  | 'ally_units'
+  | 'enemy_units'
+  | 'all_units'
+  | 'battlefield'
+  | 'graveyard'
+  | 'hand'
+  | 'deck'
+  | 'player';
+
+export type SpellEffectCategory =
+  | 'damage_single'
+  | 'damage_multi'
+  | 'damage_all'
+  | 'buff_single'
+  | 'buff_multi'
+  | 'buff_all'
+  | 'debuff_single'
+  | 'debuff_multi'
+  | 'debuff_all'
+  | 'removal_single'
+  | 'removal_multi'
+  | 'removal_all'
+  | 'card_draw'
+  | 'card_discard'
+  | 'movement'
+  | 'return_to_hand'
+  | 'token_creation'
+  | 'resource_gain'
+  | 'battlefield_control'
+  | 'graveyard_return'
+  | 'graveyard_play'
+  | 'channel_rune'
+  | 'heal'
+  | 'shield'
+  | 'counter'
+  | 'transform'
+  | 'search'
+  | 'utility'
+  | 'complex';
+
+export interface SpellTargetingProfile {
+  scope: SpellTargetScope;
+  mode: TargetingMode;
+  minTargets: number;
+  maxTargets: number;
+  requiresSelection: boolean;
+  hint?: TargetHint;
+  allowFriendly: boolean;
+  allowEnemy: boolean;
+}
+
 export interface TargetingProfile {
   mode: TargetingMode;
   hint?: TargetHint;
@@ -39,6 +96,10 @@ export type EffectOperationType =
   | 'adjust_mulligan'
   | 'shield'
   | 'return_from_graveyard'
+  | 'combat_bonus'
+  | 'combat_trigger'
+  | 'aura_buff'
+  | 'on_play_trigger'
   | 'generic';
 
 export interface EffectOperation {
@@ -75,6 +136,11 @@ export type EffectClassId =
   | 'transform'
   | 'mulligan'
   | 'graveyard_return'
+  | 'assault'
+  | 'shield_combat'
+  | 'combat_trigger'
+  | 'aura_buff'
+  | 'on_play'
   | 'generic';
 
 export interface EffectClassDefinition {
@@ -465,6 +531,72 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     ruleRefs: ['117'],
     patterns: buildPatterns([/\bmulligan\b/i, /\bstarting hand\b/i]),
     operation: { type: 'adjust_mulligan', targetHint: 'self', zone: 'hand', automated: true }
+  },
+  {
+    id: 'assault',
+    label: 'Assault / attack bonus',
+    description: 'Grants bonus might while attacking (rule 713).',
+    ruleRefs: ['713'],
+    patterns: buildPatterns([
+      /\[Assault\b/i,
+      /\bASSAULT\b/i,
+      /\+\d+.*:rb_might:.*while.*attacker/i,
+      /\+\d+.*might.*while.*attacker/i
+    ]),
+    operation: { type: 'combat_bonus', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'shield_combat',
+    label: 'Shield / defense bonus',
+    description: 'Grants bonus might while defending (rule 714).',
+    ruleRefs: ['714'],
+    patterns: buildPatterns([
+      /\[Shield\b/i,
+      /\bSHIELD\b/i,
+      /\+\d+.*:rb_might:.*while.*defender/i,
+      /\+\d+.*might.*while.*defender/i
+    ]),
+    operation: { type: 'combat_bonus', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'combat_trigger',
+    label: 'Combat trigger effects',
+    description: 'Triggered abilities that fire when attacking or defending (rules 700-720).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\bwhen I attack\b/i,
+      /\bwhen I defend\b/i,
+      /\bwhen I attack or defend\b/i,
+      /\bwhen.*attacks?\b.*deal\b/i,
+      /\bwhen.*defends?\b.*deal\b/i
+    ]),
+    operation: { type: 'combat_trigger', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
+    id: 'aura_buff',
+    label: 'Aura / static buff',
+    description: 'Passive effects that buff other friendly units (rules 430-450).',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\bother friendly units\b.*\+\d/i,
+      /\bother friendly units\b.*have\b/i,
+      /\bfriendly units here have\b/i,
+      /\bunits you control\b.*\+\d/i,
+      /\bunits you control have\b/i
+    ]),
+    operation: { type: 'aura_buff', targetHint: 'ally', zone: 'board', automated: true }
+  },
+  {
+    id: 'on_play',
+    label: 'On-play effects',
+    description: 'Triggered abilities that fire when the card enters play (rules 340-360).',
+    ruleRefs: ['340-360'],
+    patterns: buildPatterns([
+      /\bwhen you play me\b/i,
+      /\bwhen I enter\b/i,
+      /\bwhen.*played\b/i
+    ]),
+    operation: { type: 'on_play_trigger', targetHint: 'any', zone: 'board', automated: false }
   }
 ];
 
@@ -1182,10 +1314,15 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
 const normalizeCatalogRecord = (record: StoredCardRecord): EnrichedCardRecord => {
   const activation = buildActivation(record.effect);
   const effectProfile = normalizeTokenOperations(buildEffectProfile(record.effect, activation));
+  const behaviorHints = buildBehaviorHints(record.effect, []);
+  if (shouldDefaultTapped(record.type) && !behaviorHints.entersUntapped) {
+    behaviorHints.entersTapped = true;
+  }
   return {
     ...record,
     activation,
-    effectProfile
+    effectProfile,
+    ...(Object.keys(behaviorHints).length > 0 ? { behaviorHints } : {})
   };
 };
 
@@ -1285,4 +1422,246 @@ export const writeImageManifestToDisk = (
   }
   fs.writeFileSync(destination, JSON.stringify(manifest, null, 2));
   return destination;
+};
+
+// =============================================================================
+// SPELL TARGETING ANALYSIS
+// =============================================================================
+
+// Helper to convert number words to digits
+const NUMBER_WORD_MAP: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10
+};
+const NUMBER_WORD_PATTERN = 'one|two|three|four|five|six|seven|eight|nine|ten|\\d+';
+
+const parseNumberFromMatch = (match: string | undefined): number => {
+  if (!match) return 1;
+  const lower = match.toLowerCase();
+  if (NUMBER_WORD_MAP[lower] !== undefined) {
+    return NUMBER_WORD_MAP[lower];
+  }
+  const parsed = parseInt(match, 10);
+  return isNaN(parsed) ? 1 : parsed;
+};
+
+const SPELL_DAMAGE_MULTI_PATTERNS = [
+  new RegExp(`deal\\s+(?:${NUMBER_WORD_PATTERN})\\s+to\\s+each\\s+of\\s+up\\s+to\\s+(${NUMBER_WORD_PATTERN})`, 'i'),
+  new RegExp(`deal\\s+(?:${NUMBER_WORD_PATTERN})\\s+to\\s+up\\s+to\\s+(${NUMBER_WORD_PATTERN})`, 'i'),
+  new RegExp(`deal\\s+(?:${NUMBER_WORD_PATTERN})\\s+damage\\s+(${NUMBER_WORD_PATTERN})\\s+times`, 'i'),
+  /up\s+to\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:enemy\s+)?units?\b/i
+];
+
+const SPELL_TARGET_ALL_PATTERNS = [
+  /\ball\s+(enemy\s+)?units?\b/i,
+  /\beach\s+(enemy\s+)?unit\b/i
+];
+
+const SPELL_GRAVEYARD_PATTERNS = [
+  /from\s+(your\s+)?(graveyard|trash)/i,
+  /return\s+[^.]*to\s+your\s+hand/i
+];
+
+const SPELL_DECK_PATTERNS = [
+  /search\s+(your\s+)?deck/i
+];
+
+const SPELL_BATTLEFIELD_PATTERNS = [
+  /conquer\s+(a|an|the)?\s*battlefield/i,
+  /capture\s+(a|an|the)?\s*battlefield/i
+];
+
+// Patterns for spells that target a unit at/on a battlefield
+const SPELL_UNIT_AT_BATTLEFIELD_PATTERNS = [
+  /\b(kill|destroy|damage|target|strike|hit)\s+(a|an)\s+(unit|creature)\s+(at|on)\s+(a|an|the)?\s*battlefield/i,
+  /\bdeal\s+\d+\s+(damage\s+)?to\s+(a|an)\s+(unit|creature)\s+(at|on)\s+(a|an|the)?\s*battlefield/i,
+  /\b(a|an)\s+(unit|creature)\s+(at|on)\s+(a|an|the)?\s*battlefield/i
+];
+
+// Patterns for spells that target friendly/allied units
+const SPELL_FRIENDLY_UNIT_PATTERNS = [
+  /\b(move|return|bounce|recall|save|protect|buff|ready)\s+(a|an)?\s*(friendly|allied|your)\s+(unit|creature)/i,
+  /\b(a|an)\s*(friendly|allied)\s+(unit|creature)/i,
+  /\bmove\s+a\s+friendly\s+unit/i
+];
+
+// Patterns for spells that target enemy units
+const SPELL_ENEMY_UNIT_PATTERNS = [
+  /\b(kill|destroy|damage|stun|tap|exhaust|weaken)\s+(a|an)?\s*(enemy|opposing|opponent'?s?)\s+(unit|creature)/i,
+  /\bdeal\s+\d+\s+(damage\s+)?to\s+(a|an)?\s*(enemy|target)\s+(unit|creature)/i,
+  /\b(a|an)\s+(enemy|opposing)\s+(unit|creature)/i
+];
+
+// Patterns for spells that target any single unit
+const SPELL_SINGLE_UNIT_PATTERNS = [
+  /\btarget\s+(a|an)\s+(unit|creature)/i,
+  /\bdeal\s+\d+\s+(damage\s+)?to\s+(a|an)\s+(unit|creature)/i,
+  /\b(destroy|kill|bounce|return|tap|untap|ready|exhaust)\s+(a|an)\s+(unit|creature)/i
+];
+
+/**
+ * Analyzes a spell card and returns its targeting profile for UI display
+ */
+export const analyzeSpellTargeting = (card: EnrichedCardRecord): SpellTargetingProfile => {
+  const effectText = card.effect ?? '';
+  const profile = card.effectProfile;
+  const baseMode = profile?.targeting?.mode ?? 'none';
+  const hint = profile?.targeting?.hint;
+
+  // Determine target scope
+  let scope: SpellTargetScope = 'none';
+  let minTargets = 0;
+  let maxTargets = 0;
+  let requiresSelection = profile?.targeting?.requiresSelection ?? false;
+  let allowFriendly = true;
+  let allowEnemy = true;
+
+  // Check for graveyard targeting
+  if (SPELL_GRAVEYARD_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'graveyard';
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+    allowEnemy = false;
+  }
+  // Check for deck/search targeting
+  else if (SPELL_DECK_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'deck';
+    minTargets = 0;
+    maxTargets = 1;
+    requiresSelection = true;
+    allowEnemy = false;
+  }
+  // Check for battlefield targeting (conquer/capture a battlefield)
+  else if (SPELL_BATTLEFIELD_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'battlefield';
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+  }
+  // Check for spells that target a unit AT a battlefield (e.g., "Kill a unit at a battlefield")
+  else if (SPELL_UNIT_AT_BATTLEFIELD_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'any_unit';
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+    // Keep allowFriendly and allowEnemy as true since it's "a unit" (any unit)
+  }
+  // Check for friendly unit targeting (e.g., "Move a friendly unit")
+  else if (SPELL_FRIENDLY_UNIT_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'ally_unit';
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+    allowEnemy = false;
+  }
+  // Check for enemy unit targeting (e.g., "Kill an enemy unit")
+  else if (SPELL_ENEMY_UNIT_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'enemy_unit';
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+    allowFriendly = false;
+  }
+  // Check for single unit targeting (e.g., "Target a unit", "Deal X to a unit")
+  else if (SPELL_SINGLE_UNIT_PATTERNS.some(p => p.test(effectText))) {
+    scope = 'any_unit';
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+  }
+  // Check for all-units targeting
+  else if (SPELL_TARGET_ALL_PATTERNS.some(p => p.test(effectText))) {
+    scope = /\benemy\b/i.test(effectText) ? 'enemy_units' : 'all_units';
+    minTargets = 0;
+    maxTargets = 0; // All applicable
+    allowFriendly = !effectText.toLowerCase().includes('enemy');
+  }
+  // Check for multi-target spells
+  else if (SPELL_DAMAGE_MULTI_PATTERNS.some(p => p.test(effectText))) {
+    const multiMatch = effectText.match(new RegExp(`up\\s+to\\s+(${NUMBER_WORD_PATTERN})`, 'i'));
+    scope = 'any_unit';
+    minTargets = 0; // "up to X" means 0 to X targets
+    maxTargets = multiMatch ? parseNumberFromMatch(multiMatch[1]) : 3;
+    requiresSelection = true;
+  }
+  // Single target based on hint
+  else if (baseMode === 'single' || requiresSelection) {
+    if (hint === 'ally') {
+      scope = 'ally_unit';
+      allowEnemy = false;
+    } else if (hint === 'enemy') {
+      scope = 'enemy_unit';
+      allowFriendly = false;
+    } else if (hint === 'self') {
+      scope = 'self';
+      allowEnemy = false;
+    } else {
+      scope = 'any_unit';
+    }
+    minTargets = 1;
+    maxTargets = 1;
+    requiresSelection = true;
+  }
+  // Global effects
+  else if (baseMode === 'global') {
+    scope = 'all_units';
+    minTargets = 0;
+    maxTargets = 0;
+  }
+  // Multiple targets
+  else if (baseMode === 'multiple') {
+    const countMatch = effectText.match(/up\s+to\s+(\d+)/i);
+    scope = hint === 'ally' ? 'ally_units' : hint === 'enemy' ? 'enemy_units' : 'all_units';
+    minTargets = 0;
+    maxTargets = countMatch ? parseInt(countMatch[1], 10) : 0;
+    requiresSelection = maxTargets > 0;
+    if (hint === 'ally') allowEnemy = false;
+    if (hint === 'enemy') allowFriendly = false;
+  }
+
+  return {
+    scope,
+    mode: baseMode,
+    minTargets,
+    maxTargets,
+    requiresSelection,
+    hint,
+    allowFriendly,
+    allowEnemy
+  };
+};
+
+/**
+ * Returns all spells from the catalog with their targeting profiles
+ */
+export const getSpellsWithTargeting = (): Array<EnrichedCardRecord & { spellTargeting: SpellTargetingProfile }> => {
+  return getCachedCatalog()
+    .filter((card) => card.type?.toLowerCase() === 'spell')
+    .map((card) => ({
+      ...card,
+      spellTargeting: analyzeSpellTargeting(card)
+    }));
+};
+
+/**
+ * Checks if a spell requires target selection before resolution
+ */
+export const spellRequiresTargetSelection = (card: EnrichedCardRecord): boolean => {
+  if (card.type?.toLowerCase() !== 'spell') {
+    return false;
+  }
+  const targeting = analyzeSpellTargeting(card);
+  return targeting.requiresSelection;
+};
+
+/**
+ * Gets the target scope for a spell (for UI prompt display)
+ */
+export const getSpellTargetScope = (card: EnrichedCardRecord): SpellTargetScope => {
+  if (card.type?.toLowerCase() !== 'spell') {
+    return 'none';
+  }
+  const targeting = analyzeSpellTargeting(card);
+  return targeting.scope;
 };
