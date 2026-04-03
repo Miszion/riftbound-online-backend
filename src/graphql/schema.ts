@@ -137,6 +137,16 @@ export const typeDefs = `#graphql
     effectState: JSON
     presence: [BattlefieldPresence!]!
     card: CardSnapshot
+    hiddenCards: [HiddenCardState!]!
+  }
+
+  type HiddenCardState {
+    instanceId: ID!
+    ownerId: ID!
+    hiddenOnTurn: Int!
+    battlefieldId: ID!
+    card: CardSnapshot
+    isRevealed: Boolean!
   }
 
   type BattlefieldPresence {
@@ -702,6 +712,20 @@ export const typeDefs = `#graphql
       playerId: ID!
       creatureInstanceId: String!
       destinationId: String!
+    ): ActionResponse!
+
+    hideCard(
+      matchId: ID!
+      playerId: ID!
+      cardIndex: Int!
+      battlefieldId: ID!
+    ): ActionResponse!
+
+    activateHiddenCard(
+      matchId: ID!
+      playerId: ID!
+      hiddenInstanceId: ID!
+      targets: [String!]
     ): ActionResponse!
 
     commenceBattle(

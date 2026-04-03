@@ -9,6 +9,7 @@ import type {
   GamePrompt,
   GameState,
   GameStateSnapshot,
+  HiddenCard,
   PendingSpellResolution,
   ReactionChain,
   PlayerState,
@@ -180,7 +181,28 @@ const serializePlayerBoard = (board: PlayerBoard) => ({
   enchantments: serializeCardZone(board.enchantments)
 });
 
-const serializeBattlefieldState = (state: GameState, battlefield: BattlefieldState) => ({
+const serializeHiddenCard = (
+  hiddenCard: HiddenCard,
+  viewerId: string | null | undefined
+) => {
+  const isOwner = viewerId === hiddenCard.ownerId;
+  return {
+    instanceId: hiddenCard.instanceId,
+    ownerId: hiddenCard.ownerId,
+    hiddenOnTurn: hiddenCard.hiddenOnTurn,
+    battlefieldId: hiddenCard.battlefieldId,
+    // Only reveal the card details to the owner
+    card: isOwner ? serializeCardSnapshot(hiddenCard.card) : null,
+    // For opponents, just indicate there's a hidden card
+    isRevealed: isOwner
+  };
+};
+
+const serializeBattlefieldState = (
+  state: GameState,
+  battlefield: BattlefieldState,
+  viewerId?: string | null
+) => ({
   battlefieldId: battlefield.battlefieldId,
   slug: battlefield.slug ?? null,
   name: battlefield.name,
@@ -194,7 +216,8 @@ const serializeBattlefieldState = (state: GameState, battlefield: BattlefieldSta
   combatTurnByPlayer: battlefield.combatTurnByPlayer ?? null,
   effectState: battlefield.effectState ?? null,
   presence: resolveBattlefieldPresence(state, battlefield),
-  card: battlefield.card ? serializeCardSnapshot(battlefield.card) : null
+  card: battlefield.card ? serializeCardSnapshot(battlefield.card) : null,
+  hiddenCards: (battlefield.hiddenCards ?? []).map(hc => serializeHiddenCard(hc, viewerId))
 });
 
 const resolveBattlefieldPresence = (state: GameState, battlefield: BattlefieldState) => {
@@ -463,7 +486,7 @@ export const serializeGameState = (state: GameState, options?: SerializeGameStat
     priorityWindow: serializePriorityWindow(state.priorityWindow),
     snapshots: state.snapshots.map(serializeSnapshot),
     battlefields: state.battlefields.map((battlefield) =>
-      serializeBattlefieldState(state, battlefield)
+      serializeBattlefieldState(state, battlefield, viewerId)
     ),
     duelLog: duelLogEntries.map(serializeDuelLogEntry),
     chatLog: chatLogEntries.map(serializeChatMessage),

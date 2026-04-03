@@ -423,7 +423,7 @@ export interface GameMove {
   playerIndex: number;
   turn: number;
   phase: GamePhase;
-  action: 'play_card' | 'attack' | 'move' | 'pass' | 'activate_ability' | 'end_turn';
+  action: 'play_card' | 'attack' | 'move' | 'pass' | 'activate_ability' | 'end_turn' | 'hide_card' | 'activate_hidden';
   cardId?: string;
   targetId?: string;
   timestamp: number;
@@ -511,6 +511,14 @@ export interface MatchResult {
   players?: { playerId: string; name?: string | null }[];
 }
 
+export interface HiddenCard {
+  instanceId: string;
+  card: Card;
+  ownerId: string;
+  hiddenOnTurn: number;
+  battlefieldId: string;
+}
+
 export interface BattlefieldState {
   battlefieldId: string;
   slug?: string;
@@ -525,6 +533,7 @@ export interface BattlefieldState {
   lastHoldScoreTurn?: number;
   combatTurnByPlayer?: Record<string, number>;
   effectState?: Record<string, unknown>;
+  hiddenCards: HiddenCard[];
 }
 
 export interface BattlefieldPresence {
@@ -1244,7 +1253,9 @@ export class RiftboundGameEngine {
       const caster = this.getPlayerById(pending.casterId);
       const contextSnapshot = this.restoreEffectContext(pending.context);
       contextSnapshot.targets = sanitizedSelections;
-      this.executeEffectOperations(pending.operations, caster, contextSnapshot, pending.nextIndex + 1);
+      // Resume from the SAME index (the operation that deferred), not nextIndex + 1
+      // This allows the operation to run again with targets now available
+      this.executeEffectOperations(pending.operations, caster, contextSnapshot, pending.nextIndex);
     } else {
       const handler = String(pending.metadata?.handler ?? '');
       const caster = this.getPlayerById(pending.casterId);
@@ -1288,6 +1299,33 @@ export class RiftboundGameEngine {
             ignoreEnergy: pending.metadata?.ignoreEnergy !== false,
             source: spellRef
           });
+          break;
+        }
+        case 'each_player_sacrifice': {
+          const stage = String(pending.metadata?.stage ?? '');
+          const spellRef = this.buildSpellReference(
+            (pending.metadata?.sourceCardId as string) ?? null,
+            (pending.metadata?.sourceCardName as string) ?? null
+          );
+          const opponent = this.gameState.players.find((p) => p.playerId !== caster.playerId);
+
+          if (stage === 'caster_selection') {
+            // Caster has selected, now prompt opponent
+            const casterSelection = sanitizedSelections[0] ?? null;
+            const opponentHasUnits = Boolean(pending.metadata?.opponentHasUnits);
+            
+            if (opponentHasUnits && opponent) {
+              this.deferEachPlayerSacrificeOpponentSelection(spellRef, caster, opponent, casterSelection);
+            } else {
+              // Opponent has no units, resolve immediately
+              this.resolveEachPlayerSacrifice(spellRef, caster, casterSelection, null);
+            }
+          } else if (stage === 'opponent_selection') {
+            // Opponent has selected, resolve the effect
+            const casterSelection = (pending.metadata?.casterSelection as string) ?? null;
+            const opponentSelection = sanitizedSelections[0] ?? null;
+            this.resolveEachPlayerSacrifice(spellRef, caster, casterSelection, opponentSelection);
+          }
           break;
         }
         default:
@@ -1841,10 +1879,26 @@ export class RiftboundGameEngine {
     return timingHints.has(timing);
   }
 
+  /**
+   * During combat (showdown), check if a card can be played at the current stage.
+   * - During 'action' stage: Both ACTION and REACTION cards can be played
+   *   (turn player can play actions OR react preemptively)
+   * - During 'reaction' stage: Only REACTION cards can be played
+   */
   private ensureCombatTiming(card: Card, stage: 'action' | 'reaction'): void {
-    if (!this.cardSupportsTiming(card, stage)) {
-      const label = stage === 'action' ? 'action' : 'reaction';
-      throw new Error(`Only ${label} cards may be played right now.`);
+    const supportsAction = this.cardSupportsTiming(card, 'action');
+    const supportsReaction = this.cardSupportsTiming(card, 'reaction');
+    
+    if (stage === 'action') {
+      // During action stage, both ACTION and REACTION cards are allowed
+      if (!supportsAction && !supportsReaction) {
+        throw new Error('Only action or reaction cards may be played during a showdown.');
+      }
+    } else {
+      // During reaction stage, only REACTION cards are allowed
+      if (!supportsReaction) {
+        throw new Error('Only reaction cards may be played right now.');
+      }
     }
   }
 
@@ -1904,6 +1958,11 @@ export class RiftboundGameEngine {
       ? this.gameState.combatContext?.priorityStage ?? 'action'
       : null;
     if (hasCombatPriority) {
+      // During combat (showdown), only spells with ACTION or REACTION timing can be played
+      const cardType = (card.type ?? '').toLowerCase();
+      if (cardType !== 'spell') {
+        throw new Error('Only spells can be played during a showdown');
+      }
       this.ensureCombatTiming(card, combatStage ?? 'action');
       this.currentPhase = GamePhase.COMBAT;
     }
@@ -1920,6 +1979,20 @@ export class RiftboundGameEngine {
         };
       }
     }
+
+    // Apply cost modifiers from board effects (cost_reduction, cost_increase, etc.)
+    const costModifiers = this.calculateCostModifiers(card, player, targets);
+    if (costModifiers.energyModifier !== 0) {
+      cardCost.energy = Math.max(0, cardCost.energy + costModifiers.energyModifier);
+      if (costModifiers.description) {
+        this.addDuelLogEntry({
+          playerId: player.playerId,
+          message: `Cost modified: ${costModifiers.description}`,
+          tone: 'info'
+        });
+      }
+    }
+
     if (!this.canPayCost(player, cardCost)) {
       throw new Error('Insufficient resources');
     }
@@ -2031,7 +2104,47 @@ export class RiftboundGameEngine {
       if (!isValidTarget) {
         throw new Error(`Invalid target for ${spell.name}`);
       }
+      
+      // Check Tank mechanic - if targeting enemy units and a Tank unit exists,
+      // it must be targeted first unless all targets include the Tank
+      if (targeting.scope === 'enemy_unit' || targeting.scope === 'any_unit') {
+        const targetUnit = this.findCardInstance(targetId);
+        if (targetUnit) {
+          const tankViolation = this.checkTankTargetingViolation(targetUnit, targets);
+          if (tankViolation) {
+            throw new Error(`Must target ${tankViolation.name} first (Tank)`);
+          }
+        }
+      }
     }
+  }
+
+  /**
+   * Check if targeting violates Tank mechanic (must target Tank units first)
+   */
+  private checkTankTargetingViolation(
+    targetUnit: BoardCard,
+    allTargets: string[]
+  ): BoardCard | null {
+    const targetOwner = this.getPlayerByCard(targetUnit.instanceId);
+    const ownerUnits = targetOwner.board.creatures;
+    
+    // Find all Tank units owned by the same player at the same location
+    const tankUnits = ownerUnits.filter(unit => {
+      if (unit.instanceId === targetUnit.instanceId) return false;
+      if (!this.sameLocation(unit.location, targetUnit.location)) return false;
+      return this.cardHasMechanic(unit, 'Tank') || 
+             (unit.effectProfile?.classes ?? []).includes('keyword_tank');
+    });
+    
+    // If there are Tank units not included in targets, targeting is invalid
+    for (const tankUnit of tankUnits) {
+      if (!allTargets.includes(tankUnit.instanceId)) {
+        return tankUnit;
+      }
+    }
+    
+    return null;
   }
 
   /**
@@ -2155,6 +2268,136 @@ export class RiftboundGameEngine {
     return {
       energy: Math.round(energy),
       rune
+    };
+  }
+
+  /**
+   * Calculate cost modifiers from board effects
+   * Returns the amount to ADD to the base cost (negative values reduce cost)
+   */
+  private calculateCostModifiers(
+    card: Card,
+    player: PlayerState,
+    targets?: string[]
+  ): { energyModifier: number; description?: string } {
+    let totalEnergyModifier = 0;
+    const descriptions: string[] = [];
+
+    // Get all board cards from player's board
+    const playerBoardCards = [
+      ...player.board.creatures,
+      ...player.board.artifacts,
+      ...player.board.enchantments
+    ];
+
+    // Check for cost reduction effects on your own board cards
+    for (const boardCard of playerBoardCards) {
+      const classes = boardCard.effectProfile?.classes ?? [];
+      
+      // Cost reduction (e.g., "Your Dragons' first spell costs 1 less")
+      if (classes.includes('cost_reduction')) {
+        // Parse the card text to check if it applies to this card being played
+        const effectText = (boardCard.text ?? '').toLowerCase();
+        const cardTags = card.tags?.map(t => t.toLowerCase()) ?? [];
+        const cardKeywords = card.keywords?.map(k => k.toLowerCase()) ?? [];
+        
+        // Check for tribal cost reduction
+        const tribalMatch = effectText.match(/your\s+(\w+)s?['']?\s+(?:\w+\s+)*(?:spell|unit|card)s?\s+costs?\s+(\d+)\s+less/i);
+        if (tribalMatch) {
+          const [, tribe, amount] = tribalMatch;
+          const tribeLower = tribe.toLowerCase();
+          if (cardTags.includes(tribeLower) || cardKeywords.includes(tribeLower) || 
+              card.type?.toLowerCase() === tribeLower ||
+              (card.name ?? '').toLowerCase().includes(tribeLower)) {
+            const reduction = parseInt(amount, 10) || 1;
+            totalEnergyModifier -= reduction;
+            descriptions.push(`${boardCard.name}: -${reduction} (${tribe})`);
+          }
+        }
+        
+        // Generic "costs 1 less" without tribal restriction
+        const genericMatch = effectText.match(/costs?\s+(\d+)\s+less/i);
+        if (genericMatch && !tribalMatch) {
+          const reduction = parseInt(genericMatch[1], 10) || 1;
+          // Only apply if the card meets any specified conditions
+          if (!effectText.includes('your ') || effectText.includes('all cards')) {
+            totalEnergyModifier -= reduction;
+            descriptions.push(`${boardCard.name}: -${reduction}`);
+          }
+        }
+      }
+      
+      // Tribal synergy cost effects
+      if (classes.includes('tribal_synergy')) {
+        const effectText = (boardCard.text ?? '').toLowerCase();
+        const cardTags = card.tags?.map(t => t.toLowerCase()) ?? [];
+        
+        // Pattern: "Your Dragons' first spell costs 1 less"
+        const tribalCostMatch = effectText.match(/your\s+(\w+)s?['']?\s+.*costs?\s+(\d+)\s+less/i);
+        if (tribalCostMatch) {
+          const [, tribe, amount] = tribalCostMatch;
+          if (cardTags.includes(tribe.toLowerCase())) {
+            const reduction = parseInt(amount, 10) || 1;
+            totalEnergyModifier -= reduction;
+            descriptions.push(`${boardCard.name}: -${reduction} (${tribe})`);
+          }
+        }
+      }
+    }
+
+    // Check opponent's board for cost increase effects
+    const opponent = this.getOtherPlayer(player);
+    const opponentBoardCards = [
+      ...opponent.board.creatures,
+      ...opponent.board.artifacts,
+      ...opponent.board.enchantments
+    ];
+    for (const boardCard of opponentBoardCards) {
+      const classes = boardCard.effectProfile?.classes ?? [];
+      
+      if (classes.includes('cost_increase')) {
+        const effectText = (boardCard.text ?? '').toLowerCase();
+        
+        // Pattern: "Enemy spells cost X more"
+        const costIncreaseMatch = effectText.match(/(?:enemy|opponent'?s?)\s+(?:spells?|cards?)\s+cost\s+(\d+)\s+more/i);
+        if (costIncreaseMatch && card.type === CardType.SPELL) {
+          const increase = parseInt(costIncreaseMatch[1], 10) || 1;
+          totalEnergyModifier += increase;
+          descriptions.push(`${boardCard.name}: +${increase}`);
+        }
+      }
+      
+      // Check for targeting_discount if this card targets something
+      if (targets && targets.length > 0 && classes.includes('targeting_discount')) {
+        const effectText = (boardCard.text ?? '').toLowerCase();
+        // Check if a target is this card with targeting_discount
+        if (targets.includes(boardCard.instanceId)) {
+          const discountMatch = effectText.match(/spells\s+that\s+(?:choose|target)\s+me\s+cost\s+(\d+)\s+less/i);
+          if (discountMatch) {
+            const discount = parseInt(discountMatch[1], 10) || 1;
+            totalEnergyModifier -= discount;
+            descriptions.push(`${boardCard.name}: -${discount} (targeting)`);
+          }
+        }
+      }
+      
+      // Check for Deflect keyword - increases cost to target this unit
+      if (targets && targets.length > 0 && 
+          (classes.includes('keyword_deflect') || this.cardHasMechanic(boardCard, 'Deflect'))) {
+        if (targets.includes(boardCard.instanceId)) {
+          const effectText = (boardCard.text ?? '').toLowerCase();
+          // Default Deflect cost is 1 unless specified otherwise
+          const deflectMatch = effectText.match(/\[?deflect\]?\s*[—-]?\s*(?:\+?(\d+))?/i);
+          const deflectCost = deflectMatch && deflectMatch[1] ? parseInt(deflectMatch[1], 10) : 1;
+          totalEnergyModifier += deflectCost;
+          descriptions.push(`${boardCard.name}: +${deflectCost} (Deflect)`);
+        }
+      }
+    }
+
+    return {
+      energyModifier: totalEnergyModifier,
+      description: descriptions.length > 0 ? descriptions.join(', ') : undefined
     };
   }
 
@@ -2306,6 +2549,277 @@ export class RiftboundGameEngine {
       message: `${this.resolvePlayerName(playerId) ?? 'Player'} deploys ${champion.name}.`,
       tone: 'info'
     });
+  }
+
+  /**
+   * Hide a card with [Hidden] keyword on a controlled battlefield.
+   * The card is placed face-down and can be activated later at REACTION speed.
+   */
+  public hideCard(playerId: string, cardIndex: number, battlefieldId: string): void {
+    const player = this.getPlayerById(playerId);
+    const card = player.hand[cardIndex];
+    if (!card) {
+      throw new Error('Card not in hand');
+    }
+
+    // Check card has Hidden keyword
+    if (!this.cardHasMechanic(card, 'Hidden')) {
+      throw new Error('Only cards with [Hidden] can be hidden on battlefields');
+    }
+
+    // Check player controls the battlefield
+    const battlefield = this.findBattlefieldState(battlefieldId);
+    if (!battlefield) {
+      throw new Error('Battlefield not found');
+    }
+
+    if (battlefield.controller !== playerId) {
+      throw new Error('You can only hide cards on battlefields you control');
+    }
+
+    // Check there isn't already a hidden card here from this player
+    const existingHidden = battlefield.hiddenCards.filter(hc => hc.ownerId === playerId);
+    const maxHiddenCards = this.getMaxHiddenCardsOnBattlefield(battlefield, player);
+    if (existingHidden.length >= maxHiddenCards) {
+      throw new Error(`You can only have ${maxHiddenCards} hidden card(s) on this battlefield`);
+    }
+
+    // Get the hide cost (typically 1 power of any type)
+    const hideCost = this.getHideCost(card);
+    if (!this.canPayCost(player, hideCost)) {
+      throw new Error('Insufficient resources to hide card');
+    }
+
+    // Pay the cost
+    this.payCardCost(player, hideCost);
+
+    // Remove from hand
+    player.hand.splice(cardIndex, 1);
+
+    // Create hidden card entry
+    const hiddenCard: HiddenCard = {
+      instanceId: this.nextCardInstanceId(card.id),
+      card: this.cloneCard(card),
+      ownerId: playerId,
+      hiddenOnTurn: this.turnNumber,
+      battlefieldId
+    };
+
+    // Add to battlefield's hidden cards
+    battlefield.hiddenCards.push(hiddenCard);
+
+    this.recordMove('hide_card', card.id, battlefieldId);
+
+    this.addDuelLogEntry({
+      playerId,
+      message: `${this.resolvePlayerName(playerId) ?? 'Player'} hides a card on ${battlefield.name}.`,
+      tone: 'info'
+    });
+
+    this.recordSnapshot('hide-card');
+  }
+
+  /**
+   * Activate a hidden card at REACTION speed.
+   * The card must have been hidden on a previous turn.
+   */
+  public activateHiddenCard(
+    playerId: string,
+    hiddenInstanceId: string,
+    targets?: string[]
+  ): void {
+    const player = this.getPlayerById(playerId);
+
+    // Check if there's an active reaction chain
+    const activeChain = this.gameState.reactionChain;
+    if (activeChain && activeChain.awaitingResponse) {
+      // During a chain, only the current reactor can activate hidden cards
+      if (activeChain.currentReactorId !== playerId) {
+        throw new Error('You cannot activate hidden cards during opponent\'s reaction window');
+      }
+      // Player is the current reactor - they can activate their hidden card as a response
+    } else {
+      // No active chain - check if it's the player's turn or they have combat priority
+      const hasCombatPriority = this.hasCombatPriority(playerId);
+      if (!hasCombatPriority && player.playerId !== this.getCurrentPlayer().playerId) {
+        throw new Error('Not your turn');
+      }
+    }
+
+    // Find the hidden card across all battlefields
+    let hiddenCard: HiddenCard | undefined;
+    let battlefield: BattlefieldState | undefined;
+    for (const bf of this.gameState.battlefields) {
+      const found = bf.hiddenCards.find(
+        hc => hc.instanceId === hiddenInstanceId && hc.ownerId === playerId
+      );
+      if (found) {
+        hiddenCard = found;
+        battlefield = bf;
+        break;
+      }
+    }
+
+    if (!hiddenCard || !battlefield) {
+      throw new Error('Hidden card not found');
+    }
+
+    // Check it wasn't hidden this turn (must wait at least one turn)
+    if (hiddenCard.hiddenOnTurn === this.turnNumber) {
+      throw new Error('Hidden cards cannot be activated on the same turn they were hidden');
+    }
+
+    // Remove from battlefield's hidden cards BEFORE adding to chain
+    // This prevents double-activation issues
+    battlefield.hiddenCards = battlefield.hiddenCards.filter(
+      hc => hc.instanceId !== hiddenInstanceId
+    );
+
+    const card = hiddenCard.card;
+    const cardType = (card.type ?? '').toLowerCase();
+
+    // Log the reveal
+    this.addDuelLogEntry({
+      playerId,
+      message: `${this.resolvePlayerName(playerId) ?? 'Player'} reveals ${card.name} from ${battlefield.name}!`,
+      tone: 'highlight'
+    });
+
+    if (cardType === 'spell') {
+      // Hidden spells always go through the chain system
+      // This handles both starting a new chain AND responding to an existing chain
+      this.playSpellFromHidden(player, card, targets ?? [], battlefield);
+    } else {
+      // For units/creatures, deploy them to this battlefield
+      // Non-spell hidden cards don't use the chain system
+      this.deployPermanentCard(player, card, {
+        destinationId: battlefield.battlefieldId,
+        targets: targets ?? []
+      });
+    }
+
+    this.recordMove('activate_hidden', card.id, battlefield.battlefieldId);
+    this.recordSnapshot('activate-hidden-card');
+  }
+
+  /**
+   * Get the cost to hide a card (usually 1 power of any type)
+   */
+  private getHideCost(card: Card): { energy: number; power: Record<string, number> } {
+    // Default hide cost is 1 power of any type
+    // Some cards may have different costs specified in their text
+    const text = (card.text ?? '').toLowerCase();
+    
+    // Check for specific rune costs like ":rb_rune_mind:" or "1 [Mind]"
+    const specificRuneMatch = text.match(/hide\s+(?:now\s+)?for\s+:rb_rune_(\w+):/i);
+    if (specificRuneMatch) {
+      const domain = specificRuneMatch[1].toLowerCase();
+      return { energy: 0, power: { [domain]: 1 } };
+    }
+
+    // Default: 1 universal power (rainbow rune)
+    return { energy: 0, power: { universal: 1 } };
+  }
+
+  /**
+   * Get max hidden cards allowed on a battlefield for a player
+   */
+  private getMaxHiddenCardsOnBattlefield(battlefield: BattlefieldState, player: PlayerState): number {
+    let max = 1;
+
+    // Check battlefield text for "hide an additional card"
+    const battlefieldText = (battlefield.card?.text ?? '').toLowerCase();
+    if (battlefieldText.includes('hide an additional card')) {
+      max += 1;
+    }
+
+    // Check player's board for effects that increase hidden card limit
+    const allPermanents = [
+      ...player.board.creatures,
+      ...player.board.artifacts,
+      ...player.board.enchantments
+    ];
+    for (const permanent of allPermanents) {
+      const text = (permanent.text ?? '').toLowerCase();
+      if (text.includes('hide an additional card') && 
+          permanent.location.zone === 'battlefield' &&
+          permanent.location.battlefieldId === battlefield.battlefieldId) {
+        max += 1;
+      }
+    }
+
+    return max;
+  }
+
+  /**
+   * Play a spell from a hidden card slot
+   */
+  private playSpellFromHidden(
+    player: PlayerState,
+    card: Card,
+    targets: string[],
+    _battlefield: BattlefieldState
+  ): void {
+    // Check if there's an active reaction chain
+    const activeChain = this.gameState.reactionChain;
+    
+    if (activeChain && activeChain.awaitingResponse) {
+      // Add this as a chain reaction using existing method
+      this.addToReactionChain({
+        type: 'spell',
+        card,
+        casterId: player.playerId,
+        targets,
+        targetDescriptions: this.buildTargetDescriptions(targets)
+      }, player);
+    } else {
+      // Stage the spell for reaction and resolution
+      this.stageSpellForReaction(card, player, targets);
+    }
+  }
+
+  /**
+   * When battlefield control changes, discard opponent's hidden cards there
+   */
+  private handleBattlefieldControlChange(
+    battlefield: BattlefieldState,
+    newControllerId: string,
+    previousControllerId: string | undefined
+  ): void {
+    if (!previousControllerId || previousControllerId === newControllerId) {
+      return;
+    }
+
+    // Find hidden cards owned by the previous controller
+    const lostHiddenCards = battlefield.hiddenCards.filter(
+      hc => hc.ownerId === previousControllerId
+    );
+
+    if (lostHiddenCards.length === 0) {
+      return;
+    }
+
+    // Remove them from battlefield and send to graveyard
+    battlefield.hiddenCards = battlefield.hiddenCards.filter(
+      hc => hc.ownerId !== previousControllerId
+    );
+
+    const previousController = this.gameState.players.find(
+      p => p.playerId === previousControllerId
+    );
+    if (!previousController) {
+      return;
+    }
+
+    for (const hiddenCard of lostHiddenCards) {
+      previousController.graveyard.push(hiddenCard.card);
+      
+      this.addDuelLogEntry({
+        playerId: previousControllerId,
+        message: `${hiddenCard.card.name} was discarded when ${this.resolvePlayerName(previousControllerId)} lost control of ${battlefield.name}.`,
+        tone: 'warning'
+      });
+    }
   }
 
   public concedeMatch(concedingPlayerId: string): MatchResult {
@@ -3328,7 +3842,7 @@ export class RiftboundGameEngine {
                 allowFriendly: true,
                 allowOpponent: false,
                 metadata: {
-                  handler: 'return_from_graveyard',
+                  handler: 'graveyard_return',
                   requireUnit,
                   maxTargets
                 }
@@ -3598,6 +4112,62 @@ export class RiftboundGameEngine {
           });
           break;
         }
+        case 'stun': {
+          // Stun/exhaust target units
+          const targetsToStun = resolveBoardTargets().filter(
+            (target) => target.type === CardType.CREATURE && !target.isTapped
+          );
+          if (targetsToStun.length === 0) {
+            break;
+          }
+          targetsToStun.forEach((target) => {
+            target.isTapped = true;
+            const suffix = this.describeEffectSuffix(context);
+            this.addDuelLogEntry({
+              playerId: caster.playerId,
+              message: `${target.name ?? 'A unit'} is stunned${suffix}.`,
+              tone: 'warning'
+            });
+          });
+          break;
+        }
+        case 'ready': {
+          // Ready/untap target units or runes
+          const targetsToReady = resolveBoardTargets().filter(
+            (target) => target.isTapped
+          );
+          if (targetsToReady.length > 0) {
+            targetsToReady.forEach((target) => {
+              target.isTapped = false;
+              const suffix = this.describeEffectSuffix(context);
+              this.addDuelLogEntry({
+                playerId: caster.playerId,
+                message: `${target.name ?? 'A unit'} is readied${suffix}.`,
+                tone: 'success'
+              });
+            });
+            break;
+          }
+          // Also handle readying runes
+          const runeCount = Math.max(1, operation.magnitudeHint ?? 1);
+          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
+          let readied = 0;
+          for (const rune of targetPlayer.channeledRunes) {
+            if (rune.isTapped && readied < runeCount) {
+              rune.isTapped = false;
+              readied++;
+            }
+          }
+          if (readied > 0) {
+            const suffix = this.describeEffectSuffix(context);
+            this.addDuelLogEntry({
+              playerId: targetPlayer.playerId,
+              message: `${readied} rune${readied === 1 ? '' : 's'} readied${suffix}.`,
+              tone: 'success'
+            });
+          }
+          break;
+        }
         case 'generic': {
           if (operation.targetHint === 'battlefield') {
             const battlefield = this.resolveBattlefieldTargetForControl(
@@ -3640,6 +4210,9 @@ export class RiftboundGameEngine {
       return true;
     }
     if (this.tryHandleMultiTargetDamageSpell(spell, caster, effectText, targets)) {
+      return true;
+    }
+    if (this.tryHandleEachPlayerSacrificeSpell(spell, caster, effectText, targets)) {
       return true;
     }
     return false;
@@ -3945,6 +4518,164 @@ export class RiftboundGameEngine {
       this.addDuelLogEntry({
         playerId: caster.playerId,
         message: `${spell.name} has no valid targets to damage.`,
+        tone: 'warning'
+      });
+    }
+  }
+
+  /**
+   * Handle spells like "Each player kills one of their units" (Cull the Weak)
+   * 
+   * IMPORTANT: This is called during spell RESOLUTION, after the opponent has had
+   * their reaction window. If the opponent bounced their units in response, we check
+   * the current board state here - if they have no units left, they don't need to select.
+   * 
+   * Flow:
+   * 1. Spell cast → goes on chain
+   * 2. Opponent gets reaction window (can bounce units, etc.)
+   * 3. Chain resolves → this method is called
+   * 4. We check CURRENT board state for each player's units
+   * 5. Only players with units are prompted to select one to kill
+   */
+  private tryHandleEachPlayerSacrificeSpell(
+    spell: Card,
+    caster: PlayerState,
+    effectText: string,
+    _targets?: string[]
+  ): boolean {
+    // Match patterns like "each player kills one of their units"
+    if (!/each\s+player\s+kills?\s+one\s+of\s+their\s+units?/i.test(effectText)) {
+      return false;
+    }
+
+    const opponent = this.gameState.players.find((p) => p.playerId !== caster.playerId);
+    if (!opponent) {
+      return false;
+    }
+
+    // Check CURRENT board state - this happens at resolution time, after any responses
+    // If opponent bounced their units in response, they won't have any here
+    const casterUnits = caster.board.creatures.filter((c) => c.type === CardType.CREATURE);
+    const opponentUnits = opponent.board.creatures.filter((c) => c.type === CardType.CREATURE);
+
+    // If neither player has units at resolution time, spell fizzles
+    if (casterUnits.length === 0 && opponentUnits.length === 0) {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} resolves but neither player has units to kill.`,
+        tone: 'warning'
+      });
+      return true;
+    }
+
+    // Start the selection chain - active player (caster) picks first if they have units
+    if (casterUnits.length > 0) {
+      this.deferTargetPrompt({
+        caster,
+        spell,
+        scope: 'unit',
+        min: 1,
+        max: 1,
+        allowFriendly: true,
+        allowOpponent: false,
+        handler: 'each_player_sacrifice',
+        metadata: {
+          stage: 'caster_selection',
+          opponentHasUnits: opponentUnits.length > 0
+        }
+      });
+    } else {
+      // Caster has no units (maybe they were bounced), skip directly to opponent selection
+      this.deferEachPlayerSacrificeOpponentSelection(spell, caster, opponent, null);
+    }
+
+    return true;
+  }
+
+  /**
+   * Defer opponent selection for "each player sacrifice" effect
+   * Called after caster has selected (or if caster had no units)
+   */
+  private deferEachPlayerSacrificeOpponentSelection(
+    spell: Card,
+    caster: PlayerState,
+    opponent: PlayerState,
+    casterSelection: string | null
+  ): void {
+    // Re-check opponent's units at this point (in case something changed)
+    const opponentUnits = opponent.board.creatures.filter((c) => c.type === CardType.CREATURE);
+    
+    if (opponentUnits.length === 0) {
+      // Opponent has no units to sacrifice - resolve with just caster's selection
+      this.resolveEachPlayerSacrifice(spell, caster, casterSelection, null);
+      return;
+    }
+
+    // Create prompt for opponent to select one of their own units
+    const prompt = this.enqueuePrompt('target', opponent.playerId, {
+      sourceCardId: spell.id ?? null,
+      sourceCardName: spell.name ?? null,
+      scope: 'unit',
+      min: 1,
+      max: 1,
+      allowFriendly: true,
+      allowOpponent: false
+    });
+    this.gameState.pendingEffects.push({
+      id: prompt.id,
+      type: 'target',
+      casterId: caster.playerId,
+      targetPlayerId: opponent.playerId,
+      metadata: {
+        handler: 'each_player_sacrifice',
+        stage: 'opponent_selection',
+        sourceCardId: spell.id,
+        sourceCardName: spell.name,
+        casterSelection
+      }
+    });
+  }
+
+  /**
+   * Resolve "each player sacrifice" effect after both players have selected
+   */
+  private resolveEachPlayerSacrifice(
+    spell: Card,
+    caster: PlayerState,
+    casterSelection: string | null,
+    opponentSelection: string | null
+  ): void {
+    const killed: string[] = [];
+    const opponent = this.gameState.players.find((p) => p.playerId !== caster.playerId);
+
+    // Kill caster's selected unit
+    if (casterSelection) {
+      const casterUnit = this.findCardInstance(casterSelection);
+      if (casterUnit) {
+        this.destroyUnit(casterUnit, 'effect', spell);
+        killed.push(casterUnit.name ?? 'a unit');
+      }
+    }
+
+    // Kill opponent's selected unit
+    if (opponentSelection && opponent) {
+      const opponentUnit = this.findCardInstance(opponentSelection);
+      if (opponentUnit) {
+        this.destroyUnit(opponentUnit, 'effect', spell);
+        killed.push(opponentUnit.name ?? 'a unit');
+      }
+    }
+
+    if (killed.length > 0) {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} kills ${killed.join(' and ')}.`,
+        tone: 'success'
+      });
+    } else {
+      this.addDuelLogEntry({
+        playerId: caster.playerId,
+        message: `${spell.name} resolves with no units killed.`,
         tone: 'warning'
       });
     }
@@ -4910,7 +5641,16 @@ export class RiftboundGameEngine {
     targets?: string[],
     options?: { battlefield?: BattlefieldState; boardTarget?: BoardCard; playerTarget?: PlayerState }
   ): void {
-    const abilities = card.abilities ?? [];
+    // Gather abilities from this card
+    let abilities = [...(card.abilities ?? [])];
+    
+    // Check for ability_copy - gather abilities from other cards
+    const cardClasses = (card as BoardCard).effectProfile?.classes ?? [];
+    if (cardClasses.includes('ability_copy')) {
+      const copiedAbilities = this.gatherCopiedAbilities(card as BoardCard, player, triggerType);
+      abilities = [...abilities, ...copiedAbilities];
+    }
+
     if (abilities.length === 0) {
       if (triggerType === 'play') {
         this.logRuleUsage(card, 'static-entry');
@@ -4918,43 +5658,124 @@ export class RiftboundGameEngine {
       return;
     }
 
+    // Check for effect_amplifier - should this trigger twice?
+    const triggerCount = this.calculateTriggerMultiplier(card as BoardCard, player, triggerType);
+
     let resolved = false;
-    for (const ability of abilities) {
-      if (!this.abilityMatchesTrigger(ability.triggerType, triggerType)) {
-        continue;
-      }
-      resolved = true;
-      if (ability.operations && ability.operations.length > 0) {
-        const boardSource = this.isBoardCard(card) ? (card as BoardCard) : undefined;
-        const boardTarget = options?.boardTarget ?? boardSource;
-        const battlefieldTarget =
-          options?.battlefield ??
-          (boardTarget?.location.zone === 'battlefield'
-            ? this.findBattlefieldState(boardTarget.location.battlefieldId)
-            : undefined);
-        this.executeEffectOperations(ability.operations, player, {
-          source: card,
-          boardTarget,
-          playerTarget: options?.playerTarget,
-          battlefieldTarget,
-          abilityName: ability.name,
-          triggerType: ability.triggerType ?? null
-        });
-        this.logRuleUsage(card, `ability-${ability.name}`);
-        if (boardSource) {
-          this.updateActivationState(boardSource, true, `ability-${ability.name}`);
+    for (let triggerIdx = 0; triggerIdx < triggerCount; triggerIdx++) {
+      for (const ability of abilities) {
+        if (!this.abilityMatchesTrigger(ability.triggerType, triggerType)) {
+          continue;
         }
-        continue;
-      }
-      this.resolveAbility(ability, card, player, targets);
-      if (this.isBoardCard(card)) {
-        this.updateActivationState(card, true, `ability-${ability.name}`);
+        resolved = true;
+        if (ability.operations && ability.operations.length > 0) {
+          const boardSource = this.isBoardCard(card) ? (card as BoardCard) : undefined;
+          const boardTarget = options?.boardTarget ?? boardSource;
+          const battlefieldTarget =
+            options?.battlefield ??
+            (boardTarget?.location.zone === 'battlefield'
+              ? this.findBattlefieldState(boardTarget.location.battlefieldId)
+              : undefined);
+          this.executeEffectOperations(ability.operations, player, {
+            source: card,
+            boardTarget,
+            playerTarget: options?.playerTarget,
+            battlefieldTarget,
+            abilityName: ability.name,
+            triggerType: ability.triggerType ?? null
+          });
+          this.logRuleUsage(card, `ability-${ability.name}${triggerIdx > 0 ? '-amplified' : ''}`);
+          if (boardSource) {
+            this.updateActivationState(boardSource, true, `ability-${ability.name}`);
+          }
+          continue;
+        }
+        this.resolveAbility(ability, card, player, targets);
+        if (this.isBoardCard(card)) {
+          this.updateActivationState(card, true, `ability-${ability.name}`);
+        }
       }
     }
 
     if (!resolved && triggerType === 'play') {
       this.logRuleUsage(card, 'static-entry');
     }
+  }
+
+  /**
+   * Gather abilities copied from other cards (ability_copy effect)
+   */
+  private gatherCopiedAbilities(
+    card: BoardCard,
+    player: PlayerState,
+    _triggerType: string
+  ): CardAbility[] {
+    const copiedAbilities: CardAbility[] = [];
+    const effectText = (card.text ?? '').toLowerCase();
+    
+    // "I have all [tap] abilities of units you control"
+    if (/i\s+have\s+all\s+\[?tap\]?\s+abilities/i.test(effectText)) {
+      const friendlyUnits = [
+        ...player.board.creatures,
+        ...player.board.artifacts
+      ].filter(u => u.instanceId !== card.instanceId);
+      
+      for (const unit of friendlyUnits) {
+        const unitAbilities = unit.abilities ?? [];
+        for (const ability of unitAbilities) {
+          // Copy tap abilities (manually activated)
+          if (ability.triggerType === 'tap' || ability.triggerType === 'activated') {
+            copiedAbilities.push({
+              ...ability,
+              name: `${ability.name} (from ${unit.name})`
+            });
+          }
+        }
+      }
+    }
+    
+    return copiedAbilities;
+  }
+
+  /**
+   * Calculate how many times a trigger should fire (effect_amplifier)
+   */
+  private calculateTriggerMultiplier(
+    _card: BoardCard,
+    player: PlayerState,
+    triggerType: string
+  ): number {
+    let multiplier = 1;
+    
+    // Check all friendly board cards for effect_amplifier
+    const friendlyBoardCards = [
+      ...player.board.creatures,
+      ...player.board.artifacts,
+      ...player.board.enchantments
+    ];
+    
+    for (const source of friendlyBoardCards) {
+      const classes = source.effectProfile?.classes ?? [];
+      if (!classes.includes('effect_amplifier')) continue;
+      
+      const effectText = (source.text ?? '').toLowerCase();
+      
+      // "Triggered abilities trigger an additional time"
+      if (/trigger(?:ed)?\s+(?:abilities\s+)?(?:trigger\s+)?an\s+additional\s+time/i.test(effectText)) {
+        // Check if this applies to the current trigger type
+        if (triggerType === 'play' || triggerType === 'death' || 
+            triggerType === 'attack' || triggerType === 'defend') {
+          multiplier += 1;
+        }
+      }
+      
+      // "triggers twice"
+      if (/triggers?\s+twice/i.test(effectText)) {
+        multiplier = Math.max(multiplier, 2);
+      }
+    }
+    
+    return multiplier;
   }
 
   private abilityMatchesTrigger(
@@ -6503,7 +7324,8 @@ export class RiftboundGameEngine {
       contestedBy: [],
       lastCombatTurn: undefined,
       combatTurnByPlayer: {},
-      effectState: {}
+      effectState: {},
+      hiddenCards: []
     };
   }
 
@@ -6521,7 +7343,8 @@ export class RiftboundGameEngine {
       lastCombatTurn: state.lastCombatTurn,
       lastHoldScoreTurn: state.lastHoldScoreTurn,
       combatTurnByPlayer: { ...(state.combatTurnByPlayer ?? {}) },
-      effectState: state.effectState ? { ...state.effectState } : undefined
+      effectState: state.effectState ? { ...state.effectState } : undefined,
+      hiddenCards: state.hiddenCards.map(hc => ({ ...hc, card: this.cloneCard(hc.card) }))
     };
   }
 
@@ -6564,6 +7387,12 @@ export class RiftboundGameEngine {
     const alreadyControlled = previousController === player.playerId;
     battlefield.controller = player.playerId;
     battlefield.contestedBy = [];
+
+    // Handle hidden cards when control changes
+    if (previousController && previousController !== player.playerId) {
+      this.handleBattlefieldControlChange(battlefield, player.playerId, previousController);
+    }
+
     if (alreadyControlled) {
       battlefield.lastHoldTurn = this.turnNumber;
       return;
@@ -7163,6 +7992,185 @@ export class RiftboundGameEngine {
     return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
   }
 
+  /**
+   * Calculate all stat modifiers for a unit from auras, location effects, tribal synergy, etc.
+   * Returns the total might bonus to add (can be negative for debuffs)
+   */
+  private calculateStatModifiers(
+    unit: BoardCard,
+    options?: { isAttacking?: boolean; isDefending?: boolean }
+  ): number {
+    let totalBonus = 0;
+    const owner = this.getPlayerByCard(unit.instanceId);
+    const opponent = this.getOtherPlayer(owner);
+    const unitTags = unit.tags?.map(t => t.toLowerCase()) ?? [];
+    const unitLocation = unit.location;
+
+    // Get all board cards from both players
+    const ownerBoardCards = [
+      ...owner.board.creatures,
+      ...owner.board.artifacts,
+      ...owner.board.enchantments
+    ];
+    const opponentBoardCards = [
+      ...opponent.board.creatures,
+      ...opponent.board.artifacts,
+      ...opponent.board.enchantments
+    ];
+
+    // Check friendly aura effects
+    for (const auraSource of ownerBoardCards) {
+      if (auraSource.instanceId === unit.instanceId) continue; // Don't buff yourself unless specified
+      const classes = auraSource.effectProfile?.classes ?? [];
+      const effectText = (auraSource.text ?? '').toLowerCase();
+
+      // Aura buff: "Other friendly units have +1"
+      if (classes.includes('aura_buff')) {
+        const auraMatch = effectText.match(/other\s+friendly\s+units?\s+(?:have\s+)?[+](\d+)/i);
+        if (auraMatch) {
+          totalBonus += parseInt(auraMatch[1], 10) || 0;
+        }
+        // "Friendly units here have +X"
+        const localAuraMatch = effectText.match(/friendly\s+units?\s+here\s+have\s+[+](\d+)/i);
+        if (localAuraMatch && this.sameLocation(auraSource.location, unitLocation)) {
+          totalBonus += parseInt(localAuraMatch[1], 10) || 0;
+        }
+      }
+
+      // Location aura: "Units here have +X"
+      if (classes.includes('location_aura')) {
+        const locationMatch = effectText.match(/units?\s+here\s+have\s+[+](\d+)/i);
+        if (locationMatch && this.sameLocation(auraSource.location, unitLocation)) {
+          totalBonus += parseInt(locationMatch[1], 10) || 0;
+        }
+      }
+
+      // Tribal synergy: "Your Dragons have +X"
+      if (classes.includes('tribal_synergy')) {
+        const tribalMatch = effectText.match(/your\s+(\w+)s?\s+have\s+[+](\d+)/i);
+        if (tribalMatch) {
+          const [, tribe, bonus] = tribalMatch;
+          if (unitTags.includes(tribe.toLowerCase()) || 
+              unit.name?.toLowerCase().includes(tribe.toLowerCase())) {
+            totalBonus += parseInt(bonus, 10) || 0;
+          }
+        }
+      }
+
+      // Conditional buff: "While you have another unit here, I have +X"
+      if (classes.includes('conditional_buff') && auraSource.instanceId === unit.instanceId) {
+        const conditionalMatch = effectText.match(/while\s+you\s+have\s+another\s+unit\s+here.*[+](\d+)/i);
+        if (conditionalMatch) {
+          // Check if there's another friendly unit at the same location
+          const otherUnitsHere = ownerBoardCards.filter(
+            c => c.instanceId !== unit.instanceId && 
+            c.type === CardType.CREATURE &&
+            this.sameLocation(c.location, unitLocation)
+          );
+          if (otherUnitsHere.length > 0) {
+            totalBonus += parseInt(conditionalMatch[1], 10) || 0;
+          }
+        }
+      }
+    }
+
+    // Solo combat bonus
+    const unitClasses = unit.effectProfile?.classes ?? [];
+    if (unitClasses.includes('solo_combat')) {
+      const soloText = (unit.text ?? '').toLowerCase();
+      const soloMatch = soloText.match(/(?:attacking|defending)\s+alone.*[+](\d+)/i);
+      if (soloMatch) {
+        const combatContext = this.gameState.combatContext;
+        if (combatContext) {
+          const isAlone = (options?.isAttacking && combatContext.attackingUnitIds.length === 1) ||
+                          (options?.isDefending && combatContext.defendingUnitIds.length === 1);
+          if (isAlone) {
+            totalBonus += parseInt(soloMatch[1], 10) || 0;
+          }
+        }
+      }
+    }
+
+    // Stat scaling: "My Might is increased by your points"
+    if (unitClasses.includes('stat_scaling')) {
+      const scaleText = (unit.text ?? '').toLowerCase();
+      if (/might\s+is\s+increased\s+by\s+your\s+points/i.test(scaleText)) {
+        totalBonus += owner.victoryPoints;
+      }
+      // "While you have 8+ runes, +X"
+      const runeScaleMatch = scaleText.match(/while\s+you\s+have\s+(\d+)\+\s+runes?.*[+](\d+)/i);
+      if (runeScaleMatch) {
+        const [, required, bonus] = runeScaleMatch;
+        if (owner.channeledRunes.length >= parseInt(required, 10)) {
+          totalBonus += parseInt(bonus, 10) || 0;
+        }
+      }
+    }
+
+    // Check opponent debuff effects
+    for (const debuffSource of opponentBoardCards) {
+      const classes = debuffSource.effectProfile?.classes ?? [];
+      if (classes.includes('debuff')) {
+        const effectText = (debuffSource.text ?? '').toLowerCase();
+        // "Enemy units have -X"
+        const debuffMatch = effectText.match(/enemy\s+units?\s+have\s+-(\d+)/i);
+        if (debuffMatch) {
+          totalBonus -= parseInt(debuffMatch[1], 10) || 0;
+        }
+      }
+    }
+
+    // Check for Legion keyword bonus (bonus if another card was played this turn)
+    if (unitClasses.includes('keyword_legion') || this.cardHasMechanic(unit, 'Legion')) {
+      const legionBonus = this.checkLegionBonus(unit, owner);
+      if (legionBonus > 0) {
+        totalBonus += legionBonus;
+      }
+    }
+
+    return totalBonus;
+  }
+
+  /**
+   * Check if Legion bonus applies (another card was played this turn before this unit)
+   */
+  private checkLegionBonus(unit: BoardCard, owner: PlayerState): number {
+    const effectText = (unit.text ?? '').toLowerCase();
+    
+    // Find Legion bonus amount from card text: "[Legion] — +X Might"
+    const legionMatch = effectText.match(/\[?legion\]?\s*[—-]\s*\+(\d+)/i);
+    if (!legionMatch) {
+      return 0;
+    }
+    
+    const bonusAmount = parseInt(legionMatch[1], 10) || 0;
+    
+    // Check if another card was played this turn by this player
+    const currentTurn = this.turnNumber;
+    const ownerIndex = this.gameState.players.findIndex(p => p.playerId === owner.playerId);
+    const cardsPlayedThisTurn = this.gameState.moveHistory.filter(
+      move => 
+        move.turn === currentTurn && 
+        move.playerIndex === ownerIndex &&
+        move.action === 'play_card'
+    );
+    
+    // Legion activates if at least 2 cards were played (this unit + another)
+    return cardsPlayedThisTurn.length >= 2 ? bonusAmount : 0;
+  }
+
+  /**
+   * Check if two card locations are the same battlefield
+   */
+  private sameLocation(loc1: CardLocation, loc2: CardLocation): boolean {
+    if (loc1.zone !== loc2.zone) return false;
+    if (loc1.zone === 'base' && loc2.zone === 'base') return true;
+    if (loc1.zone === 'battlefield' && loc2.zone === 'battlefield') {
+      return loc1.battlefieldId === loc2.battlefieldId;
+    }
+    return false;
+  }
+
   private getAssaultBonus(unit: BoardCard): number {
     const context = this.gameState.combatContext;
     if (!context) {
@@ -7201,9 +8209,17 @@ export class RiftboundGameEngine {
       if (Number.isFinite(might)) {
         entry.totalMight += might;
       }
+      // Apply assault bonus for attackers
       const assaultBonus = this.getAssaultBonus(unit);
       if (assaultBonus > 0) {
         entry.totalMight += assaultBonus;
+      }
+      // Apply continuous stat modifiers (auras, tribal synergy, location effects, etc.)
+      const isAttacking = context?.attackingUnitIds?.includes(unit.instanceId) ?? false;
+      const isDefending = context?.defendingUnitIds?.includes(unit.instanceId) ?? false;
+      const statModifiers = this.calculateStatModifiers(unit, { isAttacking, isDefending });
+      if (statModifiers !== 0) {
+        entry.totalMight += statModifiers;
       }
       presence.set(owner.playerId, entry);
     });

@@ -2003,6 +2003,88 @@ export const mutationResolvers = {
     }
   },
 
+  async hideCard(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      cardIndex,
+      battlefieldId,
+    }: {
+      matchId: string;
+      playerId: string;
+      cardIndex: number;
+      battlefieldId: string;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'hide-card',
+        {
+          playerId,
+          cardIndex,
+          battlefieldId,
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[HIDE-CARD] Error:', error);
+      throw error;
+    }
+  },
+
+  async activateHiddenCard(
+    _parent: any,
+    {
+      matchId,
+      playerId,
+      hiddenInstanceId,
+      targets,
+    }: {
+      matchId: string;
+      playerId: string;
+      hiddenInstanceId: string;
+      targets?: string[];
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context, playerId);
+    try {
+      await postMatchAction(
+        matchId,
+        'activate-hidden',
+        {
+          playerId,
+          hiddenInstanceId,
+          targets: targets ?? [],
+        },
+        context.authToken
+      );
+
+      const spectatorState = await syncMatchStateFromService(matchId, context.authToken);
+
+      return {
+        success: true,
+        gameState: spectatorState,
+        currentPhase: spectatorState.currentPhase,
+      };
+    } catch (error: any) {
+      logger.error('[ACTIVATE-HIDDEN] Error:', error);
+      throw error;
+    }
+  },
+
   async commenceBattle(
     _parent: any,
     {
