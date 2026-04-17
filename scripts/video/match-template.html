@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Riftbound Self-Play Replay</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a33;
+      --panel-2: #1a2447;
+      --accent: #ffd479;
+      --p1: #6ec1ff;
+      --p2: #ff8aa0;
+      --text: #ecf0ff;
+      --muted: #9aa3c7;
+      --danger: #ff6b6b;
+      --good: #6bd49b;
+      --warn: #f5c96a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: "SF Pro Display", system-ui, Inter, sans-serif; }
+    body { width: 1280px; height: 720px; overflow: hidden; }
+    .wrap { display: grid; grid-template-rows: 68px 1fr 160px; height: 720px; }
+    header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: var(--panel); border-bottom: 2px solid var(--panel-2); }
+    header .title { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
+    header .title .tag { color: var(--accent); margin-right: 8px; }
+    header .meta { display: flex; gap: 18px; font-size: 14px; color: var(--muted); }
+    header .meta b { color: var(--text); }
+    .board { display: grid; grid-template-columns: 280px 1fr 280px; gap: 16px; padding: 16px 20px; min-height: 0; }
+    .player { background: var(--panel); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; border: 2px solid transparent; transition: border-color 120ms ease; }
+    .player.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255, 212, 121, 0.15); }
+    .player.priority { outline: 2px dashed var(--accent); outline-offset: -10px; }
+    .player h2 { margin: 0; font-size: 18px; display: flex; align-items: center; gap: 8px; }
+    .player h2 .pill { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; padding: 2px 8px; border-radius: 100px; background: var(--panel-2); color: var(--muted); }
+    .player.p1 h2 .name { color: var(--p1); }
+    .player.p2 h2 .name { color: var(--p2); }
+    .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+    .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+    .stat .value { font-size: 22px; font-weight: 700; margin-top: 2px; }
+    .stat.mana .value { color: var(--accent); }
+    .stat.vp .value { color: var(--good); }
+    .stat.hp .value { color: var(--danger); }
+    .center { background: var(--panel); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+    .phase-bar { display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; }
+    .phase-bar .pchip { padding: 6px 10px; border-radius: 100px; background: var(--panel-2); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    .phase-bar .pchip.active { background: var(--accent); color: #1a1a1a; font-weight: 700; }
+    .battlefields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex: 1; min-height: 0; }
+    .bf { background: var(--panel-2); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; border: 2px solid transparent; }
+    .bf.contested { border-color: var(--warn); box-shadow: 0 0 0 3px rgba(245, 201, 106, 0.12); }
+    .bf .bf-title { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+    .bf .ctrl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    .bf .ctrl.p1 { color: var(--p1); }
+    .bf .ctrl.p2 { color: var(--p2); }
+    .bf .contested-row { font-size: 12px; color: var(--warn); }
+    .units-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .unit-card { background: var(--panel); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--text); border: 1px solid rgba(255,255,255,0.06); }
+    .unit-card.p1 { border-left: 3px solid var(--p1); }
+    .unit-card.p2 { border-left: 3px solid var(--p2); }
+    .commentary { background: var(--panel); border-top: 2px solid var(--panel-2); padding: 12px 24px 16px; display: grid; grid-template-columns: 1fr 420px; gap: 18px; min-height: 0; }
+    .current { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .current .who { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; }
+    .current .what { font-size: 26px; font-weight: 700; line-height: 1.2; }
+    .current .what.p1 { color: var(--p1); }
+    .current .what.p2 { color: var(--p2); }
+    .current .what.system { color: var(--accent); }
+    .current .why { font-size: 14px; color: var(--muted); margin-top: 2px; }
+    .log { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; font-size: 12px; line-height: 1.45; color: var(--muted); overflow: hidden; display: flex; flex-direction: column-reverse; gap: 4px; }
+    .log .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .log .line .tick { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
+    .log .line.p1 { color: var(--p1); }
+    .log .line.p2 { color: var(--p2); }
+    .log .line.system { color: var(--accent); }
+    .terminal-banner { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(10, 16, 32, 0.92); border: 2px solid var(--accent); border-radius: 18px; padding: 32px 48px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.55); }
+    .terminal-banner .big { font-size: 36px; font-weight: 800; color: var(--accent); }
+    .terminal-banner .reason { margin-top: 8px; font-size: 16px; color: var(--text); }
+    .terminal-banner .stat-line { margin-top: 12px; font-size: 13px; color: var(--muted); }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title"><span class="tag">RIFTBOUND</span><span id="match-id">match</span></div>
+      <div class="meta">
+        <div><b id="turn-num">0</b> turn</div>
+        <div>phase <b id="phase">-</b></div>
+        <div>active <b id="active">-</b></div>
+        <div>priority <b id="priority">-</b></div>
+        <div>event <b id="event-idx">0</b>/<b id="event-total">0</b></div>
+      </div>
+    </header>
+
+    <div class="board">
+      <section class="player p1" id="p-p1">
+        <h2><span class="name">P1</span><span class="pill" id="p1-role">opponent</span></h2>
+        <div class="stats">
+          <div class="stat mana"><div class="label">Mana</div><div class="value" id="p1-mana">0</div></div>
+          <div class="stat vp"><div class="label">VP</div><div class="value" id="p1-vp">0</div></div>
+          <div class="stat hp"><div class="label">HP</div><div class="value" id="p1-hp">0</div></div>
+          <div class="stat"><div class="label">Hand</div><div class="value" id="p1-hand">0</div></div>
+          <div class="stat"><div class="label">Deck</div><div class="value" id="p1-deck">0</div></div>
+          <div class="stat"><div class="label">Board</div><div class="value" id="p1-board">0</div></div>
+          <div class="stat"><div class="label">Graveyard</div><div class="value" id="p1-grave">0</div></div>
+        </div>
+      </section>
+
+      <section class="center">
+        <div class="phase-bar" id="phase-bar"></div>
+        <div class="battlefields" id="battlefields"></div>
+      </section>
+
+      <section class="player p2" id="p-p2">
+        <h2><span class="name">P2</span><span class="pill" id="p2-role">opponent</span></h2>
+        <div class="stats">
+          <div class="stat mana"><div class="label">Mana</div><div class="value" id="p2-mana">0</div></div>
+          <div class="stat vp"><div class="label">VP</div><div class="value" id="p2-vp">0</div></div>
+          <div class="stat hp"><div class="label">HP</div><div class="value" id="p2-hp">0</div></div>
+          <div class="stat"><div class="label">Hand</div><div class="value" id="p2-hand">0</div></div>
+          <div class="stat"><div class="label">Deck</div><div class="value" id="p2-deck">0</div></div>
+          <div class="stat"><div class="label">Board</div><div class="value" id="p2-board">0</div></div>
+          <div class="stat"><div class="label">Graveyard</div><div class="value" id="p2-grave">0</div></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="commentary">
+      <div class="current">
+        <div class="who" id="c-who">waiting</div>
+        <div class="what" id="c-what">Setting up the match...</div>
+        <div class="why" id="c-why"></div>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <div id="terminal" class="terminal-banner hidden">
+    <div class="big" id="t-big">Match complete</div>
+    <div class="reason" id="t-reason"></div>
+    <div class="stat-line" id="t-stats"></div>
+  </div>
+
+  <script>
+    const PHASES = ['starting','strategic','draw','channel','main_1','combat','main_2','recovery','end'];
+
+    function renderPhaseBar(current) {
+      const bar = document.getElementById('phase-bar');
+      bar.innerHTML = '';
+      for (const p of PHASES) {
+        const el = document.createElement('span');
+        el.className = 'pchip' + (p === current ? ' active' : '');
+        el.textContent = p.replace('_', ' ');
+        bar.appendChild(el);
+      }
+    }
+
+    function renderBattlefields(battlefields) {
+      const root = document.getElementById('battlefields');
+      root.innerHTML = '';
+      for (const bf of battlefields) {
+        const el = document.createElement('div');
+        const contested = Array.isArray(bf.contestedBy) && bf.contestedBy.length > 1;
+        el.className = 'bf' + (contested ? ' contested' : '');
+        const ctrl = bf.controller || null;
+        const ctrlShort = ctrl === 'playerA' ? 'P1' : ctrl === 'playerB' ? 'P2' : ctrl || 'neutral';
+        const ctrlClass = ctrlShort === 'P1' ? 'p1' : ctrlShort === 'P2' ? 'p2' : '';
+        el.innerHTML = `
+          <div class="bf-title">
+            <span>${bf.id}</span>
+            <span class="ctrl ${ctrlClass}">${ctrlShort}</span>
+          </div>
+          ${contested ? `<div class="contested-row">contested: ${bf.contestedBy.join(' vs ')}</div>` : ''}
+        `;
+        root.appendChild(el);
+      }
+    }
+
+    function renderLog(lines) {
+      const log = document.getElementById('log');
+      log.innerHTML = '';
+      const tail = lines.slice(-10);
+      for (const ln of tail) {
+        const el = document.createElement('div');
+        el.className = 'line ' + (ln.cls || '');
+        el.innerHTML = `<span class="tick">#${ln.idx}</span>${ln.text}`;
+        log.appendChild(el);
+      }
+    }
+
+    window.setFrame = function(frame) {
+      document.getElementById('match-id').textContent = frame.matchId || 'match';
+      document.getElementById('turn-num').textContent = frame.turn;
+      document.getElementById('phase').textContent = frame.phase || '-';
+      document.getElementById('active').textContent = frame.activePlayer || '-';
+      document.getElementById('priority').textContent = frame.priorityHolder || '-';
+      document.getElementById('event-idx').textContent = frame.eventIndex;
+      document.getElementById('event-total').textContent = frame.eventTotal;
+
+      const d = frame.stateDelta || {};
+      document.getElementById('p1-mana').textContent = (frame.mana && frame.mana.P1) ?? 0;
+      document.getElementById('p2-mana').textContent = (frame.mana && frame.mana.P2) ?? 0;
+      document.getElementById('p1-vp').textContent = (frame.vp && frame.vp.P1) ?? 0;
+      document.getElementById('p2-vp').textContent = (frame.vp && frame.vp.P2) ?? 0;
+      document.getElementById('p1-hp').textContent = (frame.hp && frame.hp.P1) ?? 0;
+      document.getElementById('p2-hp').textContent = (frame.hp && frame.hp.P2) ?? 0;
+      document.getElementById('p1-hand').textContent = d.handSizeP1 ?? 0;
+      document.getElementById('p2-hand').textContent = d.handSizeP2 ?? 0;
+      document.getElementById('p1-deck').textContent = d.deckSizeP1 ?? 0;
+      document.getElementById('p2-deck').textContent = d.deckSizeP2 ?? 0;
+      document.getElementById('p1-board').textContent = d.boardCountP1 ?? 0;
+      document.getElementById('p2-board').textContent = d.boardCountP2 ?? 0;
+      document.getElementById('p1-grave').textContent = d.graveyardCountP1 ?? 0;
+      document.getElementById('p2-grave').textContent = d.graveyardCountP2 ?? 0;
+
+      const p1el = document.getElementById('p-p1');
+      const p2el = document.getElementById('p-p2');
+      p1el.classList.toggle('active', frame.activePlayer === 'P1');
+      p2el.classList.toggle('active', frame.activePlayer === 'P2');
+      p1el.classList.toggle('priority', frame.priorityHolder === 'P1');
+      p2el.classList.toggle('priority', frame.priorityHolder === 'P2');
+
+      document.getElementById('p1-role').textContent = frame.rolesByPlayer?.P1 || 'bot';
+      document.getElementById('p2-role').textContent = frame.rolesByPlayer?.P2 || 'bot';
+
+      renderPhaseBar(frame.phase);
+      renderBattlefields(d.battlefields || []);
+      renderLog(frame.logLines || []);
+
+      const c = frame.commentary || {};
+      document.getElementById('c-who').textContent = c.who || '';
+      const what = document.getElementById('c-what');
+      what.textContent = c.what || '';
+      what.className = 'what ' + (c.actorCls || '');
+      document.getElementById('c-why').textContent = c.why || '';
+
+      const banner = document.getElementById('terminal');
+      if (frame.terminal) {
+        banner.classList.remove('hidden');
+        document.getElementById('t-big').textContent = frame.terminal.bannerTitle || 'Match complete';
+        document.getElementById('t-reason').textContent = frame.terminal.bannerReason || '';
+        document.getElementById('t-stats').textContent = frame.terminal.bannerStats || '';
+      } else {
+        banner.classList.add('hidden');
+      }
+    };
+
+    window.ready = true;
+  </script>
+</body>
+</html>
