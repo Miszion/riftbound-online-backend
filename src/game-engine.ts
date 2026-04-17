@@ -525,6 +525,44 @@ export type CannotPlayReason =
   | 'GAME_NOT_IN_PROGRESS';
 
 /**
+ * Reason codes for `canDeployChampionLeader`.
+ */
+export type CannotDeployLeaderReason =
+  | 'GAME_NOT_IN_PROGRESS'
+  | 'NO_LEADER'
+  | 'ALREADY_DEPLOYED'
+  | 'NOT_YOUR_TURN'
+  | 'WRONG_PHASE'
+  | 'COMBAT_PRIORITY_ACTIVE'
+  | 'INSUFFICIENT_RESOURCES';
+
+/**
+ * Reason codes for `canAdvancePhase`.
+ */
+export type CannotAdvancePhaseReason =
+  | 'GAME_NOT_IN_PROGRESS'
+  | 'NOT_YOUR_TURN'
+  | 'BLOCKED_BY_PROMPT'
+  | 'REACTION_CHAIN_ACTIVE';
+
+/**
+ * Reason codes for `canResolveStack`.
+ */
+export type CannotResolveStackReason =
+  | 'GAME_NOT_IN_PROGRESS'
+  | 'NO_CHAIN'
+  | 'CHAIN_EMPTY'
+  | 'NOT_AWAITING_RESPONSE';
+
+/**
+ * Reason codes for `canDrawFromDeck`.
+ */
+export type CannotDrawFromDeckReason =
+  | 'GAME_NOT_IN_PROGRESS'
+  | 'DECK_EMPTY'
+  | 'UNKNOWN_PLAYER';
+
+/**
  * Classification of an open reaction/priority window.
  * - 'priority' : a main-phase priority window
  * - 'trigger'  : a reaction-chain window (top of stack spell/ability awaiting response)
@@ -2721,6 +2759,177 @@ export class RiftboundGameEngine {
       return { required: false, windowType: 'none' };
     } catch {
       return { required: false, windowType: 'none' };
+    }
+  }
+
+  // ==========================================================================
+  // Bot-decision predicates (Phase 2A — added for BaselineBot / HeuristicBot)
+  // --------------------------------------------------------------------------
+  // All predicates below are pure/read-only. They must NEVER mutate
+  // `this.gameState`, emit duel-log / snapshot / move entries, and must never
+  // throw on malformed input — they return a safe reason code instead.
+  //
+  // Same security caveats as the PR#1 predicates apply: do not expose over
+  // HTTP/GraphQL without caller-is-target authorization.
+  // ==========================================================================
+
+  /**
+   * Predicate: can the given player deploy their chosen Champion Leader right
+   * now? Mirrors the validation chain inside `deployChampionLeader`
+   * (game-engine.ts:3001) without any side effects.
+   */
+  public canDeployChampionLeader(
+    playerId: string
+  ): { ok: true } | { ok: false; reason: CannotDeployLeaderReason } {
+    try {
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+
+      let player: PlayerState;
+      try {
+        player = this.getPlayerById(playerId);
+      } catch {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+
+      const champion = player.championLeader;
+      if (!champion) return { ok: false, reason: 'NO_LEADER' };
+      if (player.championLeaderDeployed) {
+        return { ok: false, reason: 'ALREADY_DEPLOYED' };
+      }
+
+      if (this.hasCombatPriority(playerId)) {
+        return { ok: false, reason: 'COMBAT_PRIORITY_ACTIVE' };
+      }
+
+      let currentPlayerId: string;
+      try {
+        currentPlayerId = this.getCurrentPlayer().playerId;
+      } catch {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+      if (playerId !== currentPlayerId) {
+        return { ok: false, reason: 'NOT_YOUR_TURN' };
+      }
+
+      if (
+        this.currentPhase !== GamePhase.MAIN_1 &&
+        this.currentPhase !== GamePhase.MAIN_2
+      ) {
+        return { ok: false, reason: 'WRONG_PHASE' };
+      }
+
+      const cardCost = this.getCardCost(champion);
+      if (!this.canPayCost(player, cardCost)) {
+        return { ok: false, reason: 'INSUFFICIENT_RESOURCES' };
+      }
+
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+    }
+  }
+
+  /**
+   * Predicate: can the given player advance the current phase right now?
+   * Wraps `hasBlockingBeginPhaseActivity` / `hasBlockingEndStepActivity`
+   * (game-engine.ts:1792, 1796) plus chain-empty check.
+   *
+   * Returns `ok: false` with a reason so the caller can distinguish between
+   * "phase advance will no-op" and "phase advance will succeed".
+   */
+  public canAdvancePhase(
+    playerId: string
+  ): { ok: true } | { ok: false; reason: CannotAdvancePhaseReason } {
+    try {
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+
+      let currentPlayerId: string;
+      try {
+        currentPlayerId = this.getCurrentPlayer().playerId;
+      } catch {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+      if (playerId !== currentPlayerId) {
+        return { ok: false, reason: 'NOT_YOUR_TURN' };
+      }
+
+      if (this.hasActiveChain()) {
+        return { ok: false, reason: 'REACTION_CHAIN_ACTIVE' };
+      }
+
+      // Unresolved prompts block both the begin-phase and end-step transitions.
+      const hasUnresolvedPrompt = this.gameState.prompts.some((p) => !p.resolved);
+      if (hasUnresolvedPrompt) {
+        return { ok: false, reason: 'BLOCKED_BY_PROMPT' };
+      }
+
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+    }
+  }
+
+  /**
+   * Predicate: is the reaction chain at a point where it will resolve on the
+   * next pass? Returns `ok: true` when there is a non-empty chain whose
+   * current reactor is still awaiting a response — i.e. a final `pass_priority`
+   * or `respond_chain(pass:true)` from that reactor will drain the top item.
+   *
+   * Note: signature takes no `playerId` because "canResolveStack" is a
+   * state-level question — it does not depend on which player is asking. The
+   * bot uses it alongside `needsReaction(me)` to decide Tier R0 safety.
+   */
+  public canResolveStack(
+    _playerId?: string
+  ): { ok: true } | { ok: false; reason: CannotResolveStackReason } {
+    try {
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+      const chain = this.gameState.reactionChain;
+      if (!chain) return { ok: false, reason: 'NO_CHAIN' };
+      if (!chain.items || chain.items.length === 0) {
+        return { ok: false, reason: 'CHAIN_EMPTY' };
+      }
+      if (!chain.awaitingResponse) {
+        return { ok: false, reason: 'NOT_AWAITING_RESPONSE' };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+    }
+  }
+
+  /**
+   * Predicate: does the given player have a card available to draw from their
+   * main deck right now? True iff the game is in progress, the player exists,
+   * and their deck is non-empty. "Current rules allow the draw in this phase"
+   * is interpreted loosely — v1 has no stack-based draw action, so the only
+   * rule gate that matters today is deck non-empty.
+   */
+  public canDrawFromDeck(
+    playerId: string
+  ): { ok: true } | { ok: false; reason: CannotDrawFromDeckReason } {
+    try {
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+      let player: PlayerState;
+      try {
+        player = this.getPlayerById(playerId);
+      } catch {
+        return { ok: false, reason: 'UNKNOWN_PLAYER' };
+      }
+      if (!player.deck || player.deck.length === 0) {
+        return { ok: false, reason: 'DECK_EMPTY' };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
     }
   }
 
