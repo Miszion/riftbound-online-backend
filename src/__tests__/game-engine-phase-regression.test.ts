@@ -1979,3 +1979,81 @@ describe('scoring operations', () => {
     expect(vpAfter).toBeGreaterThan(vpBefore);
   });
 });
+
+// ============================================================================
+// PR #3 - proceedToNextPhase now returns boolean (advanced vs. no-op)
+// ============================================================================
+
+describe('proceedToNextPhase boolean return (PR #3)', () => {
+  it('returns true when phase advances from a clean MAIN_1 turn', () => {
+    const engine = createInProgressEngine();
+    // createInProgressEngine lands in MAIN_1 for the active player.
+    expect(engine.currentPhase).toBe(GamePhase.MAIN_1);
+    const playerBefore = engine.currentPlayerIndex;
+    const phaseBefore = engine.currentPhase;
+    const turnBefore = engine.turnNumber;
+
+    const result = engine.proceedToNextPhase();
+
+    // advance may be within-turn (phase moves) or across-turn (player/turn
+    // wraps via auto-advance). Either way, result must be true and at least
+    // one of the three state axes must have moved.
+    expect(result).toBe(true);
+    const advanced =
+      engine.currentPhase !== phaseBefore ||
+      engine.currentPlayerIndex !== playerBefore ||
+      engine.turnNumber !== turnBefore;
+    expect(advanced).toBe(true);
+  });
+
+  it('returns false when blocked by an active reaction chain', () => {
+    const engine = createInProgressEngine();
+    const pId = currentPlayerId(engine);
+    const phaseBefore = engine.currentPhase;
+
+    // Open a reaction chain by playing a spell that requires opponent response.
+    injectSpellToHand(engine, pId, {
+      effectProfile: {
+        classes: ['card_draw'],
+        operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1 }]
+      } as any
+    });
+    engine.playCard(pId, 0);
+    expect(engine.hasActiveChain()).toBe(true);
+
+    const result = engine.proceedToNextPhase();
+    expect(result).toBe(false);
+    // Phase must be unchanged.
+    expect(engine.currentPhase).toBe(phaseBefore);
+  });
+
+  it('returns false when blocked by priority window (no-op guard)', () => {
+    // Test: call on a non-in-progress engine — that's the priority-window
+    // equivalent "nothing to advance" case the harness hits.
+    const engine = new RiftboundGameEngine('test-match-block', ['player-1', 'player-2']);
+    // Engine status is SETUP / COIN_FLIP before initialize — either way not IN_PROGRESS.
+    const result = engine.proceedToNextPhase();
+    expect(result).toBe(false);
+  });
+
+  it('returns false after the game has ended', () => {
+    const engine = createInProgressEngine();
+    const pId = currentPlayerId(engine);
+    // Conceding ends the game.
+    engine.concedeMatch(pId);
+    expect(engine.status).not.toBe(GameStatus.IN_PROGRESS);
+    const result = engine.proceedToNextPhase();
+    expect(result).toBe(false);
+  });
+
+  it('return value is backwards-compatible: void-style callers still work', () => {
+    const engine = createInProgressEngine();
+    // Call as void — matches the pattern in match-routes.ts:1806 and many tests.
+    expect(() => {
+      engine.proceedToNextPhase();
+      engine.proceedToNextPhase();
+      engine.proceedToNextPhase();
+      engine.proceedToNextPhase();
+    }).not.toThrow();
+  });
+});

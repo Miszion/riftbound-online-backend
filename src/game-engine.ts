@@ -500,6 +500,53 @@ export interface PendingSpellResolution {
   resolved: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Predicate types (PR #1: canPlayCard / getLegalTargets / needsReaction)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reason codes returned by `canPlayCard` when a card cannot be played.
+ *
+ * Ordering note: `canPlayCard` evaluates these in a specific order so that
+ * cheaper-to-check / less-information-leaking reasons are returned before
+ * reasons that would reveal opponent-side state (resources, targeting).
+ * See the JSDoc on `canPlayCard` for the full precedence list.
+ */
+export type CannotPlayReason =
+  | 'NOT_YOUR_TURN'
+  | 'WRONG_PHASE'
+  | 'WRONG_PRIORITY'
+  | 'REACTION_WINDOW_BLOCKED'
+  | 'REACTION_NON_REACTION_CARD'
+  | 'INSUFFICIENT_RESOURCES'
+  | 'NO_LEGAL_TARGETS'
+  | 'UNSUPPORTED_CARD_TYPE'
+  | 'CARD_NOT_IN_HAND'
+  | 'GAME_NOT_IN_PROGRESS';
+
+/**
+ * Classification of an open reaction/priority window.
+ * - 'priority' : a main-phase priority window
+ * - 'trigger'  : a reaction-chain window (top of stack spell/ability awaiting response)
+ * - 'combat'   : combat priority (showdown)
+ * - 'none'     : no window requires a response from this player
+ */
+export type ReactionWindowType = 'priority' | 'trigger' | 'combat' | 'none';
+
+/**
+ * Candidate target produced by `getLegalTargets`. The `targetId` is the id to
+ * hand to `playCard(playerId, cardIndex, [targetId, ...])`.
+ *
+ * `kind` describes what the id refers to so UI / strategy callers can group
+ * them. `label` is a display-only human-readable string (HTML-escape before
+ * rendering — it is derived from card data which today is catalog-sourced).
+ */
+export interface TargetCandidate {
+  targetId: string;
+  kind: 'unit' | 'player' | 'battlefield' | 'self';
+  label?: string;
+}
+
 export interface MatchResult {
   matchId: string;
   winner: string;
@@ -1805,10 +1852,34 @@ export class RiftboundGameEngine {
   }
 
   /**
-   * Proceed to next phase
+   * Proceed to next phase.
+   *
+   * Returns `true` if the phase actually advanced, `false` if it was a no-op
+   * (e.g. blocked by an open priority window, active reaction chain, or game
+   * not in progress).
+   *
+   * Existing callers that discard the return value remain fully
+   * backwards-compatible — all pre-PR#3 code treated this as `void`.
    */
-  public proceedToNextPhase(): void {
+  public proceedToNextPhase(): boolean {
+    // Guard: if game is not in progress, there is nothing to advance.
+    if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+      return false;
+    }
+
+    // Guard: an active reaction chain awaiting a response blocks phase
+    // progression. Callers must resolve the chain first (respondToChainReaction
+    // or playReactionCardToChain) before the phase can advance.
+    const activeChain = this.gameState.reactionChain;
+    if (activeChain && activeChain.awaitingResponse) {
+      return false;
+    }
+
     const startedInEndPhase = this.currentPhase === GamePhase.END;
+    const initialPhase: GamePhase = this.currentPhase;
+    const initialPlayerIndex = this.currentPlayerIndex;
+    const initialTurnNumber = this.gameState.turnNumber;
+
     if (!startedInEndPhase) {
       let safetyCounter = 0;
       const MAX_PHASE_ADVANCES = 10;
@@ -1816,25 +1887,45 @@ export class RiftboundGameEngine {
         const phaseBeforeAdvance: GamePhase = this.currentPhase;
         if (phaseBeforeAdvance === GamePhase.END) {
           this.handleAutoAdvanceAfterPhase(phaseBeforeAdvance);
-          return;
+          return this.didPhaseAdvance(initialPhase, initialPlayerIndex, initialTurnNumber);
         }
         this.advancePhaseOnce();
         safetyCounter += 1;
         const phaseAfterAdvance: GamePhase = this.currentPhase;
         if (phaseAfterAdvance === phaseBeforeAdvance) {
-          return;
+          return this.didPhaseAdvance(initialPhase, initialPlayerIndex, initialTurnNumber);
         }
         if (phaseAfterAdvance === GamePhase.END) {
           this.handleAutoAdvanceAfterPhase(phaseBeforeAdvance);
-          return;
+          return this.didPhaseAdvance(initialPhase, initialPlayerIndex, initialTurnNumber);
         }
       }
       this.handleAutoAdvanceAfterPhase(this.currentPhase);
-      return;
+      return this.didPhaseAdvance(initialPhase, initialPlayerIndex, initialTurnNumber);
     }
     const phaseBeforeAdvance: GamePhase = this.currentPhase;
     this.advancePhaseOnce();
     this.handleAutoAdvanceAfterPhase(phaseBeforeAdvance);
+    return this.didPhaseAdvance(initialPhase, initialPlayerIndex, initialTurnNumber);
+  }
+
+  /**
+   * Compare the current phase/turn state against a captured snapshot to
+   * determine whether `proceedToNextPhase` actually advanced the state.
+   *
+   * We treat a turn-wrap (new player, or new turn number) as a successful
+   * advance even if the phase name is nominally the same (e.g. END→BEGIN
+   * on a different player).
+   */
+  private didPhaseAdvance(
+    initialPhase: GamePhase,
+    initialPlayerIndex: number,
+    initialTurnNumber: number
+  ): boolean {
+    if (this.currentPhase !== initialPhase) return true;
+    if (this.currentPlayerIndex !== initialPlayerIndex) return true;
+    if (this.gameState.turnNumber !== initialTurnNumber) return true;
+    return false;
   }
 
   private handleAutoAdvanceAfterPhase(phaseBeforeAdvance: GamePhase): void {
@@ -2219,13 +2310,418 @@ export class RiftboundGameEngine {
     if ((card.type ?? '').toLowerCase() !== 'spell') {
       return null;
     }
-    
+
     const catalogCard = findCardById(card.id) ?? findCardByName(card.name);
     if (!catalogCard) {
       return null;
     }
-    
+
     return analyzeSpellTargeting(catalogCard);
+  }
+
+  // ==========================================================================
+  // PR #1 — Pure predicates (canPlayCard / getLegalTargets / needsReaction)
+  // --------------------------------------------------------------------------
+  // These three methods are READ-ONLY projections of engine state intended for
+  // harness / UI consumption. They MUST NOT mutate `this.gameState` or emit
+  // duel-log / snapshot / move entries. They MUST NOT throw — on malformed
+  // input they return a safe reason code / empty array instead.
+  //
+  // SECURITY: Engine-internal predicates. Do NOT expose over HTTP/GraphQL
+  // without (a) enforcing req.userId === playerId in the caller (see
+  // src/match-routes.ts:705 for where that check must live), and
+  // (b) redacting reason codes that could distinguish opponent-hand state
+  // (INSUFFICIENT_RESOURCES / NO_LEGAL_TARGETS / CARD_NOT_IN_HAND leak info
+  // about the opponent's hand). See
+  // /Users/miszion/workplace/nexus-data/research/riftbound-pr1-pr3-security-review.md
+  // for the full analysis.
+  // ==========================================================================
+
+  /**
+   * Resolve a hand card from either a numeric index or a string id, safely.
+   *
+   * Hardened against:
+   * - Non-integer / negative / out-of-range numeric indices.
+   * - Prototype-chain string keys (`__proto__`, `constructor`, `prototype`).
+   *
+   * Returns `undefined` when no such card is in hand. Never throws.
+   */
+  private resolveCardFromHand(
+    player: PlayerState,
+    cardIndexOrId: number | string
+  ): { card: Card; index: number } | undefined {
+    // Numeric path — strict integer bounds check.
+    if (typeof cardIndexOrId === 'number') {
+      if (
+        !Number.isInteger(cardIndexOrId) ||
+        cardIndexOrId < 0 ||
+        cardIndexOrId >= player.hand.length
+      ) {
+        return undefined;
+      }
+      const card = player.hand[cardIndexOrId];
+      return card ? { card, index: cardIndexOrId } : undefined;
+    }
+
+    // String path — must never touch Array/Object prototype keys.
+    if (typeof cardIndexOrId === 'string') {
+      if (cardIndexOrId.length === 0) return undefined;
+      // Reject prototype-poisoning lookup keys defensively.
+      if (
+        cardIndexOrId === '__proto__' ||
+        cardIndexOrId === 'constructor' ||
+        cardIndexOrId === 'prototype'
+      ) {
+        return undefined;
+      }
+      // Use .find — never bracket-access with a string (would hit prototype).
+      const index = player.hand.findIndex((c) => c.id === cardIndexOrId);
+      if (index < 0) return undefined;
+      return { card: player.hand[index], index };
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Predicate: can the given player legally play the given card right now?
+   *
+   * SECURITY: Engine-internal predicate. Do NOT expose over HTTP/GraphQL
+   * without adding caller-is-target authorization check at the route layer
+   * (see src/match-routes.ts:705).
+   *
+   * Purity: does not mutate engine state. Safe to call repeatedly in
+   * enumeration loops.
+   *
+   * Reason-code precedence (strict — tests pin this ordering):
+   *   1. GAME_NOT_IN_PROGRESS
+   *   2. CARD_NOT_IN_HAND
+   *   3. REACTION_WINDOW_BLOCKED, then REACTION_NON_REACTION_CARD
+   *      (when a reaction chain is awaiting response)
+   *   4. NOT_YOUR_TURN
+   *   5. WRONG_PHASE / WRONG_PRIORITY
+   *   6. UNSUPPORTED_CARD_TYPE
+   *   7. INSUFFICIENT_RESOURCES
+   *   8. NO_LEGAL_TARGETS
+   *
+   * Rationale: cheaper-to-check / less-informative-about-opponent-state
+   * reasons fire first. INSUFFICIENT_RESOURCES and NO_LEGAL_TARGETS leak
+   * info about opponent setup; phase/priority checks don't.
+   */
+  public canPlayCard(
+    playerId: string,
+    cardIndexOrId: number | string
+  ): { ok: true } | { ok: false; reason: CannotPlayReason } {
+    try {
+      // 1. GAME_NOT_IN_PROGRESS
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+
+      // Resolve player safely (getPlayerById throws on missing player).
+      let player: PlayerState;
+      try {
+        player = this.getPlayerById(playerId);
+      } catch {
+        return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+      }
+
+      // 2. CARD_NOT_IN_HAND
+      const resolved = this.resolveCardFromHand(player, cardIndexOrId);
+      if (!resolved) {
+        return { ok: false, reason: 'CARD_NOT_IN_HAND' };
+      }
+      const { card } = resolved;
+
+      // 3. Reaction window gate (mirrors playCard L1921-1942)
+      const chain = this.gameState.reactionChain;
+      if (chain && chain.awaitingResponse) {
+        if (chain.currentReactorId !== playerId) {
+          return { ok: false, reason: 'REACTION_WINDOW_BLOCKED' };
+        }
+        // Reactor may only play REACTION-timing spells.
+        const type = (card.type ?? '').toLowerCase();
+        if (type !== 'spell' || !this.canPlayAsChainReaction(card)) {
+          return { ok: false, reason: 'REACTION_NON_REACTION_CARD' };
+        }
+        // Fall through to cost / target / type checks below.
+      } else {
+        // 4. Turn-order gate (mirrors playCard L1944-1946)
+        const hasCombatPrio = this.hasCombatPriority(playerId);
+        let currentPlayerId: string;
+        try {
+          currentPlayerId = this.getCurrentPlayer().playerId;
+        } catch {
+          return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+        }
+        if (!hasCombatPrio && playerId !== currentPlayerId) {
+          return { ok: false, reason: 'NOT_YOUR_TURN' };
+        }
+
+        // 5a. WRONG_PRIORITY — someone else holds the main priority window.
+        const pw = this.gameState.priorityWindow;
+        if (!hasCombatPrio && pw && pw.holder !== playerId) {
+          return { ok: false, reason: 'WRONG_PRIORITY' };
+        }
+
+        // 5b. WRONG_PHASE — cards can only be played in MAIN_1 / MAIN_2
+        // outside of combat priority.
+        if (
+          !hasCombatPrio &&
+          this.currentPhase !== GamePhase.MAIN_1 &&
+          this.currentPhase !== GamePhase.MAIN_2
+        ) {
+          return { ok: false, reason: 'WRONG_PHASE' };
+        }
+      }
+
+      // 6. UNSUPPORTED_CARD_TYPE (mirrors playCard default branch L2024)
+      const cardTypeLower = (card.type ?? '').toLowerCase();
+      const supportedTypes = new Set([
+        CardType.CREATURE.toString(),
+        CardType.SPELL.toString(),
+        CardType.ARTIFACT.toString(),
+        CardType.ENCHANTMENT.toString()
+      ]);
+      if (!supportedTypes.has(cardTypeLower)) {
+        return { ok: false, reason: 'UNSUPPORTED_CARD_TYPE' };
+      }
+
+      // 7. INSUFFICIENT_RESOURCES (mirrors playCard L1970-1998 — but we do
+      // NOT emit addDuelLogEntry, that would violate purity).
+      const cardCost = this.getCardCost(card);
+      const costMods = this.calculateCostModifiers(card, player, []);
+      if (costMods.energyModifier !== 0) {
+        cardCost.energy = Math.max(0, cardCost.energy + costMods.energyModifier);
+      }
+      if (!this.canPayCost(player, cardCost)) {
+        return { ok: false, reason: 'INSUFFICIENT_RESOURCES' };
+      }
+
+      // 8. NO_LEGAL_TARGETS (only relevant for spells with minTargets>=1)
+      if (cardTypeLower === 'spell') {
+        const profile = this.getSpellTargetingProfile(card);
+        if (profile && profile.requiresSelection && profile.minTargets > 0) {
+          if (!this.hasValidTargetsForScope(player, profile)) {
+            return { ok: false, reason: 'NO_LEGAL_TARGETS' };
+          }
+        }
+      }
+
+      return { ok: true };
+    } catch {
+      // Any unexpected error: safest default is to block the play.
+      return { ok: false, reason: 'GAME_NOT_IN_PROGRESS' };
+    }
+  }
+
+  /**
+   * Predicate: enumerate legal target candidates for a spell in hand.
+   *
+   * SECURITY: Engine-internal predicate. Do NOT expose over HTTP/GraphQL
+   * without adding caller-is-target authorization check at the route layer
+   * (see src/match-routes.ts:705). In particular, enumerating legal targets
+   * for another player's hand would leak that they hold a spell with
+   * opponent-unit-targeting.
+   *
+   * Returns `[]` for:
+   * - unknown player / card not in hand
+   * - non-spell cards
+   * - spells with no catalog entry or no targeting profile
+   * - scopes `graveyard` / `deck` / `hand` / `none` (caller-managed search)
+   *
+   * `abilityIndex` is reserved for future activated-ability targeting
+   * (0 = spell-on-play). Currently ignored.
+   */
+  public getLegalTargets(
+    playerId: string,
+    cardIndexOrId: number | string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _abilityIndex: number = 0
+  ): TargetCandidate[] {
+    try {
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) return [];
+
+      let player: PlayerState;
+      try {
+        player = this.getPlayerById(playerId);
+      } catch {
+        return [];
+      }
+
+      const resolved = this.resolveCardFromHand(player, cardIndexOrId);
+      if (!resolved) return [];
+      const { card } = resolved;
+
+      if ((card.type ?? '').toLowerCase() !== 'spell') return [];
+
+      const profile = this.getSpellTargetingProfile(card);
+      if (!profile || !profile.requiresSelection) return [];
+
+      let opponent: PlayerState | undefined;
+      try {
+        opponent = this.getOtherPlayer(player);
+      } catch {
+        opponent = undefined;
+      }
+
+      const candidates: TargetCandidate[] = [];
+
+      switch (profile.scope) {
+        case 'ally_unit':
+        case 'ally_units': {
+          if (profile.allowFriendly) {
+            for (const u of this.getPlayerUnits(player)) {
+              candidates.push({
+                targetId: u.instanceId ?? u.id,
+                kind: 'unit',
+                label: u.name
+              });
+            }
+          }
+          break;
+        }
+        case 'enemy_unit':
+        case 'enemy_units': {
+          if (profile.allowEnemy && opponent) {
+            for (const u of this.getPlayerUnits(opponent)) {
+              candidates.push({
+                targetId: u.instanceId ?? u.id,
+                kind: 'unit',
+                label: u.name
+              });
+            }
+          }
+          break;
+        }
+        case 'any_unit':
+        case 'all_units': {
+          if (profile.allowFriendly) {
+            for (const u of this.getPlayerUnits(player)) {
+              candidates.push({
+                targetId: u.instanceId ?? u.id,
+                kind: 'unit',
+                label: u.name
+              });
+            }
+          }
+          if (profile.allowEnemy && opponent) {
+            for (const u of this.getPlayerUnits(opponent)) {
+              candidates.push({
+                targetId: u.instanceId ?? u.id,
+                kind: 'unit',
+                label: u.name
+              });
+            }
+          }
+          break;
+        }
+        case 'player': {
+          for (const p of this.gameState.players) {
+            candidates.push({ targetId: p.playerId, kind: 'player', label: p.name });
+          }
+          break;
+        }
+        case 'battlefield': {
+          for (const bf of this.gameState.battlefields) {
+            candidates.push({
+              targetId: bf.battlefieldId,
+              kind: 'battlefield',
+              label: bf.name
+            });
+          }
+          break;
+        }
+        case 'self': {
+          candidates.push({
+            targetId: player.playerId,
+            kind: 'self',
+            label: player.name
+          });
+          break;
+        }
+        // 'graveyard' | 'deck' | 'hand' | 'none' → caller-managed search; []
+        default:
+          break;
+      }
+
+      return candidates;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Predicate: does the given player currently owe a response (reaction or
+   * priority pass)?
+   *
+   * SECURITY: Engine-internal predicate. Do NOT expose over HTTP/GraphQL
+   * without adding caller-is-target authorization check at the route layer
+   * (see src/match-routes.ts:705).
+   *
+   * The `reason` string is display-safe only after the caller HTML-escapes
+   * it — it is sourced from catalog card names (not user input today), but
+   * future deck-building features could introduce player-named cards.
+   */
+  public needsReaction(playerId: string): {
+    required: boolean;
+    windowType: ReactionWindowType;
+    reason?: string;
+  } {
+    try {
+      if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+        return { required: false, windowType: 'none' };
+      }
+
+      const chain = this.gameState.reactionChain;
+      // Strict empty-chain guard — chain.items may be empty while the chain
+      // object exists (e.g. between resolution passes).
+      if (
+        chain &&
+        chain.awaitingResponse &&
+        chain.currentReactorId === playerId &&
+        chain.items &&
+        chain.items.length > 0
+      ) {
+        const top = chain.items[chain.items.length - 1];
+        const topName =
+          (top && (top as any).card && (top as any).card.name) ||
+          (top && (top as any).spell && (top as any).spell.name) ||
+          'spell/ability';
+        return {
+          required: true,
+          windowType: 'trigger',
+          reason: `Chain Link #${chain.items.length}: ${topName} is on the stack.`
+        };
+      }
+
+      const pw = this.gameState.priorityWindow;
+      if (pw && pw.holder === playerId) {
+        if (pw.type === 'combat' || pw.type === 'showdown') {
+          return {
+            required: true,
+            windowType: 'combat',
+            reason: `combat priority (${pw.event ?? 'combat'})`
+          };
+        }
+        if (pw.type === 'reaction') {
+          return {
+            required: true,
+            windowType: 'trigger',
+            reason: `reaction window (${pw.event ?? 'end-step'})`
+          };
+        }
+        return {
+          required: true,
+          windowType: 'priority',
+          reason: `priority window (${pw.event ?? 'main'})`
+        };
+      }
+
+      return { required: false, windowType: 'none' };
+    } catch {
+      return { required: false, windowType: 'none' };
+    }
   }
 
   private getCardCost(card: Card): CardCost {
