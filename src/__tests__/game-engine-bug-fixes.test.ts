@@ -144,3 +144,110 @@ describe('Bug 2: MIN_DECK_SIZE = 40 per rulebook', () => {
     }).not.toThrow();
   });
 });
+
+// ===========================================================================
+// Bug 3: Domain identity enforcement (Rule 133 / 110)
+// ===========================================================================
+
+describe('Bug 3: Domain identity enforcement at deck load', () => {
+  it('rejects a deck whose main-deck cards do not share a domain with the Champion Legend', () => {
+    const engine = new RiftboundGameEngine('m-domain-bad', ['p1', 'p2']);
+    // Legend is Fury-only; deck is entirely Mind-only creatures.
+    const furyLegend = makeCreature({
+      id: 'legend-fury',
+      name: 'Fury Legend',
+      type: CardType.CREATURE,
+      domain: Domain.FURY,
+      colors: ['Fury']
+    });
+    const mindDeck = Array.from({ length: 40 }, (_, i) =>
+      makeCreature({
+        id: `mind-${i}`,
+        name: `Mind Creature ${i}`,
+        domain: Domain.MIND,
+        colors: ['Mind']
+      })
+    );
+
+    expect(() => {
+      engine.initializeGame({
+        p1: {
+          mainDeck: mindDeck,
+          runeDeck: buildRuneDeck(),
+          championLegend: furyLegend
+        } as PlayerDeckConfig,
+        p2: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() }
+      });
+    }).toThrow(/ILLEGAL_DECK_DOMAIN/);
+  });
+
+  it('accepts a deck whose main-deck cards all share at least one domain with the legend', () => {
+    const engine = new RiftboundGameEngine('m-domain-good', ['p1', 'p2']);
+    const furyLegend = makeCreature({
+      id: 'legend-fury',
+      name: 'Fury Legend',
+      type: CardType.CREATURE,
+      domain: Domain.FURY,
+      colors: ['Fury']
+    });
+    // 40 Fury-domain creatures -> legal under Rule 133.
+    const furyDeck = Array.from({ length: 40 }, (_, i) =>
+      makeCreature({
+        id: `fury-${i}`,
+        name: `Fury Creature ${i}`,
+        domain: Domain.FURY,
+        colors: ['Fury']
+      })
+    );
+
+    expect(() => {
+      engine.initializeGame({
+        p1: {
+          mainDeck: furyDeck,
+          runeDeck: buildRuneDeck(),
+          championLegend: furyLegend
+        } as PlayerDeckConfig,
+        p2: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() }
+      });
+    }).not.toThrow();
+  });
+
+  it('treats domainless (rainbow) cards as legal in any deck', () => {
+    const engine = new RiftboundGameEngine('m-domain-rainbow', ['p1', 'p2']);
+    const orderLegend = makeCreature({
+      id: 'legend-order',
+      name: 'Order Legend',
+      type: CardType.CREATURE,
+      domain: Domain.ORDER,
+      colors: ['Order']
+    });
+    // Mix of Order and domainless cards.
+    const mixedDeck = Array.from({ length: 40 }, (_, i) => {
+      if (i < 35) {
+        return makeCreature({
+          id: `order-${i}`,
+          name: `Order Creature ${i}`,
+          domain: Domain.ORDER,
+          colors: ['Order']
+        });
+      }
+      return makeCreature({
+        id: `rainbow-${i}`,
+        name: `Rainbow Creature ${i}`,
+        domain: undefined,
+        colors: []
+      });
+    });
+
+    expect(() => {
+      engine.initializeGame({
+        p1: {
+          mainDeck: mixedDeck,
+          runeDeck: buildRuneDeck(),
+          championLegend: orderLegend
+        } as PlayerDeckConfig,
+        p2: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() }
+      });
+    }).not.toThrow();
+  });
+});

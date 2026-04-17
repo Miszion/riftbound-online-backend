@@ -994,6 +994,13 @@ export class RiftboundGameEngine {
         player.championLeader = null;
       }
 
+      // Rule 133 / 110: every main-deck card must share at least one domain
+      // with the Champion Legend. Skip if no legend has been registered (some
+      // test harnesses intentionally run champion-less decks).
+      if (player.championLegend) {
+        this.enforceDomainIdentity(player.playerId, player.championLegend, normalizedMainDeck);
+      }
+
       if (normalizedRuneDeck.length < this.RUNE_DECK_SIZE) {
         throw new Error(
           `Invalid rune deck for player ${player.playerId} (requires ${this.RUNE_DECK_SIZE}, got ${normalizedRuneDeck.length})`
@@ -7149,6 +7156,63 @@ export class RiftboundGameEngine {
   // ========================================================================
   // HELPERS
   // ========================================================================
+
+  /**
+   * Collect every domain printed on a card. Pulls from both the dedicated
+   * `domain` field and the catalog `colors` array so Champion Legends (which
+   * can be multi-domain) are handled correctly.
+   */
+  private collectCardDomains(card: Card | null | undefined): Set<Domain> {
+    const result = new Set<Domain>();
+    if (!card) {
+      return result;
+    }
+    if (card.domain) {
+      result.add(card.domain);
+    }
+    if (Array.isArray(card.colors)) {
+      for (const color of card.colors) {
+        const mapped = this.mapDomain(color);
+        if (mapped) {
+          result.add(mapped);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Rule 133 / 110: every card in a main deck must share at least one domain
+   * with the Champion Legend. Throws with code `ILLEGAL_DECK_DOMAIN` when the
+   * deck contains an off-domain card. Domainless cards (no `domain` and no
+   * mapped color) are treated as rainbow and always legal.
+   */
+  private enforceDomainIdentity(playerId: string, legend: Card, deck: Card[]): void {
+    const legendDomains = this.collectCardDomains(legend);
+    if (legendDomains.size === 0) {
+      return;
+    }
+    for (const card of deck) {
+      const cardDomains = this.collectCardDomains(card);
+      if (cardDomains.size === 0) {
+        continue;
+      }
+      let sharesDomain = false;
+      for (const domain of cardDomains) {
+        if (legendDomains.has(domain)) {
+          sharesDomain = true;
+          break;
+        }
+      }
+      if (!sharesDomain) {
+        const legendDomainList = Array.from(legendDomains).join(', ');
+        const cardDomainList = Array.from(cardDomains).join(', ');
+        throw new Error(
+          `ILLEGAL_DECK_DOMAIN: player ${playerId} deck entry '${card.name}' (${cardDomainList}) does not share a domain with Champion Legend '${legend.name}' (${legendDomainList})`
+        );
+      }
+    }
+  }
 
   private buildDeckFromConfig(entries: DeckCardEntry[]): Card[] {
     if (!entries) {
