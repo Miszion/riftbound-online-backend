@@ -117,3 +117,30 @@ describe('Bug 1: discard_cards self-discard', () => {
     expect(opponent.hand.length).toBe(opponentBefore);
   });
 });
+
+// ===========================================================================
+// Bug 2: MIN_DECK_SIZE matches the rule book (40 cards, not 39)
+// ===========================================================================
+
+describe('Bug 2: MIN_DECK_SIZE = 40 per rulebook', () => {
+  it('rejects a 39-card main deck (previously accepted)', () => {
+    const engine = new RiftboundGameEngine('m-min-39', ['p1', 'p2']);
+    const undersized = buildMainDeck(39);
+    expect(() => {
+      engine.initializeGame({
+        p1: { mainDeck: undersized, runeDeck: buildRuneDeck() },
+        p2: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() }
+      });
+    }).toThrow(/at least 40/);
+  });
+
+  it('accepts a 40-card main deck', () => {
+    const engine = new RiftboundGameEngine('m-min-40', ['p1', 'p2']);
+    expect(() => {
+      engine.initializeGame({
+        p1: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() },
+        p2: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() }
+      });
+    }).not.toThrow();
+  });
+});

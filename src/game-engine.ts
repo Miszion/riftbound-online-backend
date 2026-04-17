@@ -654,7 +654,7 @@ export class RiftboundGameEngine {
   private gameState: GameState;
   private readonly INITIAL_HAND_SIZE = 4;
   private readonly VICTORY_SCORE = 8;
-  private readonly MIN_DECK_SIZE = 39;
+  private readonly MIN_DECK_SIZE = 40;
   private readonly RUNE_DECK_SIZE = 12;
   private readonly RUNES_PER_TURN = 2;
   private readonly DEFAULT_BATTLEFIELD_COUNT = 2;
