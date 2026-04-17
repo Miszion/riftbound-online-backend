@@ -1,0 +1,13 @@
+{
+  "name": "riftbound-recording",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Playwright-based video capture for the Riftbound replay viewer",
+  "type": "module",
+  "scripts": {
+    "record": "node record.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

@@ -581,8 +581,29 @@ export const typeDefs = `#graphql
     matchReplay(matchId: ID!): MatchReplay
     recentMatches(limit: Int): [RecentMatchSummary!]!
 
+    # Live replay session status (poll-friendly)
+    replaySession(sessionId: ID!): ReplaySessionInfo
+
     # Bot-vs-bot live matches (local dev / showcase)
     activeBotMatches: [BotMatchSummary!]!
+  }
+
+  enum ReplayAction {
+    PLAY
+    PAUSE
+    SEEK
+    SET_SPEED
+    STOP
+  }
+
+  type ReplaySessionInfo {
+    sessionId: ID!
+    originalMatchId: ID!
+    totalFrames: Int!
+    cursor: Int!
+    playing: Boolean!
+    speedMs: Int!
+    status: String!
   }
 
   type BotMatchSummary {
@@ -689,6 +710,16 @@ export const typeDefs = `#graphql
 
     cancelBotMatch(matchId: ID!): Boolean!
     cancelAllBotMatches: Int!
+
+    # Replay sessions — drive a completed/running match's recorded frames
+    # back through the live spectate pipeline (gameStateChanged).
+    startMatchReplay(matchId: ID!, speedMs: Int): ReplaySessionInfo!
+    controlMatchReplay(
+      sessionId: ID!
+      action: ReplayAction!
+      speedMs: Int
+      cursor: Int
+    ): ReplaySessionInfo!
 
     submitInitiativeChoice(
       matchId: ID!

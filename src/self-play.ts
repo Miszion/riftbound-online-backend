@@ -46,6 +46,7 @@ import {
   getCardCatalog,
   EnrichedCardRecord
 } from './card-catalog';
+import { serializeGameState } from './game-state-serializer';
 
 // ---------------------------------------------------------------------------
 // Canonical BotAction union (spec §1.3)
@@ -313,7 +314,23 @@ interface DeckAssembly {
 const DOMAIN_LIST: Domain[] = Object.values(Domain) as Domain[];
 
 function pickPlayableCards(catalog: EnrichedCardRecord[]): EnrichedCardRecord[] {
-  const allowed = new Set(['creature', 'spell', 'artifact', 'enchantment']);
+  // Catalog records use raw type strings from the source dump
+  // ('unit', 'gear', 'legend', 'spell', 'battlefield', 'rune', 'token').
+  // The engine's mapCardType() folds 'unit'/'champion'/'legend' to CREATURE
+  // and 'gear'/'equipment' to ARTIFACT, so we must admit those raw aliases
+  // here or the bot plays zero-creature decks (reason the old filter made
+  // burn-out the only achievable win condition).
+  const allowed = new Set([
+    'creature',
+    'unit',
+    'champion',
+    'legend',
+    'spell',
+    'artifact',
+    'gear',
+    'equipment',
+    'enchantment'
+  ]);
   return catalog.filter((c) => {
     const type = (c.type ?? '').toLowerCase();
     if (!allowed.has(type)) return false;
@@ -406,6 +423,7 @@ function assembleDeck(
 
 function buildTestFallbackDeck(
   rng: Rng,
+  gameIndex: number,
   size = 40
 ): { mainDeck: Card[]; runeDeck: RuneCard[]; battlefields: Card[] } {
   const mainDeck: Card[] = Array.from({ length: size }, (_, i) => ({
@@ -428,7 +446,7 @@ function buildTestFallbackDeck(
   return {
     mainDeck,
     runeDeck: buildRuneDeck(rng),
-    battlefields: [buildSyntheticBattlefield(0)]
+    battlefields: [buildSyntheticBattlefield(gameIndex)]
   };
 }
 
@@ -449,7 +467,7 @@ function buildDeckConfigForGame(
       championLeader: null
     };
   }
-  const fallback = buildTestFallbackDeck(rng);
+  const fallback = buildTestFallbackDeck(rng, gameIndex);
   return {
     mainDeck: fallback.mainDeck,
     runeDeck: fallback.runeDeck,
@@ -737,17 +755,32 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
           targets: resolved.targets
         });
       } else {
-        // Permanent: emit base deploy + per-owned-battlefield deploy
+        // Permanent: emit base deploy + per-battlefield deploy for every
+        // battlefield the engine's resolveDeploymentLocation will accept:
+        //   - battlefields we already control (classic case)
+        //   - open battlefields (controller==null) if the card has
+        //     "canPlayToOpenBattlefield" text OR an ally on board grants
+        //     "friendly units may be played to open battlefields"
+        //   - enemy-occupied battlefields if the card has
+        //     "canPlayToOccupiedEnemyBattlefield" text
         actions.push({
           kind: 'play_card',
           cardIndex: i,
           destinationId: 'base',
           targets: []
         });
-        const ownedBattlefields = state.battlefields.filter(
-          (bf) => bf.controller === playerId
-        );
-        for (const bf of ownedBattlefields) {
+        const perms = engine.getCardDeploymentPermissions(card);
+        const hasAllyGrant = engine.playerHasAllyGrantingOpenBattlefieldDeploy(playerId);
+        for (const bf of state.battlefields) {
+          const bfController = bf.controller;
+          const isOwn = bfController === playerId;
+          const isOpen = bfController == null;
+          const isEnemyOccupied = bfController != null && bfController !== playerId;
+          const canDeployHere =
+            isOwn ||
+            (isOpen && (perms.canPlayToOpenBattlefield || hasAllyGrant)) ||
+            (isEnemyOccupied && perms.canPlayToOccupiedEnemyBattlefield);
+          if (!canDeployHere) continue;
           actions.push({
             kind: 'play_card',
             cardIndex: i,
@@ -758,12 +791,34 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
       }
     }
 
-    // deploy_leader (uses new predicate)
+    // deploy_leader (uses new predicate). Leader deployment goes through the
+    // same resolveDeploymentLocation rules, so we mirror the same destination
+    // set logic: owned battlefields always; open battlefields if the champion
+    // card grants it or an ally grants it to friendlies; enemy-occupied if
+    // the champion itself grants it.
     const leaderRes = engine.canDeployChampionLeader(playerId);
     if (leaderRes.ok) {
       actions.push({ kind: 'deploy_leader', destinationId: 'base' });
+      const championCard: Card | null =
+        (player as any).championLeader ?? null;
+      const leaderPerms = championCard
+        ? engine.getCardDeploymentPermissions(championCard)
+        : {
+            canPlayToOpenBattlefield: false,
+            canPlayToOccupiedEnemyBattlefield: false,
+            grantsOpenBattlefieldPlayToAllies: false
+          };
+      const leaderAllyGrant = engine.playerHasAllyGrantingOpenBattlefieldDeploy(playerId);
       for (const bf of state.battlefields) {
-        if (bf.controller === playerId) {
+        const bfController = bf.controller;
+        const isOwn = bfController === playerId;
+        const isOpen = bfController == null;
+        const isEnemyOccupied = bfController != null && bfController !== playerId;
+        const canDeployHere =
+          isOwn ||
+          (isOpen && (leaderPerms.canPlayToOpenBattlefield || leaderAllyGrant)) ||
+          (isEnemyOccupied && leaderPerms.canPlayToOccupiedEnemyBattlefield);
+        if (canDeployHere) {
           actions.push({ kind: 'deploy_leader', destinationId: bf.battlefieldId });
         }
       }
@@ -803,16 +858,27 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
     }
   }
 
-  // commence_battle during COMBAT
-  if (phase === GamePhase.COMBAT) {
-    for (const bf of state.battlefields) {
-      const hasMyUnit = player.board.creatures.some(
-        (c) =>
-          c.location && (c.location as any).zone === 'battlefield' &&
-          (c.location as any).battlefieldId === bf.battlefieldId
-      );
-      if (hasMyUnit) {
-        actions.push({ kind: 'commence_battle', battlefieldId: bf.battlefieldId });
+  // commence_battle — legal any time the current player is on own turn with
+  // a unit on the battlefield and they haven't already resolved combat there
+  // this turn. The engine (`commenceBattle`, game-engine.ts:712) doesn't
+  // require a specific phase, only that the player has a friendly unit at
+  // the battlefield and no active combatContext. Historically we only emitted
+  // this in COMBAT, but `proceedToNextPhase` auto-advances MAIN_1 → COMBAT →
+  // MAIN_2 → END in a single call, so the bot NEVER saw a COMBAT-phase tick
+  // to fire on. Emitting during MAIN_1/COMBAT (own turn) fixes the
+  // "games always end in burn_out / never capture" bug.
+  if (phase === GamePhase.MAIN_1 || phase === GamePhase.COMBAT) {
+    const combatInProgress = Boolean((state as any).combatContext);
+    if (!combatInProgress) {
+      for (const bf of state.battlefields) {
+        const hasMyUnit = player.board.creatures.some(
+          (c) =>
+            c.location && (c.location as any).zone === 'battlefield' &&
+            (c.location as any).battlefieldId === bf.battlefieldId
+        );
+        if (hasMyUnit) {
+          actions.push({ kind: 'commence_battle', battlefieldId: bf.battlefieldId });
+        }
       }
     }
   }
@@ -992,9 +1058,10 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
     actions.find((a) => a.kind === 'resolve_prompt_target');
   if (promptAction) return promptAction;
 
-  // Setup-phase choices
-  const init = actions.find((a) => a.kind === 'submit_initiative');
-  if (init) return { kind: 'submit_initiative', choice: 0 };
+  // Setup-phase choices. Use RNG for initiative so two heuristic bots don't
+  // tie on Doran's Blade forever (matching picks force a rematch).
+  const inits = actions.filter((a) => a.kind === 'submit_initiative');
+  if (inits.length > 0) return rng.pick(inits) ?? inits[0];
   const bf = actions.find((a) => a.kind === 'select_battlefield');
   if (bf) return bf;
   const mull = actions.find((a) => a.kind === 'mulligan');
@@ -1006,6 +1073,26 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
   // prompt we can't resolve.
   const respond = actions.find((a) => a.kind === 'respond_chain');
   if (respond) return { kind: 'respond_chain', pass: true };
+
+  // Combat-window pass: during a showdown, the enumerator only returns
+  // `pass_priority` plus combat-legal spells. Firing a spell here resets
+  // `actionPasses` on the engine's combat context, so combat never completes
+  // — `combatContext` stays set, which blocks EVERY future `commence_battle`
+  // from being enumerated. That's the real root cause of the burn-out bug:
+  // the bot kept casting ACTION spells in combat, combat never closed, and
+  // no one could ever contest another battlefield. Detect the combat window
+  // by its signature (pass_priority present AND no advance_phase/move_unit/
+  // creature play in the set) and just pass so combat resolves.
+  const combatWindowSignature =
+    actions.some((a) => a.kind === 'pass_priority') &&
+    !actions.some((a) => a.kind === 'advance_phase') &&
+    !actions.some((a) => a.kind === 'move_unit') &&
+    !actions.some((a) => a.kind === 'commence_battle') &&
+    !actions.some((a) => a.kind === 'deploy_leader');
+  if (combatWindowSignature) {
+    const passAction = actions.find((a) => a.kind === 'pass_priority');
+    if (passAction) return passAction;
+  }
 
   // If the ONLY progress action is advance_phase (plus maybe a pass), take it.
   // Don't spin in main_1 pass-looping.
@@ -1034,50 +1121,99 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
     return commence[0];
   }
 
-  // Tier 2: deploy leader champion — aim at a battlefield for contest
+  // Tier 2: deploy leader champion — aim at a battlefield for contest.
+  // Leader on a battlefield beats leader in base: it's immediate presence.
   const deploy = actions.filter((a) => a.kind === 'deploy_leader');
   if (deploy.length > 0) {
     const battlefieldDeploy = deploy.find(
       (a) => (a as any).destinationId && (a as any).destinationId !== 'base'
     );
-    return battlefieldDeploy ?? deploy[0];
+    if (battlefieldDeploy) return battlefieldDeploy;
+    // If leader can only go to base, still deploy — leader in base is useful
+    // (can move out next turn) but is strictly lower priority than direct
+    // battlefield presence.  Fall through and let later tiers try to get
+    // actual battlefield presence first.
   }
 
-  // Tier 3: deploy creatures directly to battlefields — battlefield presence
-  // is the only path to contest.
+  // Helper: partition creature play_card actions by destination.
   const creaturePlays = actions.filter((a) => {
     if (a.kind !== 'play_card') return false;
     const c = player.hand[a.cardIndex];
     return c && (c.type ?? '').toLowerCase() === 'creature';
   });
-  if (creaturePlays.length > 0) {
-    // Strongly prefer direct-to-battlefield deployments over 'base'
-    const directToBf = creaturePlays.filter(
-      (a) => a.kind === 'play_card' && a.destinationId && a.destinationId !== 'base'
+  const creaturePlaysToBattlefield = creaturePlays.filter(
+    (a) => a.kind === 'play_card' && a.destinationId && a.destinationId !== 'base'
+  );
+  const creaturePlaysToBase = creaturePlays.filter(
+    (a) => a.kind === 'play_card' && (!a.destinationId || a.destinationId === 'base')
+  );
+
+  // Tier 3: play_card directly to a battlefield (owned, permitted-open,
+  // or permitted-enemy-occupied — the enumerator has already filtered to
+  // what the engine will accept).
+  //
+  // Rank by best battlefield:
+  //   - Prefer uncontested (no enemy presence there).
+  //   - Among contested, prefer where we'd have numerical advantage.
+  if (creaturePlaysToBattlefield.length > 0) {
+    const ranked = rankBattlefieldDeployActions(
+      creaturePlaysToBattlefield,
+      player,
+      state
     );
-    if (directToBf.length > 0) {
-      const ranked = rankPermanentPlays(directToBf, player, state);
-      if (ranked.length > 0) return ranked[0];
-    }
-    const ranked = rankPermanentPlays(creaturePlays, player, state);
     if (ranked.length > 0) return ranked[0];
   }
 
-  // Tier 4: move own unit onto an uncontested battlefield — sets up a claim
-  const moveToBf = actions.filter(
+  // Tier 4: if we have ANY unit idling in base and there's an open
+  // (controller==null) or contested-but-winnable battlefield, move it onto
+  // the battlefield rather than stockpile more creatures in base.
+  //
+  // Key: this must fire BEFORE Tier 5 (play_card to base). Otherwise we loop
+  // playing new creatures into base forever — the exact bug report symptom.
+  const moveActions = actions.filter(
     (a) => a.kind === 'move_unit' && a.destinationId !== 'base'
   );
-  if (moveToBf.length > 0) {
-    const uncontrolled = moveToBf.find(
-      (a) =>
-        a.kind === 'move_unit' &&
-        state.battlefields.find((bf2) => bf2.battlefieldId === a.destinationId)?.controller == null
+  // Only consider moves that *originate* from base — moving between
+  // battlefields is a different strategic choice and handled separately.
+  const moveFromBaseToBf = moveActions.filter((a) => {
+    if (a.kind !== 'move_unit') return false;
+    const creature = player.board.creatures.find(
+      (c) => c.instanceId === a.creatureInstanceId
     );
-    return uncontrolled ?? moveToBf[0];
+    if (!creature) return false;
+    const loc = creature.location as any;
+    return loc?.zone === 'base' || loc?.zone == null;
+  });
+  if (moveFromBaseToBf.length > 0) {
+    // Prefer moves to uncontested battlefields (controller==null, no enemy
+    // there). Falls back to any legal move.
+    const uncontested = moveFromBaseToBf.find((a) => {
+      if (a.kind !== 'move_unit') return false;
+      const bf = state.battlefields.find(
+        (b) => b.battlefieldId === a.destinationId
+      );
+      if (!bf) return false;
+      if (bf.controller != null && bf.controller !== playerId) return false;
+      const enemyPresent = state.players.some(
+        (p) =>
+          p.playerId !== playerId &&
+          p.board.creatures.some(
+            (cc) =>
+              cc.location &&
+              (cc.location as any).zone === 'battlefield' &&
+              (cc.location as any).battlefieldId === a.destinationId
+          )
+      );
+      return !enemyPresent;
+    });
+    if (uncontested) return uncontested;
+    return moveFromBaseToBf[0];
   }
 
-  // Tier 4.5: if we already have creatures on a battlefield but we're in
-  // MAIN_1, advance toward COMBAT instead of pass_priority looping.
+  // Tier 4.5 (was 4.5): if we already have creatures on a battlefield but
+  // we're in MAIN_1, advance toward COMBAT instead of playing more junk into
+  // base. This used to live below Tier 3 (creature plays); the spec wants
+  // it *above* base plays so the bot actually resolves showdowns.
   const phase = engine.currentPhase;
   const ownUnitsOnBf = player.board.creatures.some(
     (c) => c.location && (c.location as any).zone === 'battlefield'
@@ -1087,11 +1223,26 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
     if (adv) return adv;
   }
 
-  // Tier 5: legend
+  // Tier 5: fallback — play creature to base. Only reachable if no
+  // direct-to-battlefield play was legal AND no move-from-base was useful.
+  // The legality gate / engine handles destination validation; we just pick
+  // the best stat-line.
+  if (creaturePlaysToBase.length > 0) {
+    const ranked = rankPermanentPlays(creaturePlaysToBase, player, state);
+    if (ranked.length > 0) return ranked[0];
+  }
+
+  // Tier 5.1: deploy leader to base (if it was the only deploy option) —
+  // below base-creature plays because it's a permanent commitment.
+  if (deploy.length > 0) {
+    return deploy[0];
+  }
+
+  // Tier 6: legend
   const legend = actions.find((a) => a.kind === 'activate_legend');
   if (legend) return legend;
 
-  // Tier 6: non-creature permanents
+  // Tier 7: non-creature permanents
   const permPlays = actions.filter((a) => {
     if (a.kind !== 'play_card') return false;
     const c = player.hand[a.cardIndex];
@@ -1103,7 +1254,7 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
     if (ranked.length > 0) return ranked[0];
   }
 
-  // Tier 7: spells — skip if spell targeting is risky (no candidates). The
+  // Tier 8: spells — skip if spell targeting is risky (no candidates). The
   // enumerator already filters for resolvable targets, so remaining spells
   // should be safe, but cap spell fires so we don't cycle through losers.
   const spellPlays = actions.filter((a) => {
@@ -1115,17 +1266,66 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
     return spellPlays[0];
   }
 
-  // Tier 8: advance phase — progress the turn, don't loiter in main_1.
+  // Tier 9: advance phase — progress the turn, don't loiter in main_1.
   const adv = actions.find((a) => a.kind === 'advance_phase');
   if (adv) return adv;
 
-  // Tier 9: pass priority (last resort)
+  // Tier 10: pass priority (last resort)
   const pass = actions.find((a) => a.kind === 'pass_priority');
   if (pass) return pass;
 
   // Fallback
   return rng.pick(actions) ?? null;
 };
+
+/**
+ * Rank creature-to-battlefield deploy actions so the bot picks the best
+ * battlefield to commit to:
+ *
+ *   +2  uncontested (controller==null, zero enemy units there)
+ *   +1  we'd have numerical advantage after this deploy
+ *   +0  even / contested-losing
+ *
+ * Ties are broken by raw stat score (power + toughness - 0.1*cost).
+ */
+function rankBattlefieldDeployActions(
+  actions: BotAction[],
+  player: PlayerState,
+  state: GameState
+): BotAction[] {
+  const scored = actions.map((a) => {
+    if (a.kind !== 'play_card' || !a.destinationId || a.destinationId === 'base') {
+      return { a, score: -1 };
+    }
+    const c = player.hand[a.cardIndex];
+    const power = (c as any)?.power ?? 0;
+    const tough = (c as any)?.toughness ?? 0;
+    const cost = (c?.energyCost ?? c?.manaCost ?? 0) as number;
+    let score = power + tough - cost * 0.1;
+
+    const bf = state.battlefields.find((b) => b.battlefieldId === a.destinationId);
+    if (bf) {
+      let myUnitsThere = 0;
+      let enemyUnitsThere = 0;
+      for (const p of state.players) {
+        for (const cc of p.board.creatures) {
+          const loc = cc.location as any;
+          if (loc?.zone !== 'battlefield' || loc?.battlefieldId !== bf.battlefieldId) continue;
+          if (p.playerId === player.playerId) myUnitsThere++;
+          else enemyUnitsThere++;
+        }
+      }
+      if (bf.controller == null && enemyUnitsThere === 0) {
+        score += 2; // pure open battlefield — best target
+      } else if (myUnitsThere + 1 > enemyUnitsThere) {
+        score += 1; // we'd have numerical advantage after deploying
+      }
+    }
+    return { a, score };
+  });
+  scored.sort((x, y) => y.score - x.score);
+  return scored.map((s) => s.a);
+}
 
 function isFavorableBattlefield(
   state: GameState,
@@ -1525,13 +1725,21 @@ function formatTimestampForFilename(date: Date): string {
   );
 }
 
+interface PlayOneGameHooks {
+  // Fires once per JSONL event with the full post-action `serializeGameState`
+  // snapshot. Used by the replay reconstructor to rebuild the in-memory frame
+  // store for a historical JSONL match without writing to disk.
+  onFrame?: (frame: ReturnType<typeof serializeGameState>) => void;
+}
+
 function playOneGame(
   gameIndex: number,
   cfg: HarnessConfig,
   baseSeed: number,
   playable: EnrichedCardRecord[] | null,
   battlefieldRecords: EnrichedCardRecord[] | null,
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  hooks?: PlayOneGameHooks
 ): RunResult {
   const p1 = 'playerA';
   const p2 = 'playerB';
@@ -1595,6 +1803,13 @@ function playOneGame(
       ...extras
     };
     sink.write(line);
+    if (hooks?.onFrame) {
+      try {
+        hooks.onFrame(serializeGameState(engine.getGameState()));
+      } catch {
+        // Reconstructor hook must never break the harness loop.
+      }
+    }
   };
 
   let engine: RiftboundGameEngine;
@@ -2153,7 +2368,13 @@ export {
   forkRng,
   makeRng,
   Rng,
-  StrategyName
+  StrategyName,
+  // Exposed for the JSONL replay reconstructor.
+  playOneGame,
+  pickPlayableCards,
+  pickBattlefieldRecords,
+  HarnessConfig,
+  PlayOneGameHooks
 };
 
 if (require.main === module) {

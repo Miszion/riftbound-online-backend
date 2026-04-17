@@ -28,6 +28,14 @@ import {
   cancelBotMatch,
   cancelAllBotMatches
 } from '../bot-match';
+import {
+  startReplaySession,
+  controlReplaySession,
+  getReplaySession,
+  getReplaySessionLastFrame,
+  getReplaySessionViewFrame,
+  ReplayAction
+} from '../replay-session';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -1249,7 +1257,8 @@ const fetchRecentMatches = async (limit = 10) => {
   const result = await dynamodb
     .scan({
       TableName: matchTableName,
-      ProjectionExpression: 'MatchId, Players, Winner, Loser, Duration, Turns, CreatedAt',
+      ProjectionExpression: 'MatchId, Players, Winner, Loser, #duration, Turns, CreatedAt',
+      ExpressionAttributeNames: { '#duration': 'Duration' },
       Limit: Math.max(limit * 3, limit)
     })
     .promise();
@@ -1311,6 +1320,27 @@ export const queryResolvers = {
 
   // Match Queries
   async match(_parent: any, { matchId }: { matchId: string }, context: ResolverContext) {
+    // Replay sessions ("replay-<uuid>") are not real match rows in the DB.
+    // Synthesize the match view directly from the most recently emitted
+    // frame so GameBoard does not show a "Match not found" banner while it
+    // waits for the first subscription tick. Non-replay ids preserve the
+    // original internal-API fetch path.
+    if (typeof matchId === 'string' && matchId.startsWith('replay-')) {
+      const frame = getReplaySessionViewFrame(matchId);
+      if (!frame) {
+        return null;
+      }
+      // `serializeGameState` already produces the exact shape of the
+      // `GameState` GraphQL type (what this resolver normally returns from
+      // `/matches/:id`). Override `matchId` so the client sees the replay
+      // sessionId, not the original match row id.
+      const synthesized = { ...frame, matchId };
+      const state = ensureGameStateDefaults(synthesized);
+      if (state?.players?.length) {
+        await Promise.all(state.players.map((player: MatchPlayerLike) => hydratePlayerName(player)));
+      }
+      return state;
+    }
     try {
       const state = await fetchSpectatorState(matchId, context.authToken);
       if (state?.players?.length) {
@@ -1328,6 +1358,63 @@ export const queryResolvers = {
     { matchId, playerId }: { matchId: string; playerId: string },
     context: ResolverContext
   ) {
+    // Replay sessions are bot-vs-bot today; there is no live engine to call
+    // and no per-player hidden information to protect. Synthesize a
+    // spectate-style PlayerView from the most recent replay frame, matching
+    // the shape that the `/matches/:id/player/:playerId` route produces for
+    // live matches (see `buildPlayerViewSnapshot` in match-routes.ts).
+    if (typeof matchId === 'string' && matchId.startsWith('replay-')) {
+      const frame = getReplaySessionViewFrame(matchId);
+      if (!frame) {
+        return null;
+      }
+      const players = Array.isArray((frame as any).players) ? (frame as any).players : [];
+      // Prefer the player matching the requested id; fall back to players[0]
+      // if the caller passed an unknown id (the frontend sometimes passes
+      // the local user id during spectate mount).
+      const currentPlayer =
+        players.find((p: any) => p?.playerId === playerId) ?? players[0] ?? null;
+      const opponentRaw = players.find((p: any) => p !== currentPlayer) ?? null;
+      const opponent = opponentRaw
+        ? {
+            playerId: opponentRaw.playerId ?? null,
+            victoryPoints: opponentRaw.victoryPoints ?? 0,
+            victoryScore: opponentRaw.victoryScore ?? (frame as any).victoryScore ?? 0,
+            handSize: opponentRaw.handSize ?? 0,
+            runeDeckSize: opponentRaw.runeDeckSize ?? 0,
+            board: opponentRaw.board ?? { creatures: [], artifacts: [], enchantments: [] },
+            championLegend: opponentRaw.championLegend ?? null,
+            championLeader: opponentRaw.championLeader ?? null
+          }
+        : {
+            playerId: null,
+            victoryPoints: 0,
+            victoryScore: (frame as any).victoryScore ?? 0,
+            handSize: 0,
+            runeDeckSize: 0,
+            board: { creatures: [], artifacts: [], enchantments: [] },
+            championLegend: null,
+            championLeader: null
+          };
+      const view = {
+        matchId,
+        currentPlayer,
+        opponent,
+        gameState: {
+          matchId,
+          currentPhase: (frame as any).currentPhase ?? 'unknown',
+          turnNumber: (frame as any).turnNumber ?? 0,
+          currentPlayerIndex: (frame as any).currentPlayerIndex ?? 0,
+          // Replay is read-only; no one can act on a past frame.
+          canAct: false,
+          turnSequenceStep: (frame as any).turnSequenceStep ?? null,
+          focusPlayerId: (frame as any).focusPlayerId ?? null,
+          combatContext: (frame as any).combatContext ?? null
+        }
+      };
+      await hydratePlayerName(view.currentPlayer);
+      return view;
+    }
     try {
       const view = await fetchPlayerView(matchId, playerId, context.authToken);
       await hydratePlayerName(view?.currentPlayer);
@@ -1478,6 +1565,10 @@ export const queryResolvers = {
       logger.error('Error fetching replay:', error);
       throw error;
     }
+  },
+
+  replaySession(_parent: any, { sessionId }: { sessionId: string }) {
+    return getReplaySession(sessionId);
   },
 
   async recentMatches(_parent: any, { limit = 10 }: { limit?: number }) {
@@ -2824,6 +2915,48 @@ export const mutationResolvers = {
 
   cancelAllBotMatches() {
     return cancelAllBotMatches();
+  },
+
+  startMatchReplay(
+    _parent: any,
+    args: { matchId: string; speedMs?: number | null },
+    context: ResolverContext
+  ) {
+    // Spectate-grade auth: any authenticated user can start a replay session.
+    // Mirrors the `requireUser` pattern used elsewhere — no admin gating.
+    requireUser(context);
+    try {
+      return startReplaySession({
+        originalMatchId: args.matchId,
+        speedMs: args.speedMs ?? null
+      });
+    } catch (error) {
+      logger.error('Error starting match replay:', error);
+      throw error;
+    }
+  },
+
+  controlMatchReplay(
+    _parent: any,
+    args: {
+      sessionId: string;
+      action: ReplayAction;
+      speedMs?: number | null;
+      cursor?: number | null;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context);
+    try {
+      return controlReplaySession(args.sessionId, {
+        action: args.action,
+        speedMs: args.speedMs ?? null,
+        cursor: args.cursor ?? null
+      });
+    } catch (error) {
+      logger.error('Error controlling match replay:', error);
+      throw error;
+    }
   }
 };
 
@@ -2831,10 +2964,53 @@ export const mutationResolvers = {
 // SUBSCRIPTION RESOLVERS
 // ============================================================================
 
+/**
+ * Wrap a pubSub asyncIterator so subscribers receive a cached `initial`
+ * frame as their first value before falling through to live pubsub events.
+ *
+ * `graphql-subscriptions` has no first-class "replay last value on
+ * subscribe" mechanism, so we adapt the underlying iterator with an async
+ * generator. Used only for replay sessions, where a late-mounting client
+ * (see P0.1) would otherwise see an empty `gameStateChanged` channel.
+ */
+async function* withInitialFrame(
+  iter: AsyncIterator<any>,
+  initial: any
+): AsyncGenerator<any, void, undefined> {
+  if (initial) {
+    yield { gameStateChanged: initial };
+  }
+  try {
+    while (true) {
+      const { value, done } = await iter.next();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    // Propagate cancellation so the underlying pubsub iterator cleans up.
+    try {
+      await iter.return?.(undefined);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export const subscriptionResolvers = {
   gameStateChanged: {
     subscribe: (_parent: any, { matchId }: { matchId: string }) => {
-      return pubSub.asyncIterator([`${SubscriptionEvents.GAME_STATE_CHANGED}:${matchId}`]);
+      const iter = pubSub.asyncIterator([
+        `${SubscriptionEvents.GAME_STATE_CHANGED}:${matchId}`
+      ]);
+      // For replay sessions, seed the subscriber with the most recent frame
+      // so late-mounting GameBoards (match already ended before React
+      // subscribed) still have something to render instead of an empty
+      // channel. Live matches keep the original behaviour byte-for-byte.
+      if (typeof matchId === 'string' && matchId.startsWith('replay-')) {
+        const initial = getReplaySessionLastFrame(matchId);
+        return withInitialFrame(iter as AsyncIterator<any>, initial);
+      }
+      return iter;
     },
   },
 

@@ -3,6 +3,10 @@ import express, { Express, Request, Response, NextFunction, ErrorRequestHandler 
 import cors from 'cors';
 import AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import { useServer } from 'graphql-ws/lib/use/ws';
+import { makeExecutableSchema } from '@graphql-tools/schema';
 import logger from './logger';
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
@@ -233,6 +237,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (PUBLIC_ROUTES.has(req.path)) {
     return next();
   }
+  if (process.env.ALLOW_LOCAL_BYPASS === 'true') {
+    (req as any).userId = (req.headers['x-user-id'] as string) || 'local-dev';
+    return next();
+  }
   return requireAuthenticatedUser(req, res, next);
 });
 
@@ -277,15 +285,20 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Build a single executable schema shared by HTTP (Apollo) and WebSocket (graphql-ws).
+const executableSchema = makeExecutableSchema({
+  typeDefs,
+  resolvers: {
+    Query: queryResolvers,
+    Mutation: mutationResolvers,
+    Subscription: subscriptionResolvers,
+  },
+});
+
 // Initialize Apollo Server for GraphQL
 async function startApolloServer() {
   const server = new ApolloServer({
-    typeDefs,
-    resolvers: {
-      Query: queryResolvers,
-      Mutation: mutationResolvers,
-      Subscription: subscriptionResolvers,
-    },
+    schema: executableSchema,
   });
 
   await server.start();
@@ -672,38 +685,135 @@ app.use(errorHandler);
 // Start server
 const PORT = process.env.PORT || 3000;
 
+export interface CreatedServer {
+  httpServer: http.Server;
+  port: number;
+  close: () => Promise<void>;
+}
+
+let serverBootstrapped = false;
+
+/**
+ * Boot the HTTP + GraphQL + WebSocket stack on the supplied port. Used by
+ * `runServer` (production/dev entry point) and by integration tests that need
+ * a real server instance on a random free port.
+ *
+ * Resolves once `httpServer.listen` has completed so callers can read back
+ * the actually-bound port (important when `port === 0`).
+ */
+export async function createServer(port: number | string = PORT): Promise<CreatedServer> {
+  if (serverBootstrapped) {
+    throw new Error('createServer() can only be invoked once per process');
+  }
+  serverBootstrapped = true;
+
+  await startApolloServer();
+  registerMatchRoutes(app);
+
+  // 404 handler (registered after GraphQL middleware to avoid intercepting it)
+  app.use((_req: Request, res: Response): void => {
+    logger.warn('[HTTP] Unmatched route', {
+      method: _req.method,
+      path: _req.originalUrl,
+      headers: {
+        origin: _req.headers.origin,
+        host: _req.headers.host,
+        'content-type': _req.headers['content-type'],
+        'x-user-id': _req.headers['x-user-id'],
+      },
+      body: _req.body,
+    });
+    res.status(404).json({ error: 'Not found', path: _req.originalUrl });
+  });
+
+  const httpServer = http.createServer(app);
+
+  // Wire up the GraphQL WebSocket server for subscriptions. The frontend
+  // Apollo client talks to ws://.../graphql via graphql-ws; without this
+  // the spectator subscription silently fails to connect.
+  const wsServer = new WebSocketServer({
+    server: httpServer,
+    path: '/graphql',
+  });
+  const wsCleanup = useServer(
+    {
+      schema: executableSchema,
+      context: (ctx) => {
+        const params = (ctx.connectionParams || {}) as Record<string, unknown>;
+        const rawAuth =
+          (params.Authorization as string | undefined) ||
+          (params.authorization as string | undefined) ||
+          null;
+        const bearer = rawAuth && rawAuth.startsWith('Bearer ')
+          ? rawAuth.slice(7).trim()
+          : rawAuth;
+        const token =
+          (params['x-id-token'] as string | undefined) ||
+          bearer ||
+          null;
+        const payload = token ? decodeJwtPayload(token) : null;
+        const userId =
+          (params['x-user-id'] as string | undefined) ||
+          (payload?.sub as string | undefined) ||
+          null;
+        return {
+          userId: userId || null,
+          authToken: token,
+        };
+      },
+    },
+    wsServer
+  );
+
+  httpServer.on('close', () => {
+    try {
+      const disposed = wsCleanup.dispose();
+      if (disposed && typeof (disposed as Promise<void>).catch === 'function') {
+        (disposed as Promise<void>).catch((err: unknown) => {
+          logger.warn('[WS] cleanup error', { err });
+        });
+      }
+    } catch (err) {
+      logger.warn('[WS] cleanup threw', { err });
+    }
+  });
+
+  const listenPort = typeof port === 'string' ? parseInt(port, 10) || 0 : port;
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(listenPort, () => resolve());
+  });
+
+  const address = httpServer.address();
+  const boundPort =
+    typeof address === 'object' && address !== null ? address.port : listenPort;
+
+  logger.info(`Server running on port ${boundPort}`);
+  logger.info(`GraphQL endpoint available at http://localhost:${boundPort}/graphql`);
+  logger.info(`GraphQL subscriptions available at ws://localhost:${boundPort}/graphql`);
+
+  const close = () =>
+    new Promise<void>((resolve, reject) => {
+      httpServer.close((err) => (err ? reject(err) : resolve()));
+    });
+
+  return { httpServer, port: boundPort, close };
+}
+
 async function runServer() {
   try {
-    await startApolloServer();
-    registerMatchRoutes(app);
-
-    // 404 handler (registered after GraphQL middleware to avoid intercepting it)
-    app.use((_req: Request, res: Response): void => {
-      logger.warn('[HTTP] Unmatched route', {
-        method: _req.method,
-        path: _req.originalUrl,
-        headers: {
-          origin: _req.headers.origin,
-          host: _req.headers.host,
-          'content-type': _req.headers['content-type'],
-          'x-user-id': _req.headers['x-user-id'],
-        },
-        body: _req.body,
-      });
-      res.status(404).json({ error: 'Not found', path: _req.originalUrl });
-    });
-
-    app.listen(PORT, () => {
-      logger.info(`Server running on port ${PORT}`);
-      logger.info(`GraphQL endpoint available at http://localhost:${PORT}/graphql`);
-      startMatchmakingQueueWorker();
-    });
+    await createServer(PORT);
+    startMatchmakingQueueWorker();
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);
   }
 }
 
-runServer();
+// Only auto-start when executed directly (node dist/server.js or ts-node
+// src/server.ts). Avoids listening on a port when imported by Jest tests.
+if (require.main === module) {
+  runServer();
+}
 
 export default app;

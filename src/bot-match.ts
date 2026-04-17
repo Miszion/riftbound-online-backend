@@ -7,6 +7,7 @@ import {
   publishGameStateChange,
   publishMatchCompletion
 } from './graphql/pubsub';
+import { recordFrame } from './replay-frame-store';
 import {
   buildDeckConfigForGame,
   dispatchAction,
@@ -114,6 +115,14 @@ const publishSpectatorState = (matchId: string, engine: RiftboundGameEngine) => 
   const snapshot = engine.getGameState();
   const serialized = serializeGameState(snapshot);
   publishGameStateChange(matchId, serialized);
+  // Also persist the exact same frame into the in-process replay store so a
+  // later startReplaySession() can re-drive the live spectate pipeline with
+  // the same snapshots. See src/replay-frame-store.ts for limits.
+  try {
+    recordFrame(matchId, serialized);
+  } catch (error) {
+    logger.warn('[BOT-MATCH] replay frame record failed', { matchId, error });
+  }
 };
 
 const finalize = (
@@ -341,6 +350,16 @@ export const cancelAllBotMatches = (): number => {
       record.endedAt = new Date().toISOString();
       count += 1;
     }
+  }
+  // Tear down any in-flight replay sessions too — they share this graceful
+  // shutdown entry point so their setTimeout drivers stop cleanly.
+  try {
+    // Lazy require to avoid a cyclic import at module-load time.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { stopAllReplaySessions } = require('./replay-session') as typeof import('./replay-session');
+    stopAllReplaySessions();
+  } catch (error) {
+    logger.warn('[BOT-MATCH] stopAllReplaySessions failed', { error });
   }
   return count;
 };

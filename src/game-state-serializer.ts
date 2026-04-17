@@ -441,7 +441,11 @@ export const serializePlayerState = (player: PlayerState, visibility: PlayerVisi
       : null,
     championLeaderState: includeChampionStatus
       ? serializeChampionAbilityState(player.championLeaderStatus)
-      : null
+      : null,
+    // Informational flag: true once the player's main deck has ever been
+    // emptied. Does NOT imply loss; loss only fires when a REQUIRED draw is
+    // attempted against an empty deck. See drawCards() in game-engine.ts.
+    burnedOut: Boolean(player.burnedOut)
   };
 };
 

@@ -183,6 +183,7 @@ export interface PlayerState {
   championLegendStatus?: ChampionAbilityRuntimeState | null;
   championLeaderStatus?: ChampionAbilityRuntimeState | null;
   championLeaderDeployed?: boolean;
+  burnedOut?: boolean;
 }
 
 export interface ChampionAbilityRuntimeState {
@@ -262,7 +263,8 @@ export type ScoreReason =
   | 'decking'
   | 'concede'
   | 'timeout'
-  | 'hold';
+  | 'hold'
+  | 'burn_out';
 
 export type PromptType =
   | 'mulligan'
@@ -1000,7 +1002,8 @@ export class RiftboundGameEngine {
       player.channeledRunes = [];
       this.shuffle(player.deck);
       this.shuffle(player.runeDeck);
-      this.drawCards(player, this.INITIAL_HAND_SIZE);
+      // Opening hand draw is REQUIRED by setup rules.
+      this.drawCards(player, this.INITIAL_HAND_SIZE, true);
     }
 
     this.gameState.status = GameStatus.COIN_FLIP;
@@ -1178,6 +1181,52 @@ export class RiftboundGameEngine {
       return;
     }
 
+    // Rule 103.4: the two active battlefields in a match must be DIFFERENT cards.
+    // If both players picked the same battlefield card, deterministically reject the
+    // later player's selection (the second player in gameState.players order), clear
+    // it, and re-prompt them to choose a different battlefield from their pool.
+    const [firstPlayer, secondPlayer] = this.gameState.players;
+    if (firstPlayer && secondPlayer) {
+      const firstCardId = firstPlayer.selectedBattlefield?.card?.id
+        ?? firstPlayer.selectedBattlefield?.battlefieldId;
+      const secondCardId = secondPlayer.selectedBattlefield?.card?.id
+        ?? secondPlayer.selectedBattlefield?.battlefieldId;
+      if (firstCardId && secondCardId && firstCardId === secondCardId) {
+        // Clear the duplicate (second player's) selection and re-prompt them.
+        secondPlayer.selectedBattlefield = undefined;
+
+        // Filter the second player's options so the duplicate card cannot be chosen
+        // again. Fall back to the full pool if filtering would leave no options.
+        const fullOptions = this.ensureBattlefieldOptions(secondPlayer);
+        const filteredOptions = fullOptions.filter(
+          (card) => card.id !== firstCardId && card.slug !== firstCardId
+        );
+        const promptOptions = filteredOptions.length > 0 ? filteredOptions : fullOptions;
+
+        // Drop any stale battlefield prompts for this player and re-issue.
+        this.gameState.prompts = this.gameState.prompts.filter(
+          (prompt) => !(prompt.type === 'battlefield' && prompt.playerId === secondPlayer.playerId)
+        );
+        this.enqueuePrompt('battlefield', secondPlayer.playerId, {
+          options: promptOptions.map((card) => this.buildBattlefieldPromptOption(card)),
+          conflict: true,
+          conflictReason: 'duplicate_battlefield',
+          conflictWithPlayerId: firstPlayer.playerId
+        });
+
+        const playerName = this.resolvePlayerName(secondPlayer.playerId) ?? 'Player';
+        const conflictName =
+          firstPlayer.selectedBattlefield?.name ?? firstPlayer.selectedBattlefield?.card?.name ?? 'the same battlefield';
+        this.addDuelLogEntry({
+          playerId: secondPlayer.playerId,
+          message: `${playerName} must pick a different battlefield (conflict with ${conflictName}).`,
+          tone: 'warning'
+        });
+        this.recordSnapshot('battlefield-conflict');
+        return;
+      }
+    }
+
     const orderedSelections = this.gameState.players
       .map((player) => player.selectedBattlefield!)
       .map((state) => this.cloneBattlefieldState(state))
@@ -1226,7 +1275,8 @@ export class RiftboundGameEngine {
     }
 
     this.recycleCards(player, setAside);
-    this.drawCards(player, setAside.length);
+    // Mulligan redraw is REQUIRED: the recycled cards must be replaced.
+    this.drawCards(player, setAside.length, true);
 
     this.resolvePrompt(prompt, {
       replaced: setAside.length
@@ -1454,9 +1504,9 @@ export class RiftboundGameEngine {
     this.channelRunes(currentPlayer, runesToChannel);
     currentPlayer.firstTurnRuneBoost = 0;
 
-    // D — Draw
+    // D — Draw (REQUIRED: the draw step's mandatory card draw).
     this.updateTurnSequenceStep('draw', currentPlayer, 'turn-draw');
-    this.drawCards(currentPlayer, 1);
+    this.drawCards(currentPlayer, 1, true);
 
     if (this.hasBlockingBeginPhaseActivity()) {
       this.openPriorityWindow('main', currentPlayer.playerId, 'begin-phase');
@@ -3793,6 +3843,8 @@ export class RiftboundGameEngine {
         return 'after the opponent conceded';
       case 'timeout':
         return 'after a timeout';
+      case 'burn_out':
+        return 'from an opponent burning out';
       default:
         return null;
     }
@@ -3803,12 +3855,29 @@ export class RiftboundGameEngine {
   // ========================================================================
 
   /**
-   * Draw cards from deck
+   * Draw cards from deck.
+   *
+   * Per rule book: "burn out" is a STATE, not a loss condition on its own. The
+   * loss only happens when a player is REQUIRED to draw and cannot. Optional
+   * "you may draw" effects on an empty deck simply draw 0 and continue.
+   *
+   * @param player   The player drawing.
+   * @param count    Number of cards to attempt to draw.
+   * @param required When true (default), a failed draw on an empty deck
+   *                 triggers the burn-out loss via `burnOut()`. When false,
+   *                 the draw silently short-circuits and no loss fires.
    */
-  private drawCards(player: PlayerState, count: number): void {
+  private drawCards(player: PlayerState, count: number, required: boolean = true): void {
     for (let i = 0; i < count; i++) {
       if (player.deck.length === 0) {
-        this.burnOut(player);
+        // Mark the informational "burned out" state the moment the deck is empty.
+        player.burnedOut = true;
+        if (required) {
+          // TODO(rules-verify): verify exact trigger condition against rule book
+          // (e.g., whether decks that empty during a non-draw effect still
+          // trigger loss only when the NEXT required draw is attempted).
+          this.burnOut(player);
+        }
         return;
       }
 
@@ -3816,6 +3885,10 @@ export class RiftboundGameEngine {
       if (card) {
         player.hand.push(card);
       }
+    }
+    // Keep the flag in sync if drawing emptied the deck on this call.
+    if (player.deck.length === 0) {
+      player.burnedOut = true;
     }
   }
 
@@ -4333,7 +4406,9 @@ export class RiftboundGameEngine {
       const profile = spell.activationProfile;
       if (profile) {
         if (profile.actions.includes('draw')) {
-          this.drawCards(caster, 1);
+          // Spell-text "draw N" is mandatory by default. Future card effects
+          // using "you may draw" phrasing should pass `required: false`.
+          this.drawCards(caster, 1, true);
         }
 
         if (profile.actions.includes('buff') && boardTarget) {
@@ -4369,7 +4444,9 @@ export class RiftboundGameEngine {
         }
 
         if (spellName.includes('draw') || spellName.includes('cycle')) {
-          this.drawCards(caster, 1);
+          // Draw/cycle spell text is mandatory unless the card explicitly
+          // says "you may draw"; those cases should pass `required: false`.
+          this.drawCards(caster, 1, true);
         }
 
         if (spellName.includes('buff') || spellName.includes('boost')) {
@@ -4412,7 +4489,10 @@ export class RiftboundGameEngine {
         case 'draw_cards': {
           const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
           const count = Math.max(1, operation.magnitudeHint ?? 1);
-          this.drawCards(targetPlayer, count);
+          // Card-text "draw N" is a REQUIRED draw. Optional "you may draw"
+          // effects should plumb a flag through the effect operation metadata
+          // and pass `required: false` here.
+          this.drawCards(targetPlayer, count, true);
           this.logCardDraw(targetPlayer, count, context);
           break;
         }
@@ -4937,7 +5017,8 @@ export class RiftboundGameEngine {
     const after = caster.channeledRunes.length;
     const actual = channeled || after - before;
     if (actual < channelAmount) {
-      this.drawCards(caster, drawAmount);
+      // "If you can't, draw N" is a REQUIRED fallback clause from card text.
+      this.drawCards(caster, drawAmount, true);
       this.addDuelLogEntry({
         playerId: caster.playerId,
         message: `${spell.name} channels ${actual} rune${actual === 1 ? '' : 's'} before drawing ${drawAmount}.`,
@@ -6826,7 +6907,9 @@ export class RiftboundGameEngine {
     const abilityName = ability.name.toLowerCase();
 
     if (abilityName.includes('draw')) {
-      this.drawCards(player, 1);
+      // Ability-text "draw" is a REQUIRED draw unless the card specifies
+      // optional phrasing; optional draws should pass `required: false`.
+      this.drawCards(player, 1, true);
     }
 
     if (abilityName.includes('damage')) {
@@ -7954,6 +8037,37 @@ export class RiftboundGameEngine {
     return false;
   }
 
+  /**
+   * Public wrapper around the private text-based deployment-permission reader
+   * so external callers (self-play enumerator, bot policies, UI tooltips) can
+   * discover a card's deployment options without reflection.
+   *
+   * Internal callers should keep using `getCardBattlefieldDeploymentPermissions`.
+   */
+  public getCardDeploymentPermissions(card: Card): {
+    canPlayToOpenBattlefield: boolean;
+    canPlayToOccupiedEnemyBattlefield: boolean;
+    grantsOpenBattlefieldPlayToAllies: boolean;
+  } {
+    return this.getCardBattlefieldDeploymentPermissions(card);
+  }
+
+  /**
+   * Public wrapper: true if the given player controls any creature whose card
+   * text grants allies the ability to be played to open battlefields.
+   *
+   * Internal callers should keep using `hasAllyGrantingOpenBattlefieldDeploy`.
+   */
+  public playerHasAllyGrantingOpenBattlefieldDeploy(playerId: string): boolean {
+    let player: PlayerState;
+    try {
+      player = this.getPlayerById(playerId);
+    } catch {
+      return false;
+    }
+    return this.hasAllyGrantingOpenBattlefieldDeploy(player);
+  }
+
   private shuffle<T>(items: T[]): void {
     for (let i = items.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -7972,10 +8086,40 @@ export class RiftboundGameEngine {
     };
   }
 
+  private readonly FALLBACK_RUNE_CARD_IDS: Record<Domain, string> = {
+    [Domain.BODY]: 'OGN-126',
+    [Domain.CALM]: 'OGN-042',
+    [Domain.CHAOS]: 'OGN-166',
+    [Domain.FURY]: 'OGN-007',
+    [Domain.MIND]: 'OGN-089',
+    [Domain.ORDER]: 'OGN-214'
+  };
+
   private generateFallbackRuneDeck(): RuneCard[] {
     const domains = Object.values(Domain);
+    const catalogRunesByDomain = new Map<Domain, RuneCard>();
+    for (const domain of domains) {
+      const cardId = this.FALLBACK_RUNE_CARD_IDS[domain];
+      if (!cardId) continue;
+      try {
+        const card = this.lookupCatalogCard(cardId);
+        catalogRunesByDomain.set(domain, this.toRuneCard(card));
+      } catch {
+        // Catalog unavailable (e.g. in some test setups) — fall through
+      }
+    }
+
     return Array.from({ length: this.RUNE_DECK_SIZE }).map((_, index) => {
       const domain = domains[index % domains.length];
+      const template = catalogRunesByDomain.get(domain);
+      if (template) {
+        return {
+          ...template,
+          id: `${template.id}_${index}`,
+          assets: template.assets ? { ...template.assets } : null,
+          cardSnapshot: template.cardSnapshot ? this.cloneCard(template.cardSnapshot) : undefined
+        };
+      }
       return {
         id: `fallback_rune_${index}`,
         name: `${domain} Rune`,
@@ -8146,6 +8290,13 @@ export class RiftboundGameEngine {
       if (units.length === 0) {
         continue;
       }
+      // TODO(rules-verify): confirm whether the hold bonus truly requires
+      // EXCLUSIVE control (no opposing units present) or merely that the
+      // scoring player is the battlefield's controller regardless of any
+      // opposing units sharing the zone. Current engine enforces the
+      // stricter "exclusively controlled" reading; researcher is pulling
+      // the exact rule wording. If the rule is just "controller holds at
+      // turn start", drop the `exclusivelyControlled` guard below.
       const exclusivelyControlled = units.every((unit) => {
         const owner = this.getPlayerByCard(unit.instanceId);
         return owner.playerId === player.playerId;
