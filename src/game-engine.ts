@@ -18,6 +18,7 @@ import {
   findCardById,
   findCardByName,
   findCardBySlug,
+  getCardCatalog,
   parseAssaultBonus,
   parseTokenSpecs
 } from './card-catalog';
@@ -53,7 +54,8 @@ export enum CardType {
   SPELL = 'spell',
   ARTIFACT = 'artifact',
   ENCHANTMENT = 'enchantment',
-  RUNE = 'rune'
+  RUNE = 'rune',
+  BATTLEFIELD = 'battlefield'
 }
 
 export enum CardRarity {
@@ -615,6 +617,7 @@ export interface BattlefieldState {
   controller?: string;
   contestedBy: string[];
   lastConqueredTurn?: number;
+  lastConqueredTurnByPlayer?: Record<string, number>;
   lastHoldTurn?: number;
   lastCombatTurn?: number;
   lastHoldScoreTurn?: number;
@@ -3769,7 +3772,13 @@ export class RiftboundGameEngine {
     reason: ScoreReason,
     sourceCardId?: string
   ): void {
-    if (amount <= 0 || this.gameState.status !== GameStatus.IN_PROGRESS) {
+    if (amount <= 0) {
+      return;
+    }
+    if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+      console.warn(
+        `awardVictoryPoints skipped: status=${this.gameState.status} reason=${reason} player=${player.playerId}`
+      );
       return;
     }
 
@@ -3872,13 +3881,17 @@ export class RiftboundGameEngine {
       if (player.deck.length === 0) {
         // Mark the informational "burned out" state the moment the deck is empty.
         player.burnedOut = true;
-        if (required) {
-          // TODO(rules-verify): verify exact trigger condition against rule book
-          // (e.g., whether decks that empty during a non-draw effect still
-          // trigger loss only when the NEXT required draw is attempted).
-          this.burnOut(player);
+        if (!required) {
+          return;
         }
-        return;
+        // Rule 418: perform the burn out procedure (recycle trash into deck,
+        // award opponent 1 VP), then continue trying to complete the draw
+        // against the recycled deck. If the deck is still empty after recycle
+        // (both deck and trash were empty), stop drawing but do not end game.
+        this.burnOut(player);
+        if (player.deck.length === 0) {
+          return;
+        }
       }
 
       const card = player.deck.shift();
@@ -3921,19 +3934,39 @@ export class RiftboundGameEngine {
     }
   }
 
+  /**
+   * Handle burn out per Rule 418 (Riftbound rulebook).
+   *
+   * Burn out is a game STATE, not a loss condition. When a player must draw
+   * but their deck is empty:
+   *   1) complete as much of the draw as possible (already handled by the caller),
+   *   2) recycle the player's trash/graveyard into the deck, randomized,
+   *   3) award the opponent 1 Victory Point,
+   *   4) the caller then continues drawing against the recycled deck.
+   * The game ends only when the opponent reaches VICTORY_SCORE, which falls
+   * out naturally from awardVictoryPoints.
+   */
   private burnOut(player: PlayerState): void {
     const opponent = this.getOtherPlayer(player);
-    if (!Array.isArray(this.gameState.scoreLog)) {
-      this.gameState.scoreLog = [];
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    const recycledCount = player.graveyard.length;
+
+    if (recycledCount > 0) {
+      player.deck.push(...player.graveyard);
+      player.graveyard = [];
+      this.shuffle(player.deck);
     }
-    this.gameState.scoreLog.push({
-      playerId: opponent.playerId,
-      amount: 0,
-      reason: 'decking',
-      sourceCardId: undefined,
-      timestamp: Date.now()
+
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message:
+        recycledCount > 0
+          ? `${playerName} burns out. Shuffled ${recycledCount} card${recycledCount === 1 ? '' : 's'} from trash back into deck.`
+          : `${playerName} burns out with no cards left to recycle.`,
+      tone: 'warning'
     });
-    this.endGame(opponent, player, 'burn_out');
+
+    this.awardVictoryPoints(opponent, 1, 'burn_out', undefined);
   }
 
   // ========================================================================
@@ -4507,21 +4540,37 @@ export class RiftboundGameEngine {
           break;
         }
         case 'discard_cards': {
-          // Discard defaults to self (caster) - opponent discard requires explicit targetHint: 'enemy'
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
+          // Discard defaults to self (caster). Opponent discard requires explicit
+          // targetHint: 'enemy' AND effect text that qualifies the target (e.g.
+          // "opponent discards..."). Bare "discard a card" always targets the caster
+          // even if the operation was authored/generated with targetHint: 'enemy'.
+          const sourceText =
+            (context.source?.text ?? '') ||
+            (context.abilityName ?? '');
+          const bareDiscardDefaultsToSelf =
+            sourceText.length > 0 && this.shouldDefaultDiscardToSelf(sourceText);
+          const effectiveOperation: EffectOperation =
+            bareDiscardDefaultsToSelf && operation.targetHint === 'enemy'
+              ? { ...operation, targetHint: 'self' }
+              : operation;
+          const targetPlayer = this.resolveOperationPlayer(effectiveOperation, caster, context);
           if (
             context.battlefieldTarget &&
             context.source &&
             targetPlayer.hand.length > 0
           ) {
             if (
-              this.deferDiscardOperation(operation, operations, index, caster, targetPlayer, context)
+              this.deferDiscardOperation(effectiveOperation, operations, index, caster, targetPlayer, context)
             ) {
               return;
             }
           }
-          const discarded = targetPlayer.hand.shift();
-          if (discarded) {
+          const count = Math.max(1, effectiveOperation.magnitudeHint ?? 1);
+          for (let i = 0; i < count; i++) {
+            const discarded = targetPlayer.hand.shift();
+            if (!discarded) {
+              break;
+            }
             targetPlayer.graveyard.push(discarded);
             const playerName = this.resolvePlayerName(targetPlayer.playerId) ?? 'Player';
             const suffix = this.describeEffectSuffix(context);
@@ -4951,6 +5000,104 @@ export class RiftboundGameEngine {
               tone: 'success'
             });
           }
+          break;
+        }
+        case 'scoring': {
+          // "You score N points" style effects. Most scoring ops are markers for
+          // ambient triggers (hold, conquer) handled by the turn system; when the
+          // source text says "score N point(s)" explicitly, award it here.
+          const effectText = (context.source?.text ?? '').toLowerCase();
+          const scoreMatch = effectText.match(/score\s+(\d+)\s+point/i);
+          const explicitAmount = operation.magnitudeHint && operation.magnitudeHint > 0
+            ? operation.magnitudeHint
+            : scoreMatch
+              ? parseInt(scoreMatch[1], 10) || 0
+              : 0;
+          if (explicitAmount > 0) {
+            const recipient = operation.targetHint === 'enemy'
+              ? this.getOtherPlayer(caster)
+              : caster;
+            this.awardVictoryPoints(
+              recipient,
+              explicitAmount,
+              'objective',
+              context.source?.id
+            );
+          }
+          this.logRuleUsage(context.source, 'scoring-effect');
+          break;
+        }
+        case 'rune_resource': {
+          // Rune cards resolve their domain value via the channel/rune system.
+          // The marker operation simply confirms the rune contribution.
+          this.logRuleUsage(context.source, 'rune-resource-marker');
+          break;
+        }
+        case 'on_play_trigger':
+        case 'combat_trigger':
+        case 'combat_bonus':
+        case 'conquer_trigger':
+        case 'death_trigger':
+        case 'equip_trigger':
+        case 'hold_trigger':
+        case 'phase_trigger':
+        case 'follow_movement': {
+          // Trigger markers: the actual ability body is resolved by the
+          // dedicated trigger pipeline (triggerAbilities / checkBattlefieldHoldBonuses /
+          // applyBattlefieldControl). The marker here confirms the card's
+          // effectProfile carries an ambient trigger and avoids an
+          // "unhandled-operation" log for any card that only carries marker ops.
+          this.logRuleUsage(context.source, `trigger-marker-${operation.type}`);
+          break;
+        }
+        case 'keyword_hidden':
+        case 'keyword_ganking':
+        case 'keyword_accelerate':
+        case 'keyword_deflect':
+        case 'keyword_tank':
+        case 'keyword_weaponmaster':
+        case 'keyword_legion':
+        case 'keyword_repeat':
+        case 'hide_modifier': {
+          // Keyword markers: active behavior lives in combat/cost/hidden play
+          // pipelines (calculateStatModifiers, calculateCostModifiers,
+          // playSpellFromHidden, cardHasMechanic). The marker records that the
+          // keyword is present on the card.
+          this.logRuleUsage(context.source, `keyword-marker-${operation.type}`);
+          break;
+        }
+        case 'aura_buff':
+        case 'location_aura':
+        case 'tribal_synergy':
+        case 'stat_scaling':
+        case 'conditional_buff':
+        case 'solo_combat': {
+          // Continuous stat modifiers. Resolved in calculateStatModifiers every
+          // time combat math runs. The marker just confirms the profile.
+          this.logRuleUsage(context.source, `aura-marker-${operation.type}`);
+          break;
+        }
+        case 'cost_reduction':
+        case 'cost_increase':
+        case 'targeting_discount': {
+          // Continuous cost modifiers. Resolved in calculateCostModifiers when
+          // a player tries to play another card.
+          this.logRuleUsage(context.source, `cost-marker-${operation.type}`);
+          break;
+        }
+        case 'scoring_restriction':
+        case 'play_restriction': {
+          // Restriction markers. Enforcement is performed where plays/scoring
+          // are validated; recording the marker keeps the rule trail clean.
+          this.logRuleUsage(context.source, `restriction-marker-${operation.type}`);
+          break;
+        }
+        case 'effect_amplifier':
+        case 'ability_copy': {
+          // Amplifier / copy effects. These are complex multi-card effects that
+          // the engine does not fully simulate yet; acknowledge the marker so
+          // downstream cards with only these ops still resolve cleanly.
+          this.logRuleUsage(context.source, `complex-marker-${operation.type}`);
           break;
         }
         case 'generic': {
@@ -7451,9 +7598,10 @@ export class RiftboundGameEngine {
       case 'artifact':
       case 'equipment':
         return CardType.ARTIFACT;
-      case 'enchantment':
       case 'battlefield':
       case 'field':
+        return CardType.BATTLEFIELD;
+      case 'enchantment':
         return CardType.ENCHANTMENT;
       case 'rune':
         return CardType.RUNE;
@@ -8130,36 +8278,21 @@ export class RiftboundGameEngine {
     });
   }
 
-  private generateFallbackBattlefields(playerId: string): Card[] {
-    return [
-      {
-        id: `fallback_battlefield_${playerId}`,
-        slug: `fallback_battlefield_${playerId}`,
-        name: 'Training Grounds',
-        type: CardType.ENCHANTMENT,
-        rarity: CardRarity.COMMON,
-        text: 'Auto-generated battlefield placeholder.',
-        flavorText: null,
-        setName: null,
-        colors: [],
-        tags: ['Battlefield'],
-        keywords: [],
-        manaCost: 0,
-        energyCost: 0,
-        powerCost: undefined,
-        domain: undefined,
-        power: 0,
-        toughness: 0,
-        abilities: [],
-        activationProfile: undefined,
-        rules: [],
-        assets: undefined,
-        metadata: {
-          generated: true
-        },
-        effectProfile: undefined
-      }
-    ];
+  private generateFallbackBattlefields(_playerId: string): Card[] {
+    const catalog = getCardCatalog();
+    const battlefieldRecords = catalog.filter(
+      (record) => (record.type ?? '').toLowerCase() === 'battlefield'
+    );
+    if (battlefieldRecords.length === 0) {
+      throw new Error(
+        'No Battlefield cards found in catalog. Ensure cards.enriched.json contains type:"Battlefield" entries.'
+      );
+    }
+
+    const count = Math.min(this.DEFAULT_BATTLEFIELD_COUNT, battlefieldRecords.length);
+    const pool = [...battlefieldRecords];
+    this.shuffle(pool);
+    return pool.slice(0, count).map((record) => this.cloneCard(this.convertRecordToCard(record)));
   }
 
   private createBattlefieldStateFromCard(card: Card, ownerId: string): BattlefieldState {
@@ -8171,6 +8304,7 @@ export class RiftboundGameEngine {
       ownerId,
       controller: undefined,
       contestedBy: [],
+      lastConqueredTurnByPlayer: {},
       lastCombatTurn: undefined,
       combatTurnByPlayer: {},
       effectState: {},
@@ -8188,6 +8322,7 @@ export class RiftboundGameEngine {
       controller: state.controller,
       contestedBy: [...state.contestedBy],
       lastConqueredTurn: state.lastConqueredTurn,
+      lastConqueredTurnByPlayer: { ...(state.lastConqueredTurnByPlayer ?? {}) },
       lastHoldTurn: state.lastHoldTurn,
       lastCombatTurn: state.lastCombatTurn,
       lastHoldScoreTurn: state.lastHoldScoreTurn,
@@ -8246,7 +8381,19 @@ export class RiftboundGameEngine {
       battlefield.lastHoldTurn = this.turnNumber;
       return;
     }
+
+    // Per-turn Conquer dedup (Rule 446.1): scoring is per player, not per
+    // battlefield. A player scores only if they have not already Scored this
+    // battlefield on the current turn. Opposing players each get their own
+    // Conquer point on their first conquer of the same battlefield this turn.
+    if (!battlefield.lastConqueredTurnByPlayer) {
+      battlefield.lastConqueredTurnByPlayer = {};
+    }
+    const alreadyConqueredByPlayerThisTurn =
+      battlefield.lastConqueredTurnByPlayer[player.playerId] === this.turnNumber;
+
     battlefield.lastConqueredTurn = this.turnNumber;
+    battlefield.lastConqueredTurnByPlayer[player.playerId] = this.turnNumber;
     battlefield.lastHoldTurn = undefined;
     const sourceCard = options?.sourceCardId ?? battlefield.card?.id ?? battlefield.battlefieldId;
     const amount = Math.max(1, options?.points ?? 1);
@@ -8262,7 +8409,15 @@ export class RiftboundGameEngine {
       message: `${playerName} ${verb} ${battlefield.name}.`,
       tone: 'success'
     });
-    this.awardVictoryPoints(player, amount, reason, sourceCard);
+    if (alreadyConqueredByPlayerThisTurn) {
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `Duplicate conquer skipped: ${playerName} already scored ${battlefield.name} this turn.`,
+        tone: 'info'
+      });
+    } else {
+      this.awardVictoryPoints(player, amount, reason, sourceCard);
+    }
     this.triggerBattlefieldAbility(battlefield, 'control', player);
     this.triggerUnitsOnBattlefield(battlefield.battlefieldId, player.playerId, 'conquer');
     if (!previousController) {

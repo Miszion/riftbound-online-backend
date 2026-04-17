@@ -220,3 +220,256 @@ export const __resetReplayReconstructorCatalog = (): void => {
   catalogCache.battlefieldRecords = null;
   catalogCache.loaded = false;
 };
+
+// ---------------------------------------------------------------------------
+// JSONL -> MatchReplay adapter
+//
+// `matchReplay` GraphQL resolver reads DynamoDB; bot self-play matches only
+// exist as JSONL on disk. This adapter rebuilds the same PascalCase shape the
+// resolver's mapper expects so `mapMatchReplayItem` can consume it unchanged.
+// ---------------------------------------------------------------------------
+
+type EventLine = {
+  matchId?: string;
+  eventIndex?: number;
+  timestamp?: string;
+  turn?: number;
+  phase?: string;
+  activePlayer?: 'P1' | 'P2';
+  actor?: 'P1' | 'P2' | 'system';
+  action?: { kind?: string; [k: string]: any } | null;
+  cardPlayed?: { id?: string; name?: string; [k: string]: any } | null;
+  target?: string | null;
+  vp?: { P1?: number; P2?: number };
+  result?: string;
+  [k: string]: any;
+};
+
+const readJsonlLines = (filePath: string): EventLine[] => {
+  const text = fs.readFileSync(filePath, 'utf8');
+  const events: EventLine[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      // ignore malformed line, keep going
+    }
+  }
+  return events;
+};
+
+const deriveWinner = (events: EventLine[]): { winner: string | null; loser: string | null } => {
+  const last = events[events.length - 1];
+  const resultField = typeof last?.result === 'string' ? last.result : '';
+  const p1Wins = /P1[_ -]?win/i.test(resultField);
+  const p2Wins = /P2[_ -]?win/i.test(resultField);
+  if (p1Wins) return { winner: 'playerA', loser: 'playerB' };
+  if (p2Wins) return { winner: 'playerB', loser: 'playerA' };
+  const vpA = last?.vp?.P1 ?? 0;
+  const vpB = last?.vp?.P2 ?? 0;
+  if (vpA > vpB) return { winner: 'playerA', loser: 'playerB' };
+  if (vpB > vpA) return { winner: 'playerB', loser: 'playerA' };
+  return { winner: null, loser: null };
+};
+
+const eventToMove = (event: EventLine) => {
+  const activeIdx = event.activePlayer === 'P2' ? 1 : 0;
+  return {
+    playerIndex: activeIdx,
+    turn: event.turn ?? 0,
+    phase: event.phase ?? '',
+    action: event.action?.kind ?? 'unknown',
+    cardId: event.cardPlayed?.id ?? null,
+    targetId: event.target ?? null,
+    timestamp: event.timestamp ? Date.parse(event.timestamp) : null
+  };
+};
+
+/**
+ * Build a DynamoDB-shaped MatchReplay AttributeMap from an on-disk JSONL file
+ * so `mapMatchReplayItem` can return bot self-play matches through the same
+ * `matchReplay(matchId)` resolver the UI already consumes.
+ *
+ * Returns null if the matchId is not self-play-shaped, the JSONL file is
+ * missing, or the deterministic re-run fails to emit frames. The final
+ * serialized game state is captured as `FinalState` so the spectator UI has a
+ * complete board to render; moves[] comes straight from the JSONL event log.
+ */
+export const buildMatchReplayFromJsonl = (
+  matchId: string,
+  opts: { jsonlDir?: string } = {}
+): Record<string, any> | null => {
+  const selfplay = SELFPLAY_MATCH_ID.exec(matchId);
+  if (!selfplay) return null;
+
+  const gameIndex = Number(selfplay[1]);
+  const perGameSeed = Number(selfplay[2]);
+  if (!Number.isFinite(gameIndex) || !Number.isFinite(perGameSeed)) return null;
+
+  const jsonlPath = findJsonlForMatch(matchId, opts.jsonlDir);
+  if (!jsonlPath) return null;
+
+  let events: EventLine[];
+  try {
+    events = readJsonlLines(jsonlPath);
+  } catch (error) {
+    logger.warn('[replay-reconstructor] failed to read jsonl for match', {
+      matchId,
+      jsonlPath,
+      error: (error as Error).message
+    });
+    return null;
+  }
+  if (events.length === 0) return null;
+
+  const moves = events.map(eventToMove);
+  const { winner, loser } = deriveWinner(events);
+  const firstTs = events[0]?.timestamp ? Date.parse(events[0].timestamp) : Date.now();
+  const lastTs = events[events.length - 1]?.timestamp
+    ? Date.parse(events[events.length - 1].timestamp as string)
+    : firstTs;
+  const turns = events[events.length - 1]?.turn ?? 0;
+
+  ensureCatalog();
+  const baseSeed = deriveBaseSeed(gameIndex, perGameSeed);
+  const cfg: HarnessConfig = {
+    games: 1,
+    seed: baseSeed,
+    seedProvided: true,
+    turnLimit: 100,
+    actionLimit: 2000,
+    strategyA: 'baseline',
+    strategyB: 'heuristic',
+    quiet: true,
+    quick: false,
+    emitJsonl: false,
+    jsonlDir: opts.jsonlDir ?? DEFAULT_JSONL_DIR,
+    report: ''
+  };
+
+  let lastFrame: unknown = null;
+  try {
+    playOneGame(
+      gameIndex,
+      cfg,
+      baseSeed,
+      catalogCache.playable,
+      catalogCache.battlefieldRecords,
+      () => {},
+      {
+        onFrame: (frame) => {
+          lastFrame = frame;
+          recordFrame(matchId, frame);
+        }
+      }
+    );
+  } catch (error) {
+    logger.warn('[replay-reconstructor] playOneGame threw while building replay', {
+      matchId,
+      error: (error as Error).message
+    });
+  }
+
+  return {
+    MatchId: matchId,
+    Players: ['playerA', 'playerB'],
+    Winner: winner,
+    Loser: loser,
+    Duration: Math.max(0, Math.round((lastTs - firstTs) / 1000)),
+    Turns: turns,
+    Moves: moves,
+    FinalState: lastFrame,
+    CreatedAt: firstTs
+  };
+};
+
+/**
+ * List bot self-play matches that exist as JSONL on disk. Used by
+ * `recentMatches` so the spectate UI can surface bot matches even when
+ * DynamoDB has no record of them.
+ */
+export const listBotMatchesFromJsonl = (
+  limit = 10,
+  dir: string = DEFAULT_JSONL_DIR
+): Array<{
+  matchId: string;
+  players: string[];
+  winner: string | null;
+  loser: string | null;
+  duration: number | null;
+  turns: number | null;
+  createdAt: Date | null;
+}> => {
+  if (!fs.existsSync(dir)) return [];
+  let entries: Array<{ file: string; mtime: number }>;
+  try {
+    entries = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => {
+        const stat = fs.statSync(path.join(dir, f));
+        return { file: f, mtime: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, Math.max(limit * 2, limit));
+  } catch {
+    return [];
+  }
+
+  const out: ReturnType<typeof listBotMatchesFromJsonl> = [];
+  for (const { file } of entries) {
+    try {
+      const filePath = path.join(dir, file);
+      const fd = fs.openSync(filePath, 'r');
+      const buf = Buffer.alloc(2048);
+      const read = fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+      const firstLine = buf.subarray(0, read).toString('utf8').split('\n')[0];
+      if (!firstLine) continue;
+      const first = JSON.parse(firstLine) as EventLine;
+      const matchId = first?.matchId;
+      if (!matchId || !SELFPLAY_MATCH_ID.test(matchId)) continue;
+
+      // Read tail for result + turns without loading the entire file twice.
+      const tailSize = 4096;
+      const stat = fs.statSync(filePath);
+      const start = Math.max(0, stat.size - tailSize);
+      const tailFd = fs.openSync(filePath, 'r');
+      const tailBuf = Buffer.alloc(Math.min(tailSize, stat.size));
+      fs.readSync(tailFd, tailBuf, 0, tailBuf.length, start);
+      fs.closeSync(tailFd);
+      const tailLines = tailBuf.toString('utf8').split('\n').filter(Boolean);
+      let last: EventLine | null = null;
+      for (let i = tailLines.length - 1; i >= 0; i--) {
+        try {
+          last = JSON.parse(tailLines[i]);
+          break;
+        } catch {
+          // keep searching earlier lines for valid JSON
+        }
+      }
+
+      const { winner, loser } = deriveWinner(last ? [last] : []);
+      const firstTs = first.timestamp ? Date.parse(first.timestamp) : null;
+      const lastTs = last?.timestamp ? Date.parse(last.timestamp) : firstTs;
+      out.push({
+        matchId,
+        players: ['playerA', 'playerB'],
+        winner,
+        loser,
+        duration:
+          firstTs !== null && lastTs !== null
+            ? Math.max(0, Math.round((lastTs - firstTs) / 1000))
+            : null,
+        turns: last?.turn ?? null,
+        createdAt: firstTs !== null ? new Date(firstTs) : null
+      });
+      if (out.length >= limit) break;
+    } catch {
+      // skip unreadable/malformed file
+    }
+  }
+  return out;
+};

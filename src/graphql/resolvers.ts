@@ -36,6 +36,10 @@ import {
   getReplaySessionViewFrame,
   ReplayAction
 } from '../replay-session';
+import {
+  buildMatchReplayFromJsonl,
+  listBotMatchesFromJsonl
+} from '../replay-reconstructor';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -1242,39 +1246,73 @@ const mapMatchReplayItem = (
 };
 
 const getMatchReplayRecord = async (matchId: string) => {
-  const result = await dynamodb
-    .query({
-      TableName: matchTableName,
-      KeyConditionExpression: 'MatchId = :matchId',
-      ExpressionAttributeValues: { ':matchId': matchId },
-      Limit: 1
-    })
-    .promise();
-  return result.Items?.[0] ?? null;
+  try {
+    const result = await dynamodb
+      .query({
+        TableName: matchTableName,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        Limit: 1
+      })
+      .promise();
+    if (result.Items?.[0]) return result.Items[0];
+  } catch (error) {
+    // DynamoDB may be unavailable in local dev; fall through to JSONL fallback.
+    logger.warn('[matchReplay] DynamoDB lookup failed, falling back to JSONL', {
+      matchId,
+      error: (error as Error).message
+    });
+  }
+  // Bot self-play matches live on disk as JSONL, not in DynamoDB.
+  return buildMatchReplayFromJsonl(matchId);
 };
 
 const fetchRecentMatches = async (limit = 10) => {
-  const result = await dynamodb
-    .scan({
-      TableName: matchTableName,
-      ProjectionExpression: 'MatchId, Players, Winner, Loser, #duration, Turns, CreatedAt',
-      ExpressionAttributeNames: { '#duration': 'Duration' },
-      Limit: Math.max(limit * 3, limit)
-    })
-    .promise();
-  const items = (result.Items || []).sort(
-    (a, b) => (b.CreatedAt ?? 0) - (a.CreatedAt ?? 0)
-  );
-  return items.slice(0, limit).map((item) => ({
-    matchId: item.MatchId,
-    players: item.Players || [],
-    winner: item.Winner || null,
-    loser: item.Loser || null,
-    duration: item.Duration ?? null,
-    turns: item.Turns ?? null,
-    createdAt: item.CreatedAt ? new Date(item.CreatedAt) : null
-  }));
+  const ddbMatches: Array<ReturnType<typeof mapRecentMatchItem>> = [];
+  try {
+    const result = await dynamodb
+      .scan({
+        TableName: matchTableName,
+        ProjectionExpression: 'MatchId, Players, Winner, Loser, #duration, Turns, CreatedAt',
+        ExpressionAttributeNames: { '#duration': 'Duration' },
+        Limit: Math.max(limit * 3, limit)
+      })
+      .promise();
+    for (const item of result.Items || []) {
+      ddbMatches.push(mapRecentMatchItem(item));
+    }
+  } catch (error) {
+    logger.warn('[recentMatches] DynamoDB scan failed, using JSONL bot matches only', {
+      error: (error as Error).message
+    });
+  }
+  // Merge bot self-play matches (JSONL on disk) with any DynamoDB-persisted
+  // matches so the spectate UI surfaces both in one list.
+  const botMatches = listBotMatchesFromJsonl(limit);
+  const combined = [...ddbMatches, ...botMatches].sort((a, b) => {
+    const aTs = a.createdAt ? a.createdAt.getTime() : 0;
+    const bTs = b.createdAt ? b.createdAt.getTime() : 0;
+    return bTs - aTs;
+  });
+  // De-dupe by matchId in case the same match exists in both DynamoDB and disk.
+  const seen = new Set<string>();
+  const deduped = combined.filter((m) => {
+    if (seen.has(m.matchId)) return false;
+    seen.add(m.matchId);
+    return true;
+  });
+  return deduped.slice(0, limit);
 };
+
+const mapRecentMatchItem = (item: AWS.DynamoDB.DocumentClient.AttributeMap) => ({
+  matchId: item.MatchId as string,
+  players: (item.Players as string[]) || [],
+  winner: (item.Winner as string) || null,
+  loser: (item.Loser as string) || null,
+  duration: (item.Duration as number) ?? null,
+  turns: (item.Turns as number) ?? null,
+  createdAt: item.CreatedAt ? new Date(item.CreatedAt as number) : null
+});
 
 // ============================================================================
 // QUERY RESOLVERS

@@ -317,7 +317,7 @@ export const startBotMatch = async (
     matchId,
     players,
     strategies,
-    spectatorPath: `/spectate?matchId=${encodeURIComponent(matchId)}`
+    spectatorPath: `/game/${encodeURIComponent(matchId)}`
   };
 };
 

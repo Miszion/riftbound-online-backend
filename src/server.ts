@@ -776,6 +776,17 @@ export async function createServer(port: number | string = PORT): Promise<Create
     } catch (err) {
       logger.warn('[WS] cleanup threw', { err });
     }
+    // Tear down the underlying ws.Server so sockets are released and the
+    // process can exit cleanly during shutdown / test teardown.
+    try {
+      wsServer.close((err?: Error) => {
+        if (err) {
+          logger.warn('[WS] wsServer.close error', { err });
+        }
+      });
+    } catch (err) {
+      logger.warn('[WS] wsServer.close threw', { err });
+    }
   });
 
   const listenPort = typeof port === 'string' ? parseInt(port, 10) || 0 : port;
