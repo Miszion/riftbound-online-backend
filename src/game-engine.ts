@@ -4547,12 +4547,12 @@ export class RiftboundGameEngine {
           const sourceText =
             (context.source?.text ?? '') ||
             (context.abilityName ?? '');
-          const bareDiscardDefaultsToSelf =
-            sourceText.length > 0 && this.shouldDefaultDiscardToSelf(sourceText);
-          const effectiveOperation: EffectOperation =
-            bareDiscardDefaultsToSelf && operation.targetHint === 'enemy'
-              ? { ...operation, targetHint: 'self' }
-              : operation;
+          const shouldRewriteEnemyToSelf =
+            operation.targetHint === 'enemy' &&
+            (sourceText.length === 0 || this.shouldDefaultDiscardToSelf(sourceText));
+          const effectiveOperation: EffectOperation = shouldRewriteEnemyToSelf
+            ? { ...operation, targetHint: 'self' }
+            : operation;
           const targetPlayer = this.resolveOperationPlayer(effectiveOperation, caster, context);
           if (
             context.battlefieldTarget &&
