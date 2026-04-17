@@ -1,0 +1,62 @@
+[
+  {
+    "matchId": "selfplay-2-1013904268",
+    "file": "match-20260417-031110-1013904268.jsonl",
+    "path": "/matches/match-20260417-031110-1013904268.jsonl",
+    "events": 136
+  },
+  {
+    "matchId": "selfplay-7-1401181185",
+    "file": "match-20260417-031110-1401181185.jsonl",
+    "path": "/matches/match-20260417-031110-1401181185.jsonl",
+    "events": 62
+  },
+  {
+    "matchId": "selfplay-4-2027808494",
+    "file": "match-20260417-031110-2027808494.jsonl",
+    "path": "/matches/match-20260417-031110-2027808494.jsonl",
+    "events": 112
+  },
+  {
+    "matchId": "selfplay-9-2415085411",
+    "file": "match-20260417-031110-2415085411.jsonl",
+    "path": "/matches/match-20260417-031110-2415085411.jsonl",
+    "events": 183
+  },
+  {
+    "matchId": "selfplay-1-2654435803",
+    "file": "match-20260417-031110-2654435803.jsonl",
+    "path": "/matches/match-20260417-031110-2654435803.jsonl",
+    "events": 127
+  },
+  {
+    "matchId": "selfplay-6-3041712720",
+    "file": "match-20260417-031110-3041712720.jsonl",
+    "path": "/matches/match-20260417-031110-3041712720.jsonl",
+    "events": 79
+  },
+  {
+    "matchId": "selfplay-3-3668340029",
+    "file": "match-20260417-031110-3668340029.jsonl",
+    "path": "/matches/match-20260417-031110-3668340029.jsonl",
+    "events": 167
+  },
+  {
+    "matchId": "selfplay-5-387276959",
+    "file": "match-20260417-031110-387276959.jsonl",
+    "path": "/matches/match-20260417-031110-387276959.jsonl",
+    "events": 124
+  },
+  {
+    "matchId": "selfplay-8-4055616946",
+    "file": "match-20260417-031110-4055616946.jsonl",
+    "path": "/matches/match-20260417-031110-4055616946.jsonl",
+    "events": 130
+  },
+  {
+    "matchId": "selfplay-0-42",
+    "file": "match-20260417-031110-42.jsonl",
+    "path": "/matches/match-20260417-031110-42.jsonl",
+    "events": 138
+  }
+]

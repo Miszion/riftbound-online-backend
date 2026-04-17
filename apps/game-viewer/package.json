@@ -1,0 +1,26 @@
+{
+  "name": "game-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prebuild-manifest": "node scripts/build-manifest.mjs",
+    "dev": "node scripts/build-manifest.mjs && next dev -p 4200",
+    "build": "node scripts/build-manifest.mjs && next build",
+    "start": "next start -p 4200",
+    "build-manifest": "node scripts/build-manifest.mjs"
+  },
+  "dependencies": {
+    "next": "15.0.3",
+    "react": "19.0.0-rc-66855b96-20241106",
+    "react-dom": "19.0.0-rc-66855b96-20241106"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0-beta.3",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.0.0-beta.3",
+    "typescript": "^5.6.3"
+  }
+}
