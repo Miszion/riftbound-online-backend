@@ -145,6 +145,7 @@ interface Report {
     winsA: number;
     winsB: number;
     draws: number;
+    drawsByTurnCap: number;
   };
   violationsByType: Record<string, number>;
   topCrashes: CrashSample[];
@@ -472,6 +473,118 @@ function labelForPlayer(pid: string, p1: string, p2: string): 'P1' | 'P2' {
 // Legal-action enumeration (spec §1)
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve targets for a `play_card` action on a spell. Returns either:
+ *   - { ok: true, targets } with a legal target list the engine will accept, or
+ *   - { ok: false } signalling that the caller should SKIP this card (no legal
+ *     targets exist, so playing it is guaranteed to be rejected — that was the
+ *     `infinite_loop_suspected` bug).
+ *
+ * Non-spells and zero-target spells get `{ ok: true, targets: [] }`.
+ */
+function resolveSpellTargets(
+  engine: RiftboundGameEngine,
+  playerId: string,
+  cardIndex: number,
+  card: Card,
+  player: PlayerState
+): { ok: true; targets: string[] } | { ok: false } {
+  const type = (card.type ?? '').toLowerCase();
+  if (type !== 'spell') return { ok: true, targets: [] };
+  try {
+    const profile = engine.getSpellTargetingProfile(card);
+    const min = profile?.minTargets ?? 0;
+    const requiresSelection = profile?.requiresSelection ?? false;
+    const scope = profile?.scope ?? 'none';
+
+    // Some spells have operations like `deal_damage` / `remove_permanent` /
+    // `stun` / `modify_stats` that REQUIRE a unit target at resolution time,
+    // even though the catalog's `targeting.mode` says 'none' / 'self'
+    // (regex-based classifier misses phrases like "stun an attacking unit").
+    // Treat those as implicitly requiring one unit target.
+    const ops = ((card as any).effectProfile?.operations ?? []) as Array<{
+      type?: string;
+      targetHint?: string;
+    }>;
+    const UNIT_TARGETING_OPS = new Set([
+      'deal_damage',
+      'remove_permanent',
+      'modify_stats',
+      'stun',
+      'ready',
+      'return_to_hand',
+      'return_from_graveyard',
+      'combat_bonus',
+      'transform'
+    ]);
+    const opNeedsUnit = ops.some(
+      (op) => op.type && UNIT_TARGETING_OPS.has(op.type) && op.targetHint !== 'self'
+    );
+
+    const needsTarget = min > 0 || requiresSelection || opNeedsUnit;
+    if (!needsTarget) return { ok: true, targets: [] };
+    const want = Math.max(min, 1);
+    const cands = engine.getLegalTargets(playerId, cardIndex) ?? [];
+    if (cands.length >= want) {
+      return { ok: true, targets: cands.slice(0, want).map((c) => c.targetId) };
+    }
+    // Fallback for unit-targeting ops (deal_damage, stun, etc.) when the
+    // catalog's targeting profile doesn't enumerate candidates — scan the
+    // board directly. This covers misclassified cards (scope='none' with
+    // hint='battlefield', scope='enemy_units' with minTargets=0, etc.) which
+    // would otherwise throw "requires a unit target" at resolution time.
+    if (opNeedsUnit) {
+      const opponent = engine
+        .getGameState()
+        .players.find((p) => p.playerId !== playerId);
+      const allUnits: string[] = [];
+      // Prefer enemy first (most ops target enemies), then friendly.
+      if (opponent) {
+        for (const u of opponent.board.creatures) {
+          const id = u.instanceId ?? u.id;
+          if (id) allUnits.push(id);
+        }
+      }
+      for (const u of player.board.creatures) {
+        const id = u.instanceId ?? u.id;
+        if (id) allUnits.push(id);
+      }
+      if (allUnits.length >= want) {
+        return { ok: true, targets: allUnits.slice(0, want) };
+      }
+      // No units anywhere → can't cast this spell right now.
+      return { ok: false };
+    }
+    // getLegalTargets returns [] for graveyard/deck/hand ("caller-managed
+    // search"). Pull ids directly from the player's zones.
+    const idsFromZone = (cards: readonly Card[], excludeIndex?: number): string[] =>
+      cards
+        .filter((_, j) => excludeIndex === undefined || j !== excludeIndex)
+        .map((c) => (c as any).instanceId || c.id)
+        .filter(Boolean) as string[];
+    if (scope === 'graveyard') {
+      const ids = idsFromZone(player.graveyard);
+      if (ids.length >= want) return { ok: true, targets: ids.slice(0, want) };
+      return min > 0 ? { ok: false } : { ok: true, targets: [] };
+    }
+    if (scope === 'deck') {
+      const ids = idsFromZone(player.deck);
+      if (ids.length >= want) return { ok: true, targets: ids.slice(0, want) };
+      return min > 0 ? { ok: false } : { ok: true, targets: [] };
+    }
+    if (scope === 'hand') {
+      const ids = idsFromZone(player.hand, cardIndex);
+      if (ids.length >= want) return { ok: true, targets: ids.slice(0, want) };
+      return min > 0 ? { ok: false } : { ok: true, targets: [] };
+    }
+    if (min > 0) return { ok: false };
+    return { ok: true, targets: [] };
+  } catch {
+    // Predicate threw — skip so we don't propose a guaranteed-reject action.
+    return { ok: false };
+  }
+}
+
 function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): BotAction[] {
   const actions: BotAction[] = [];
   const status = engine.status;
@@ -560,28 +673,32 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
   if (rx.required && rx.windowType === 'trigger') {
     actions.push({ kind: 'respond_chain', pass: true });
     for (let i = 0; i < player.hand.length; i++) {
-      if (engine.canPlayCard(playerId, i).ok) {
-        actions.push({
-          kind: 'play_card',
-          cardIndex: i,
-          destinationId: null,
-          targets: []
-        });
-      }
+      if (!engine.canPlayCard(playerId, i).ok) continue;
+      const card = player.hand[i];
+      const resolved = resolveSpellTargets(engine, playerId, i, card, player);
+      if (!resolved.ok) continue;
+      actions.push({
+        kind: 'play_card',
+        cardIndex: i,
+        destinationId: null,
+        targets: resolved.targets
+      });
     }
     return actions;
   }
   if (rx.required && rx.windowType === 'combat') {
     actions.push({ kind: 'pass_priority' });
     for (let i = 0; i < player.hand.length; i++) {
-      if (engine.canPlayCard(playerId, i).ok) {
-        actions.push({
-          kind: 'play_card',
-          cardIndex: i,
-          destinationId: null,
-          targets: []
-        });
-      }
+      if (!engine.canPlayCard(playerId, i).ok) continue;
+      const card = player.hand[i];
+      const resolved = resolveSpellTargets(engine, playerId, i, card, player);
+      if (!resolved.ok) continue;
+      actions.push({
+        kind: 'play_card',
+        cardIndex: i,
+        destinationId: null,
+        targets: resolved.targets
+      });
     }
     return actions;
   }
@@ -611,22 +728,13 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
       const card = player.hand[i];
       const type = (card.type ?? '').toLowerCase();
       if (type === 'spell') {
-        let targets: string[] = [];
-        try {
-          const cands = engine.getLegalTargets(playerId, i) ?? [];
-          const profile = engine.getSpellTargetingProfile(card);
-          const min = profile?.minTargets ?? 0;
-          if (min > 0 && cands.length >= min) {
-            targets = cands.slice(0, min).map((c) => c.targetId);
-          }
-        } catch {
-          // swallow – engine rejection will surface at dispatch time
-        }
+        const resolved = resolveSpellTargets(engine, playerId, i, card, player);
+        if (!resolved.ok) continue;
         actions.push({
           kind: 'play_card',
           cardIndex: i,
           destinationId: null,
-          targets
+          targets: resolved.targets
         });
       } else {
         // Permanent: emit base deploy + per-owned-battlefield deploy
@@ -892,53 +1000,91 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
   const mull = actions.find((a) => a.kind === 'mulligan');
   if (mull) return { kind: 'mulligan', indices: [] };
 
-  // Reaction window: if any respond_chain exists, pass
+  // Reaction window: if any respond_chain exists, pass immediately — prevents
+  // reaction-chain deadlocks (Bug #1 in the selfplay report). Never fire off
+  // own spells in reaction windows; they rarely help and often create a new
+  // prompt we can't resolve.
   const respond = actions.find((a) => a.kind === 'respond_chain');
   if (respond) return { kind: 'respond_chain', pass: true };
 
-  // Tier 1: deploy leader
+  // If the ONLY progress action is advance_phase (plus maybe a pass), take it.
+  // Don't spin in main_1 pass-looping.
+  const nonAdvance = actions.filter(
+    (a) => a.kind !== 'advance_phase' && a.kind !== 'pass_priority'
+  );
+  if (nonAdvance.length === 0) {
+    const adv0 = actions.find((a) => a.kind === 'advance_phase');
+    if (adv0) return adv0;
+    const passOnly = actions.find((a) => a.kind === 'pass_priority');
+    if (passOnly) return passOnly;
+  }
+
+  // Tier 1: commence battle — THIS is the VP engine. Any legal commence_battle
+  // (favourable or not) is a higher-EV move than stockpiling: if we don't
+  // commence, we never gain VP. Prefer favourable matchups, but still fire
+  // if we have any presence at a battlefield.
+  const commence = actions.filter((a) => a.kind === 'commence_battle');
+  if (commence.length > 0) {
+    for (const a of commence) {
+      if (a.kind !== 'commence_battle') continue;
+      if (isFavorableBattlefield(state, playerId, a.battlefieldId)) return a;
+    }
+    // Even an unfavourable showdown beats passing forever — we have units
+    // there and we may still trade or draw bonuses. Fire the first one.
+    return commence[0];
+  }
+
+  // Tier 2: deploy leader champion — aim at a battlefield for contest
   const deploy = actions.filter((a) => a.kind === 'deploy_leader');
   if (deploy.length > 0) {
-    // Prefer non-base destination
     const battlefieldDeploy = deploy.find(
       (a) => (a as any).destinationId && (a as any).destinationId !== 'base'
     );
     return battlefieldDeploy ?? deploy[0];
   }
 
-  // Tier 2: commence battle when favorable
-  const commence = actions.filter((a) => a.kind === 'commence_battle');
-  if (commence.length > 0) {
-    // Pick first favorable battlefield
-    for (const a of commence) {
-      if (a.kind !== 'commence_battle') continue;
-      if (isFavorableBattlefield(state, playerId, a.battlefieldId)) return a;
-    }
-  }
-
-  // Tier 3: deploy creatures — highest (power + toughness), pressure first
+  // Tier 3: deploy creatures directly to battlefields — battlefield presence
+  // is the only path to contest.
   const creaturePlays = actions.filter((a) => {
     if (a.kind !== 'play_card') return false;
     const c = player.hand[a.cardIndex];
     return c && (c.type ?? '').toLowerCase() === 'creature';
   });
   if (creaturePlays.length > 0) {
+    // Strongly prefer direct-to-battlefield deployments over 'base'
+    const directToBf = creaturePlays.filter(
+      (a) => a.kind === 'play_card' && a.destinationId && a.destinationId !== 'base'
+    );
+    if (directToBf.length > 0) {
+      const ranked = rankPermanentPlays(directToBf, player, state);
+      if (ranked.length > 0) return ranked[0];
+    }
     const ranked = rankPermanentPlays(creaturePlays, player, state);
     if (ranked.length > 0) return ranked[0];
   }
 
-  // Tier 4: move unit to uncontrolled battlefield
+  // Tier 4: move own unit onto an uncontested battlefield — sets up a claim
   const moveToBf = actions.filter(
     (a) => a.kind === 'move_unit' && a.destinationId !== 'base'
   );
   if (moveToBf.length > 0) {
-    // prefer uncontrolled
     const uncontrolled = moveToBf.find(
       (a) =>
         a.kind === 'move_unit' &&
         state.battlefields.find((bf2) => bf2.battlefieldId === a.destinationId)?.controller == null
     );
     return uncontrolled ?? moveToBf[0];
+  }
+
+  // Tier 4.5: if we already have creatures on a battlefield but we're in
+  // MAIN_1, advance toward COMBAT instead of pass_priority looping.
+  const phase = engine.currentPhase;
+  const ownUnitsOnBf = player.board.creatures.some(
+    (c) => c.location && (c.location as any).zone === 'battlefield'
+  );
+  if (phase === GamePhase.MAIN_1 && ownUnitsOnBf) {
+    const adv = actions.find((a) => a.kind === 'advance_phase');
+    if (adv) return adv;
   }
 
   // Tier 5: legend
@@ -957,19 +1103,25 @@ const heuristicBot: Bot = (engine, playerId, rng) => {
     if (ranked.length > 0) return ranked[0];
   }
 
-  // Tier 7: spells
+  // Tier 7: spells — skip if spell targeting is risky (no candidates). The
+  // enumerator already filters for resolvable targets, so remaining spells
+  // should be safe, but cap spell fires so we don't cycle through losers.
   const spellPlays = actions.filter((a) => {
     if (a.kind !== 'play_card') return false;
     const c = player.hand[a.cardIndex];
     return c && (c.type ?? '').toLowerCase() === 'spell';
   });
-  if (spellPlays.length > 0) {
+  if (spellPlays.length > 0 && phase !== GamePhase.MAIN_2) {
     return spellPlays[0];
   }
 
-  // Tier 8: advance phase
+  // Tier 8: advance phase — progress the turn, don't loiter in main_1.
   const adv = actions.find((a) => a.kind === 'advance_phase');
   if (adv) return adv;
+
+  // Tier 9: pass priority (last resort)
+  const pass = actions.find((a) => a.kind === 'pass_priority');
+  if (pass) return pass;
 
   // Fallback
   return rng.pick(actions) ?? null;
@@ -1082,6 +1234,8 @@ interface EventLogLine {
   mana: { P1: number; P2: number };
   priorityHolder?: 'P1' | 'P2' | null;
   windowType?: 'main' | 'reaction' | 'combat' | null;
+  result?: 'P1_wins' | 'P2_wins' | 'draw';
+  winReason?: string;
   terminal?: {
     winner: 'P1' | 'P2' | null;
     loser: 'P1' | 'P2' | null;
@@ -1537,13 +1691,22 @@ function playOneGame(
   let iterationsWithoutTurnAdvance = 0;
   let lastTurn = engine.turnNumber;
   let actionCount = 0;
+  // Defense-in-depth: if the same actor proposes the same rejected action
+  // repeatedly (e.g. a targeting bug slips past the legality gate), force an
+  // advance_phase to break out. Primary fix is in the bot, this is a guard.
+  let lastRejectSig = '';
+  let rejectStreak = 0;
+  // Target-prompt loop-breaker: some spells re-defer their prompt (new promptId
+  // each time) when targets resolve to []. Detect and break out.
+  let emptyTargetStreak = 0;
+  const HARD_TURN_CAP = Math.min(60, cfg.turnLimit);
 
   try {
     while (engine.status === GameStatus.IN_PROGRESS) {
       record.turns = engine.turnNumber;
-      assertInvariants(engine, engine.turnNumber, cfg.turnLimit, record.violations);
+      assertInvariants(engine, engine.turnNumber, HARD_TURN_CAP + 1, record.violations);
 
-      if (engine.turnNumber > cfg.turnLimit) {
+      if (engine.turnNumber > HARD_TURN_CAP) {
         record.status = 'timeout';
         record.terminator = 'turn_cap';
         break;
@@ -1562,7 +1725,41 @@ function playOneGame(
       const bot = getBot(actorId === p1 ? cfg.strategyA : cfg.strategyB);
       const rng = pickRng(actorId);
 
-      const action = bot(engine, actorId, rng) ?? { kind: 'advance_phase' };
+      let action = bot(engine, actorId, rng) ?? { kind: 'advance_phase' };
+
+      // Target-prompt loop-breaker: if the bot is resolving a target prompt
+      // with an empty selection list, count consecutive occurrences. After 4
+      // in a row (typically the spell keeps re-deferring a new promptId), try
+      // to unstick the game by draining the prompts directly on the engine
+      // and forcing a phase advance on the current player.
+      if (action.kind === 'resolve_prompt_target' && action.selectionIds.length === 0) {
+        emptyTargetStreak++;
+        if (emptyTargetStreak >= 4) {
+          if (!cfg.quiet) log(`[${gameId}] empty-target loop broken: draining prompts`);
+          // Mark all of this player's open target prompts as resolved so we
+          // can exit the loop. Also clear corresponding pendingEffects.
+          try {
+            const gs = engine.getGameState();
+            const openPrompts = gs.prompts.filter(
+              (p) => !p.resolved && p.type === 'target' && p.playerId === actorId
+            );
+            for (const p of openPrompts) {
+              (p as any).resolved = true;
+            }
+            gs.pendingEffects = gs.pendingEffects.filter(
+              (e) => !(e.type === 'target' && e.targetPlayerId === actorId)
+            );
+          } catch {
+            /* noop */
+          }
+          // Emit a system note for the loop-break
+          emit(engine, 'system', null, {});
+          emptyTargetStreak = 0;
+          continue;
+        }
+      } else {
+        emptyTargetStreak = 0;
+      }
 
       // Pre-dispatch legality gate (spec §4.1).
       if (!actionIsLegal(engine, actorId, action)) {
@@ -1594,6 +1791,8 @@ function playOneGame(
       try {
         dispatchAction(engine, actorId, action);
         actionCount++;
+        lastRejectSig = '';
+        rejectStreak = 0;
         emit(engine, actorLabel, action, {
           cardPlayed: cardPlayed ?? undefined,
           target: target ?? null
@@ -1601,10 +1800,31 @@ function playOneGame(
       } catch (err) {
         const e = err as Error;
         if (!cfg.quiet) log(`[${gameId}] dispatch error: ${e.message}`);
-        // Graceful continue: fall back to phase advance so we don't spin.
+        // Track repeated rejects of the same action signature. If the bot
+        // keeps proposing a guaranteed-reject action (shouldn't happen now
+        // that resolveSpellTargets is in place, but this is defense-in-depth),
+        // force the game to advance a phase and eventually pass priority.
+        const rejectSig = JSON.stringify({ a: actorId, k: action });
+        if (rejectSig === lastRejectSig) rejectStreak++;
+        else {
+          rejectStreak = 1;
+          lastRejectSig = rejectSig;
+        }
         try {
-          engine.proceedToNextPhase();
-          emit(engine, actorLabel, { kind: 'advance_phase' });
+          if (rejectStreak >= 3) {
+            // Try passing priority first, then advance_phase, to break out of
+            // a priority-window stall without changing turn.
+            try {
+              engine.passPriority(actorId);
+              emit(engine, actorLabel, { kind: 'pass_priority' });
+            } catch {
+              engine.proceedToNextPhase();
+              emit(engine, actorLabel, { kind: 'advance_phase' });
+            }
+          } else {
+            engine.proceedToNextPhase();
+            emit(engine, actorLabel, { kind: 'advance_phase' });
+          }
         } catch {
           /* noop */
         }
@@ -1631,6 +1851,39 @@ function playOneGame(
       record.winner = final.winner ?? null;
       record.status = 'completed';
       record.terminator = final.endReason ?? 'victory_points';
+    } else if (
+      (record.status === 'timeout' && record.terminator === 'turn_cap') ||
+      record.status === 'action_cap'
+    ) {
+      // Hard-cap tiebreak: more VP → more board presence → coin-flip by seed.
+      // Applies to turn cap and action cap paths so we always emit a winner.
+      const pa = final.players.find((p) => p.playerId === p1);
+      const pb = final.players.find((p) => p.playerId === p2);
+      const vpA = pa?.victoryPoints ?? 0;
+      const vpB = pb?.victoryPoints ?? 0;
+      const tag = record.status === 'action_cap' ? 'action_cap' : 'turn_cap';
+      if (vpA > vpB) {
+        record.winner = p1;
+        record.terminator = `${tag}_vp_tiebreak`;
+      } else if (vpB > vpA) {
+        record.winner = p2;
+        record.terminator = `${tag}_vp_tiebreak`;
+      } else {
+        const boardA = pa?.board.creatures.length ?? 0;
+        const boardB = pb?.board.creatures.length ?? 0;
+        if (boardA > boardB) {
+          record.winner = p1;
+          record.terminator = `${tag}_board_tiebreak`;
+        } else if (boardB > boardA) {
+          record.winner = p2;
+          record.terminator = `${tag}_board_tiebreak`;
+        } else {
+          const coin = (seed >>> 0) % 2;
+          record.winner = coin === 0 ? p1 : p2;
+          record.terminator = `${tag}_coinflip`;
+        }
+      }
+      record.status = 'completed';
     } else if (record.status === 'completed') {
       record.status = 'timeout';
       record.terminator = 'no_winner';
@@ -1654,6 +1907,8 @@ function playOneGame(
     };
     // Emit terminal record before closing
     emit(engine, 'system', null, {
+      result: 'draw',
+      winReason: `${record.status}: ${e.message}`,
       terminal: {
         winner: null,
         loser: null,
@@ -1673,7 +1928,23 @@ function playOneGame(
     record.winner === p1 ? 'P1' : record.winner === p2 ? 'P2' : null;
   const loserLabel: 'P1' | 'P2' | null =
     record.winner === p1 ? 'P2' : record.winner === p2 ? 'P1' : null;
+  const resultField: 'P1_wins' | 'P2_wins' | 'draw' =
+    winnerLabel === 'P1' ? 'P1_wins' : winnerLabel === 'P2' ? 'P2_wins' : 'draw';
+  const winReason =
+    record.terminator === 'victory_points'
+      ? `reached ${engine.getGameState().victoryScore ?? 8} VP`
+      : record.terminator === 'burn_out'
+      ? 'opponent deck out'
+      : record.terminator === 'turn_cap'
+      ? 'turn cap (no tiebreak)'
+      : record.terminator.startsWith('turn_cap_')
+      ? `turn cap: ${record.terminator.replace('turn_cap_', '').replace('_', ' ')}`
+      : record.terminator.startsWith('action_cap')
+      ? `action cap: ${record.terminator.replace('action_cap_', '').replace('_', ' ')}`
+      : record.terminator;
   emit(engine, 'system', null, {
+    result: resultField,
+    winReason,
     terminal: {
       winner: winnerLabel,
       loser: loserLabel,
@@ -1716,6 +1987,7 @@ function buildReport(
   let winsA = 0;
   let winsB = 0;
   let draws = 0;
+  let drawsByCap = 0;
   let totalTurns = 0;
   const violationsByType: Record<string, number> = {};
   const loopCandidates: string[] = [];
@@ -1734,6 +2006,9 @@ function buildReport(
         if (r.winner === 'playerA') winsA++;
         else if (r.winner === 'playerB') winsB++;
         else draws++;
+        if (r.terminator.startsWith('turn_cap') || r.terminator.startsWith('action_cap')) {
+          drawsByCap++;
+        }
         break;
       case 'crashed':
         crashed++;
@@ -1771,7 +2046,8 @@ function buildReport(
       avgTurns: records.length > 0 ? totalTurns / records.length : 0,
       winsA,
       winsB,
-      draws
+      draws,
+      drawsByTurnCap: drawsByCap
     },
     violationsByType,
     topCrashes: crashes.slice(0, 20),
