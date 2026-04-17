@@ -41,11 +41,11 @@ import {
   RuneCard,
   PlayerDeckConfig,
   GameState
-} from '../../src/game-engine';
+} from './game-engine';
 import {
   getCardCatalog,
   EnrichedCardRecord
-} from '../../src/card-catalog';
+} from './card-catalog';
 
 // ---------------------------------------------------------------------------
 // Canonical BotAction union (spec §1.3)
@@ -745,7 +745,7 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
           targets: []
         });
         const ownedBattlefields = state.battlefields.filter(
-          (bf) => bf.controller === playerId || !bf.controller
+          (bf) => bf.controller === playerId
         );
         for (const bf of ownedBattlefields) {
           actions.push({
@@ -763,7 +763,7 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
     if (leaderRes.ok) {
       actions.push({ kind: 'deploy_leader', destinationId: 'base' });
       for (const bf of state.battlefields) {
-        if (bf.controller === playerId || !bf.controller) {
+        if (bf.controller === playerId) {
           actions.push({ kind: 'deploy_leader', destinationId: bf.battlefieldId });
         }
       }
@@ -2138,15 +2138,24 @@ function main(): void {
 }
 
 export {
-  // Exposed for reuse by the viewer (Phase 3) and downstream tests.
+  // Exposed for reuse by the viewer (Phase 3), downstream tests, and the
+  // server-side bot-vs-bot driver that powers the live spectator flow.
   BotAction,
   describeAction,
   enumerateLegalActions,
   actionIsLegal,
+  actionsEqual,
+  dispatchAction,
   baselineBot,
   heuristicBot,
+  getBot,
+  buildDeckConfigForGame,
   forkRng,
-  makeRng
+  makeRng,
+  Rng,
+  StrategyName
 };
 
-main();
+if (require.main === module) {
+  main();
+}

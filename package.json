@@ -10,8 +10,8 @@
     "watch": "tsc --watch",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:selfplay": "ts-node scripts/test/self-play.ts",
-    "self-play": "ts-node scripts/test/self-play.ts",
+    "test:selfplay": "ts-node src/self-play.ts",
+    "self-play": "ts-node src/self-play.ts",
     "video:render": "ts-node scripts/video/render-match.ts",
     "lint": "eslint src/",
     "format": "prettier --write src/",
@@ -37,6 +37,7 @@
   "license": "ISC",
   "dependencies": {
     "@apollo/server": "^4.10.0",
+    "@graphql-tools/schema": "^9.0.19",
     "aws-sdk": "^2.1400.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",

@@ -30,6 +30,9 @@ const dynamodb = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || 'us-east-1'
 });
 
+const LOCAL_BYPASS = process.env.ALLOW_LOCAL_BYPASS === 'true';
+const LOCAL_STATE_STORE = new Map<string, GameState>();
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const extractAccelerateMetadata = (
@@ -427,6 +430,20 @@ const loadGameStateSnapshot = async (
     requestId: context?.requestId ?? null,
     operation: context?.operation ?? null
   };
+  if (LOCAL_BYPASS) {
+    const snapshot = LOCAL_STATE_STORE.get(matchId) ?? null;
+    if (!snapshot) {
+      logger.debug('[STATE-LOAD] No local snapshot record found', logMeta);
+    } else {
+      logger.info('[STATE-LOAD] Local snapshot retrieved', {
+        ...logMeta,
+        turnNumber: snapshot.turnNumber,
+        phase: snapshot.currentPhase,
+        status: snapshot.status
+      });
+    }
+    return snapshot;
+  }
   try {
     const result = await dynamodb
       .get({
@@ -2027,6 +2044,10 @@ matchRouter.get('/matches/:matchId/history', async (req: Request, res: Response)
 // ============================================================================
 
 const writeSnapshot = async (matchId: string, gameState: GameState): Promise<void> => {
+  if (LOCAL_BYPASS) {
+    LOCAL_STATE_STORE.set(matchId, gameState);
+    return;
+  }
   await dynamodb
     .put({
       TableName: STATE_TABLE,
@@ -2079,4 +2100,17 @@ export const registerMatchRoutes = (app: Express): void => {
   }
   routesRegistered = true;
   app.use(matchRouter);
+};
+
+// Reused by the server-side bot-vs-bot driver (src/bot-match.ts) so a freshly
+// initialized engine and each subsequent bot move land in the same store the
+// /matches/:matchId GET handler reads from.
+export const persistEngineSnapshot = (matchId: string, engine: RiftboundGameEngine): Promise<void> =>
+  saveGameState(matchId, engine);
+
+export const loadEngineSnapshot = (matchId: string) => loadEngineState(matchId);
+
+export const matchSnapshotExists = async (matchId: string): Promise<boolean> => {
+  const snapshot = await loadGameStateSnapshot(matchId);
+  return snapshot !== null;
 };

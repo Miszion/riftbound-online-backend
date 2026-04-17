@@ -580,6 +580,28 @@ export const typeDefs = `#graphql
     # Spectator / Replay
     matchReplay(matchId: ID!): MatchReplay
     recentMatches(limit: Int): [RecentMatchSummary!]!
+
+    # Bot-vs-bot live matches (local dev / showcase)
+    activeBotMatches: [BotMatchSummary!]!
+  }
+
+  type BotMatchSummary {
+    matchId: ID!
+    status: String!
+    turn: Int!
+    players: [String!]!
+    strategies: [String!]!
+    startedAt: String!
+    endedAt: String
+    winner: String
+    reason: String
+  }
+
+  type StartBotMatchResult {
+    matchId: ID!
+    players: [String!]!
+    strategies: [String!]!
+    spectatorPath: String!
   }
 
   input CardCatalogFilter {
@@ -658,6 +680,15 @@ export const typeDefs = `#graphql
       player2: ID!
       decks: JSON!
     ): MatchInitResponse!
+
+    startBotMatch(
+      strategyA: String
+      strategyB: String
+      intervalMs: Int
+    ): StartBotMatchResult!
+
+    cancelBotMatch(matchId: ID!): Boolean!
+    cancelAllBotMatches: Int!
 
     submitInitiativeChoice(
       matchId: ID!

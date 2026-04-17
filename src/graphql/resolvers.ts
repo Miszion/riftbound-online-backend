@@ -22,6 +22,12 @@ import {
 } from '../card-catalog';
 import type { EnrichedCardRecord } from '../card-catalog';
 import { TABLE_NAMES } from '../config/tableNames';
+import {
+  startBotMatch,
+  listActiveBotMatches,
+  cancelBotMatch,
+  cancelAllBotMatches
+} from '../bot-match';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -1543,6 +1549,10 @@ export const queryResolvers = {
   cardActivationStates() {
     return Object.values(buildActivationStateIndex());
   },
+
+  activeBotMatches() {
+    return listActiveBotMatches();
+  },
 };
 
 // ============================================================================
@@ -2790,6 +2800,30 @@ export const mutationResolvers = {
       logger.error('Error leaving matchmaking queue:', error);
       throw error;
     }
+  },
+
+  async startBotMatch(
+    _parent: any,
+    args: { strategyA?: string | null; strategyB?: string | null; intervalMs?: number | null }
+  ) {
+    try {
+      return await startBotMatch({
+        strategyA: args.strategyA ?? null,
+        strategyB: args.strategyB ?? null,
+        intervalMs: args.intervalMs ?? null
+      });
+    } catch (error) {
+      logger.error('Error starting bot match:', error);
+      throw error;
+    }
+  },
+
+  cancelBotMatch(_parent: any, args: { matchId: string }) {
+    return cancelBotMatch(args.matchId);
+  },
+
+  cancelAllBotMatches() {
+    return cancelAllBotMatches();
   }
 };
 
