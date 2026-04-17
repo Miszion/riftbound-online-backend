@@ -18,6 +18,7 @@
     "generate:taxonomy": "ts-node scripts/data/buildEffectIndex.ts",
     "generate:spell-taxonomy": "ts-node scripts/data/buildSpellTaxonomy.ts",
     "analyze:tokens": "ts-node scripts/data/listTokenCreators.ts",
+    "analyze:effects": "ts-node scripts/analyze/effect-coverage.ts",
     "upload:cards": "ts-node scripts/data/uploadCardCatalog.ts",
     "sync:cards": "npm run generate:cards && npm run scrape:piltover && npm run apply:piltover-costs && npm run generate:taxonomy && npm run generate:spell-taxonomy && npm run upload:cards",
     "docker:publish": "bash scripts/deploy/publish-ecr.sh",

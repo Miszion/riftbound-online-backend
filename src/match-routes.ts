@@ -1375,6 +1375,122 @@ matchRouter.post('/matches/:matchId/actions/move', async (req: Request, res: Res
 });
 
 /**
+ * Hide a card with [Hidden] keyword on a controlled battlefield
+ * POST /matches/:matchId/actions/hide-card
+ * Body: { playerId, cardIndex, battlefieldId }
+ */
+matchRouter.post('/matches/:matchId/actions/hide-card', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, cardIndex, battlefieldId } = req.body;
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    if (!engine.canPlayerAct(playerId)) {
+      res.status(403).json({ error: 'Not your turn' });
+      return;
+    }
+
+    const playerState = engine.getPlayerState(playerId);
+    const cardToHide = playerState.hand[cardIndex];
+
+    engine.hideCard(playerId, cardIndex, battlefieldId);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Player hid card', {
+      matchId,
+      playerId,
+      cardId: cardToHide?.id ?? null,
+      cardName: cardToHide?.name ?? null,
+      battlefieldId,
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[HIDE-CARD] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to hide card' });
+  }
+});
+
+/**
+ * Activate a hidden card at reaction speed
+ * POST /matches/:matchId/actions/activate-hidden
+ * Body: { playerId, hiddenInstanceId, targets? }
+ */
+matchRouter.post('/matches/:matchId/actions/activate-hidden', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const operation = context.operation ?? getOperationLabel(req);
+  try {
+    const { matchId } = req.params;
+    const { playerId, hiddenInstanceId, targets } = req.body;
+
+    const { engine } = await loadEngineState(matchId, context);
+
+    // Hidden cards can be activated at reaction speed, even when not player's turn
+    // But only if they own the hidden card
+    
+    engine.activateHiddenCard(playerId, hiddenInstanceId, targets);
+
+    await saveGameState(matchId, engine);
+
+    const spectatorState = serializeGameState(engine.getGameState());
+
+    logger.info('[MATCH] Player activated hidden card', {
+      matchId,
+      playerId,
+      hiddenInstanceId,
+      targets: targets ?? [],
+      requestId: context.requestId ?? null
+    });
+
+    res.json({
+      success: true,
+      gameState: spectatorState
+    });
+  } catch (error: any) {
+    if (error instanceof MatchStateUnavailableError) {
+      respondWithStateUnavailable(res, error, {
+        action: operation,
+        matchId: req.params.matchId,
+        playerId: req.body?.playerId,
+        requestId: context.requestId
+      });
+      return;
+    }
+    logger.error('[ACTIVATE-HIDDEN] Error:', {
+      error,
+      matchId: req.params.matchId,
+      playerId: req.body?.playerId,
+      requestId: context.requestId ?? null
+    });
+    res.status(400).json({ error: error.message || 'Failed to activate hidden card' });
+  }
+});
+
+/**
  * Commence combat on a battlefield
  * POST /matches/:matchId/actions/commence-battle
  * Body: { playerId, battlefieldId }

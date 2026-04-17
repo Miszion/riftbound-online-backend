@@ -100,6 +100,38 @@ export type EffectOperationType =
   | 'combat_trigger'
   | 'aura_buff'
   | 'on_play_trigger'
+  | 'hold_trigger'
+  | 'cost_reduction'
+  | 'scoring'
+  | 'conquer_trigger'
+  | 'death_trigger'
+  | 'keyword_legion'
+  | 'keyword_accelerate'
+  | 'keyword_hidden'
+  | 'keyword_hidden_reference'
+  | 'keyword_deflect'
+  | 'keyword_weaponmaster'
+  | 'keyword_ganking'
+  | 'keyword_tank'
+  | 'keyword_repeat'
+  | 'equip_trigger'
+  | 'stun'
+  | 'ready'
+  | 'rune_resource'
+  | 'tribal_synergy'
+  | 'targeting_discount'
+  | 'stat_scaling'
+  | 'scoring_restriction'
+  | 'ability_copy'
+  | 'effect_amplifier'
+  | 'location_aura'
+  | 'solo_combat'
+  | 'phase_trigger'
+  | 'follow_movement'
+  | 'hide_modifier'
+  | 'play_restriction'
+  | 'conditional_buff'
+  | 'cost_increase'
   | 'generic';
 
 export interface EffectOperation {
@@ -141,6 +173,38 @@ export type EffectClassId =
   | 'combat_trigger'
   | 'aura_buff'
   | 'on_play'
+  | 'hold_trigger'
+  | 'cost_reduction'
+  | 'scoring'
+  | 'conquer_trigger'
+  | 'death_trigger'
+  | 'keyword_legion'
+  | 'keyword_accelerate'
+  | 'keyword_hidden'
+  | 'keyword_hidden_reference'
+  | 'keyword_deflect'
+  | 'keyword_weaponmaster'
+  | 'keyword_ganking'
+  | 'keyword_tank'
+  | 'keyword_repeat'
+  | 'equip_trigger'
+  | 'stun_effect'
+  | 'ready_effect'
+  | 'rune_type'
+  | 'tribal_synergy'
+  | 'targeting_discount'
+  | 'stat_scaling'
+  | 'scoring_restriction'
+  | 'ability_copy'
+  | 'effect_amplifier'
+  | 'location_aura'
+  | 'solo_combat'
+  | 'phase_trigger'
+  | 'follow_movement'
+  | 'hide_modifier'
+  | 'play_restriction'
+  | 'conditional_buff'
+  | 'cost_increase'
   | 'generic';
 
 export interface EffectClassDefinition {
@@ -188,7 +252,7 @@ export interface RuleClause {
   tags: string[];
 }
 
-export type ActivationTiming = 'action' | 'reaction' | 'triggered' | 'passive';
+export type ActivationTiming = 'action' | 'reaction' | 'triggered' | 'passive' | 'main';
 
 export interface ActivationProfile {
   timing: ActivationTiming;
@@ -311,8 +375,8 @@ export interface RawDump {
 }
 
 const KEYWORD_PATTERNS: Array<{ keyword: string; pattern: RegExp }> = [
-  { keyword: 'Action', pattern: /\bACTION\b/gi },
-  { keyword: 'Reaction', pattern: /\bREACTION\b/gi },
+  { keyword: 'Action', pattern: /\bACTION\b|\[Action\]/gi },
+  { keyword: 'Reaction', pattern: /\bREACTION\b|\[Reaction\]/gi },
   { keyword: 'Showdown', pattern: /\bshowdown\b/gi },
   { keyword: 'Conquer', pattern: /\bconquer\b/gi },
   { keyword: 'Gear', pattern: /\bgear\b/gi },
@@ -421,7 +485,7 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     label: 'Token creation',
     description: 'Creates token units or copies (rules 340-360).',
     ruleRefs: ['340-360'],
-    patterns: buildPatterns([/\btoken\b/i, /\bcopy\b/i]),
+    patterns: buildPatterns([/\btokens?\b/i, /\bcopy\b/i]),
     operation: { type: 'create_token', targetHint: 'ally', zone: 'board', automated: false }
   },
   {
@@ -597,6 +661,400 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
       /\bwhen.*played\b/i
     ]),
     operation: { type: 'on_play_trigger', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
+    id: 'hold_trigger',
+    label: 'Hold trigger effects',
+    description: 'Triggered abilities that fire when a card or player holds a battlefield (rules 106, 437).',
+    ruleRefs: ['106', '437'],
+    patterns: buildPatterns([
+      /\bwhen I hold\b/i,
+      /\bwhen you hold\b/i,
+      /\bwhen.*hold here\b/i,
+      /\bwhen.*holds?\b.*score\b/i
+    ]),
+    operation: { type: 'hold_trigger', targetHint: 'self', zone: 'board', automated: false }
+  },
+  {
+    id: 'cost_reduction',
+    label: 'Cost reduction',
+    description: 'Reduces the cost to play cards (rules 340-360).',
+    ruleRefs: ['340-360'],
+    patterns: buildPatterns([
+      /\bcosts?\s+(?::rb_energy_\d+:|:rb_rune_\w+:|\d+)?\s*less\b/i,
+      /\bI cost\b.*\bless\b/i,
+      /\bwithout paying\b.*\bcost\b/i,
+      /\bignoring its cost\b/i
+    ]),
+    operation: { type: 'cost_reduction', targetHint: 'self', zone: 'hand', automated: true }
+  },
+  {
+    id: 'scoring',
+    label: 'Scoring / victory points',
+    description: 'Effects that grant or modify victory points (rules 106, 437).',
+    ruleRefs: ['106', '437'],
+    patterns: buildPatterns([
+      /\bscore\s+\d+\s+point/i,
+      /\bpoints needed\b/i,
+      /\bvictory score\b/i,
+      /\byou score\b/i,
+      /\bthey score\b/i
+    ]),
+    operation: { type: 'scoring', targetHint: 'self', zone: 'board', automated: false }
+  },
+  {
+    id: 'conquer_trigger',
+    label: 'Conquer trigger effects',
+    description: 'Triggered abilities that fire when a card conquers a battlefield (rules 106, 437).',
+    ruleRefs: ['106', '437'],
+    patterns: buildPatterns([
+      /\bwhen I conquer\b/i,
+      /\bwhen.*conquers?\b/i
+    ]),
+    operation: { type: 'conquer_trigger', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
+    id: 'death_trigger',
+    label: 'Death trigger effects',
+    description: 'Triggered abilities that fire when a card or unit dies (rules 500-520).',
+    ruleRefs: ['500-520'],
+    patterns: buildPatterns([
+      /\bwhen I die\b/i,
+      /\bwhen.*dies?\b/i,
+      /\bwhen a friendly unit dies\b/i,
+      /\bwhen an enemy unit dies\b/i
+    ]),
+    operation: { type: 'death_trigger', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
+    id: 'keyword_legion',
+    label: 'Legion keyword',
+    description: 'Provides bonus if another card was played this turn (keyword rule).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\[Legion\]/i,
+      /\bLEGION\b.*—/i
+    ]),
+    operation: { type: 'keyword_legion', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'keyword_accelerate',
+    label: 'Accelerate keyword',
+    description: 'Allows paying additional cost to have unit enter ready (keyword rule).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\[Accelerate\]/i,
+      /\bACCELERATE\b/i
+    ]),
+    operation: { type: 'keyword_accelerate', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'keyword_hidden',
+    label: 'Hidden keyword',
+    description: 'Card can be played face-down as a hidden card (has "Hide now for" text).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      // Only match cards that explicitly say "Hide now for" - these can be played hidden
+      /\bhide\s+now\s+for\b/i
+    ]),
+    operation: { type: 'keyword_hidden', targetHint: 'self', zone: 'hand', automated: false }
+  },
+  {
+    id: 'keyword_hidden_reference',
+    label: 'Hidden reference',
+    description: 'Card references Hidden cards but cannot itself be played hidden.',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      // Match cards that reference [Hidden] but don't have "Hide now for"
+      // e.g., "play a card with [Hidden]", "hidden cards here"
+      /\bcard[s]?\s+with\s+\[Hidden\]/i,
+      /\bhidden\s+cards?\s+here\b/i,
+      /\bplay\b.*\[Hidden\]/i
+    ]),
+    operation: { type: 'keyword_hidden_reference', targetHint: 'any', zone: 'hand', automated: false }
+  },
+  {
+    id: 'keyword_deflect',
+    label: 'Deflect keyword',
+    description: 'Forces opponents to pay extra to target this card (keyword rule).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\[Deflect\]/i,
+      /\bDEFLECT\b/i
+    ]),
+    operation: { type: 'keyword_deflect', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'keyword_weaponmaster',
+    label: 'Weaponmaster keyword',
+    description: 'Allows equipping gear for reduced cost when played (keyword rule).',
+    ruleRefs: ['700-720', '716'],
+    patterns: buildPatterns([
+      /\[Weaponmaster\]/i,
+      /\bWEAPONMASTER\b/i
+    ]),
+    operation: { type: 'keyword_weaponmaster', targetHint: 'self', zone: 'board', automated: false }
+  },
+  {
+    id: 'keyword_ganking',
+    label: 'Ganking keyword',
+    description: 'Allows moving from battlefield to battlefield (keyword rule).',
+    ruleRefs: ['430', '737'],
+    patterns: buildPatterns([
+      /\[Ganking\]/i,
+      /\bGANKING\b/i,
+      /\bhave \[Ganking\]/i
+    ]),
+    operation: { type: 'keyword_ganking', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'keyword_tank',
+    label: 'Tank keyword',
+    description: 'Must be assigned combat damage first (keyword rule).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\[Tank\]/i,
+      /\bTANK\b/i
+    ]),
+    operation: { type: 'keyword_tank', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'keyword_repeat',
+    label: 'Repeat keyword',
+    description: 'Allows paying additional cost to repeat spell effect (keyword rule).',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\[Repeat\]/i,
+      /\bREPEAT\b/i
+    ]),
+    operation: { type: 'keyword_repeat', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
+    id: 'equip_trigger',
+    label: 'Equipment interaction',
+    description: 'Effects that trigger on equipping or involve equipment (rules 716, 744).',
+    ruleRefs: ['716', '744'],
+    patterns: buildPatterns([
+      /\[Equip\]/i,
+      /\bwhen you attach\b/i,
+      /\bwhen.*equip/i,
+      /\bequipment you control\b/i,
+      /\battach.*to me\b/i
+    ]),
+    operation: { type: 'equip_trigger', targetHint: 'ally', zone: 'board', automated: false }
+  },
+  {
+    id: 'stun_effect',
+    label: 'Stun / exhaustion effects',
+    description: 'Effects that stun or exhaust cards (rules 430-450).',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\bstun\b/i,
+      /\bstunned\b/i,
+      /\bexhaust\b.*enemy/i,
+      /\bexhaust\b.*unit/i
+    ]),
+    operation: { type: 'stun', targetHint: 'enemy', zone: 'board', automated: false }
+  },
+  {
+    id: 'ready_effect',
+    label: 'Ready / untap effects',
+    description: 'Effects that ready exhausted cards or runes (rules 161-170).',
+    ruleRefs: ['161-170'],
+    patterns: buildPatterns([
+      /\bready\b.*\brune/i,
+      /\bready\b.*\bunit/i,
+      /\benter ready\b/i,
+      /\bI enter ready\b/i
+    ]),
+    operation: { type: 'ready', targetHint: 'ally', zone: 'board', automated: false }
+  },
+  {
+    id: 'rune_type',
+    label: 'Basic rune card',
+    description: 'A basic rune resource card with no special effect.',
+    ruleRefs: ['161-170'],
+    patterns: buildPatterns([
+      /^No effect text provided\.?$/i
+    ]),
+    operation: { type: 'rune_resource', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'tribal_synergy',
+    label: 'Tribal / type synergy',
+    description: 'Effects that reference specific card types or tags (e.g., Dragons, Mechs).',
+    ruleRefs: ['340-360'],
+    patterns: buildPatterns([
+      /\byour\s+\w+s'\s+\w+\s+costs?\b/i,
+      /\byour\s+\w+s'\b/i,
+      /\byour\s+\w+s\s+have\b/i,
+      /\bfriendly\s+\w+s\s+have\b/i,
+      /\b\w+s\s+you\s+control\b/i
+    ]),
+    operation: { type: 'tribal_synergy', targetHint: 'ally', zone: 'board', automated: true }
+  },
+  {
+    id: 'targeting_discount',
+    label: 'Targeting discount',
+    description: 'Reduces cost of spells or abilities that target this card.',
+    ruleRefs: ['340-360'],
+    patterns: buildPatterns([
+      /\bspells\s+that\s+choose\s+me\s+cost\b/i,
+      /\bthat\s+target\s+me\s+cost\b/i,
+      /\btargeting\s+me\s+cost\b/i
+    ]),
+    operation: { type: 'targeting_discount', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'stat_scaling',
+    label: 'Dynamic stat scaling',
+    description: 'Stats that scale based on game state (points, runes, cards played).',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\bmy\s+might\s+is\s+increased\s+by\b/i,
+      /\bmight\s+is\s+increased\s+by\b/i,
+      /\bwhile\s+you\s+have\s+\d+\+\s+runes?\b/i,
+      /\bequal\s+to\s+(?:your\s+)?points\b/i,
+      /\bincreased\s+by\s+your\s+points\b/i
+    ]),
+    operation: { type: 'stat_scaling', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'scoring_restriction',
+    label: 'Scoring restriction',
+    description: 'Effects that prevent or restrict scoring.',
+    ruleRefs: ['106', '437'],
+    patterns: buildPatterns([
+      /\bcan'?t\s+score\b/i,
+      /\bplayers\s+can'?t\s+score\b/i,
+      /\buntil\s+their\s+\w+\s+turn\b/i
+    ]),
+    operation: { type: 'scoring_restriction', targetHint: 'any', zone: 'board', automated: true }
+  },
+  {
+    id: 'ability_copy',
+    label: 'Ability copy / sharing',
+    description: 'Effects that copy or share abilities from other cards.',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\bI\s+have\s+all\b.*\babilities\b/i,
+      /\bhave\s+all\s+\[?tap\]?\s+abilities\b/i,
+      /\bgain\s+all\s+abilities\b/i
+    ]),
+    operation: { type: 'ability_copy', targetHint: 'self', zone: 'board', automated: false }
+  },
+  {
+    id: 'effect_amplifier',
+    label: 'Effect amplification',
+    description: 'Effects that amplify or multiply other effects.',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\btrigger\s+an\s+additional\s+time\b/i,
+      /\bbonus\s+damage\b/i,
+      /\bdeals?\s+\d+\s+bonus\b/i,
+      /\btriggers?\s+twice\b/i
+    ]),
+    operation: { type: 'effect_amplifier', targetHint: 'ally', zone: 'board', automated: false }
+  },
+  {
+    id: 'location_aura',
+    label: 'Location-based aura',
+    description: 'Effects that apply to all units at a specific location.',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\bunits\s+here\s+have\b/i,
+      /\bunits\s+at\s+this\s+location\b/i,
+      /\ball\s+units\s+here\b/i
+    ]),
+    operation: { type: 'location_aura', targetHint: 'any', zone: 'board', automated: true }
+  },
+  {
+    id: 'solo_combat',
+    label: 'Solo combat bonus',
+    description: 'Bonuses that apply when attacking or defending alone.',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\battacking\s+or\s+defending\s+alone\b/i,
+      /\bdefends?\s+alone\b/i,
+      /\battacks?\s+alone\b/i,
+      /\bwhile\s+.*\s+alone\b/i
+    ]),
+    operation: { type: 'solo_combat', targetHint: 'ally', zone: 'board', automated: true }
+  },
+  {
+    id: 'phase_trigger',
+    label: 'Phase trigger',
+    description: 'Effects that trigger at the start or end of game phases.',
+    ruleRefs: ['117', '346'],
+    patterns: buildPatterns([
+      /\bat\s+the\s+start\s+of\b/i,
+      /\bat\s+the\s+end\s+of\b/i,
+      /\bduring\s+your\s+\w+\s+phase\b/i,
+      /\bbeginning\s+phase\b/i
+    ]),
+    operation: { type: 'phase_trigger', targetHint: 'any', zone: 'board', automated: false }
+  },
+  {
+    id: 'follow_movement',
+    label: 'Follow / escort movement',
+    description: 'Effects that allow a unit to follow another unit when it moves.',
+    ruleRefs: ['430', '737'],
+    patterns: buildPatterns([
+      /\bmay\s+be\s+moved\s+with\b/i,
+      /\bmoves?\s+with\s+it\b/i,
+      /\bwhen\s+.*\s+moves?\s+from\s+my\s+location\b/i
+    ]),
+    operation: { type: 'follow_movement', targetHint: 'self', zone: 'board', automated: false }
+  },
+  {
+    id: 'hide_modifier',
+    label: 'Hide modifier',
+    description: 'Effects that modify hiding mechanics.',
+    ruleRefs: ['700-720'],
+    patterns: buildPatterns([
+      /\bhide\s+an\s+additional\s+card\b/i,
+      /\bmay\s+hide\s+.*\s+additional\b/i,
+      /\bhidden\s+cards?\s+here\b/i
+    ]),
+    operation: { type: 'hide_modifier', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'play_restriction',
+    label: 'Play / targeting restriction',
+    description: 'Effects that restrict what can be played or targeted.',
+    ruleRefs: ['340-360'],
+    patterns: buildPatterns([
+      /\bcan'?t\s+be\s+played\s+here\b/i,
+      /\bunits\s+can'?t\s+be\s+played\b/i,
+      /\bcan'?t\s+be\s+chosen\s+by\b/i,
+      /\bcan'?t\s+be\s+targeted\b/i
+    ]),
+    operation: { type: 'play_restriction', targetHint: 'any', zone: 'board', automated: true }
+  },
+  {
+    id: 'conditional_buff',
+    label: 'Conditional stat buff',
+    description: 'Stat buffs that require a specific game condition to be met.',
+    ruleRefs: ['430-450'],
+    patterns: buildPatterns([
+      /\bwhile\s+you\s+have\s+another\s+unit\b/i,
+      /\bwhile\s+.*\s+is\s+in\s+combat\b/i,
+      /\bwhile\s+I'?m\s+in\s+combat\b/i,
+      /\bwhile\s+there\s+are?\s+\d+\b/i
+    ]),
+    operation: { type: 'conditional_buff', targetHint: 'self', zone: 'board', automated: true }
+  },
+  {
+    id: 'cost_increase',
+    label: 'Cost increase',
+    description: 'Effects that increase costs for opponent.',
+    ruleRefs: ['340-360'],
+    patterns: buildPatterns([
+      /\bcosts?\s+.*\s+more\b/i,
+      /\benemy\s+spells\s+cost\b/i,
+      /\bopponent'?s?\s+.*\s+cost\b.*\bmore\b/i
+    ]),
+    operation: { type: 'cost_increase', targetHint: 'enemy', zone: 'board', automated: true }
   }
 ];
 
@@ -785,7 +1243,6 @@ export const buildEffectProfile = (
 };
 const ENRICHED_DATA_PATH = path.resolve(process.cwd(), 'data', 'cards.enriched.json');
 
-const ACTION_PREFIX_CARD_TYPES = new Set<string>(['spell', 'action']);
 const UNTAPPED_PATTERN = /\b(enters?|enter)\b[^.]*\b(untapped|ready|stand)\b/i;
 const TAPPED_PATTERN = /\b(enters?|enter)\b[^.]*\b(tapped|exhausted)\b/i;
 const ACCELERATE_CLAUSE_REGEX = /\[Accelerate\][^)]*\(([^)]+)\)/i;
@@ -1074,21 +1531,15 @@ export const parseAssaultBonus = (effect?: string | null): number | null => {
   return null;
 };
 
-const ensureRulesCompliantEffect = (effect: string, rawType: unknown) => {
+const ensureRulesCompliantEffect = (effect: string) => {
   const warnings: string[] = [];
   let text = effect.trim();
   if (!text) {
     warnings.push('missing-effect-text');
     text = 'No effect text provided.';
   }
-  const normalizedType = normalize(rawType).toLowerCase();
-  if (
-    ACTION_PREFIX_CARD_TYPES.has(normalizedType) &&
-    !/^(ACTION|REACTION|SHOWDOWN)\b/i.test(text)
-  ) {
-    warnings.push('action-prefix-added');
-    text = `ACTION — ${text}`;
-  }
+  // Don't auto-add ACTION prefix - the original data already has correct [Action] or [Reaction] prefixes
+  // Spells without these prefixes can only be played during the owner's main phase
   if (!/[.!?]\s*$/.test(text)) {
     text = `${text}.`;
   }
@@ -1220,10 +1671,11 @@ const deriveReactionWindows = (effect: string): string[] => {
 };
 
 const deriveTiming = (effect: string): ActivationTiming => {
-  if (/^ACTION\b/i.test(effect) || /\bACTION\b/i.test(effect)) return 'action';
-  if (/^REACTION\b/i.test(effect) || /\bREACTION\b/i.test(effect)) return 'reaction';
+  if (/^ACTION\b/i.test(effect) || /\[Action\]/i.test(effect)) return 'action';
+  if (/^REACTION\b/i.test(effect) || /\[Reaction\]/i.test(effect)) return 'reaction';
   if (/\bWhen\b|\bWhenever\b/i.test(effect)) return 'triggered';
-  return 'passive';
+  // Spells without ACTION or REACTION can only be played during main phase
+  return 'main';
 };
 
 export const buildActivation = (effect: string): ActivationProfile => {
@@ -1258,8 +1710,9 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
 
     const id = normalize(record.id);
     const slug = normalize(record.slug) || id;
+    const name = normalize(record.name);
     const effect = normalize(record.effect);
-    const { text: normalizedEffect, warnings } = ensureRulesCompliantEffect(effect, record.type);
+    const { text: normalizedEffect, warnings } = ensureRulesCompliantEffect(effect);
     const colors = listify(record.color);
     const tags = listify(record.tags);
     const keywords = deriveKeywords(normalizedEffect, [...colors, ...tags]);
@@ -1274,7 +1727,7 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
     const cardRecord: EnrichedCardRecord = {
       id,
       slug,
-      name: normalize(record.name),
+      name,
       type: normalize(record.type) || null,
       rarity: normalize(record.rarity) || null,
       setName: normalize(record.set_name) || null,
