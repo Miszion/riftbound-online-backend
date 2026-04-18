@@ -21,8 +21,10 @@ import {
   createInProgressEngine,
   buildMainDeck,
   buildRuneDeck,
+  buildDeckConfig,
   makeCreature,
   makeSpell,
+  makeBattlefield,
   resetCardCounter,
   advancePastCoinFlip,
   advancePastBattlefieldSelection,
@@ -249,5 +251,77 @@ describe('Bug 3: Domain identity enforcement at deck load', () => {
         p2: { mainDeck: buildMainDeck(40), runeDeck: buildRuneDeck() }
       });
     }).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// Bug 4: Battlefield uniqueness at draft (Rule 103.4)
+// ===========================================================================
+
+describe('Bug 4: Battlefield uniqueness at draft', () => {
+  /**
+   * Build a two-player engine where the second player's pool contains the
+   * same battlefield card as the first player's pool. The helper drives the
+   * engine past coin flip so we land squarely in BATTLEFIELD_SELECTION.
+   */
+  function setupDuplicatePoolEngine(sharedId: string) {
+    const sharedFirst = makeBattlefield({ id: sharedId, slug: sharedId, name: 'Shared Arena' });
+    const sharedSecond = makeBattlefield({ id: sharedId, slug: sharedId, name: 'Shared Arena' });
+    const p1Alt = makeBattlefield({ id: 'p1-alt', slug: 'p1-alt', name: 'P1 Alternate' });
+    const p2Alt = makeBattlefield({ id: 'p2-alt', slug: 'p2-alt', name: 'P2 Alternate' });
+
+    const engine = new RiftboundGameEngine('bug4-match', ['player-1', 'player-2']);
+    engine.initializeGame({
+      'player-1': buildDeckConfig({ battlefields: [sharedFirst, p1Alt] }),
+      'player-2': buildDeckConfig({ battlefields: [sharedSecond, p2Alt] })
+    });
+    advancePastCoinFlip(engine, 'player-1', 'player-2');
+    return { engine, sharedId };
+  }
+
+  it('rejects the second player picking the same battlefield as the first', () => {
+    const { engine, sharedId } = setupDuplicatePoolEngine('shared-bf');
+
+    // Player 1 picks first.
+    engine.selectBattlefield('player-1', sharedId);
+    // Player 2 attempts the same battlefield -> must be rejected.
+    engine.selectBattlefield('player-2', sharedId);
+
+    // Engine must NOT have both players seated on the same battlefield. The
+    // duplicate selection is cleared so player-2 can re-pick from a filtered
+    // option set.
+    const state = engine.getGameState();
+    const p2 = state.players.find((p) => p.playerId === 'player-2')!;
+    expect(p2.selectedBattlefield).toBeUndefined();
+
+    // Engine must still be in BATTLEFIELD_SELECTION, not advanced to MULLIGAN.
+    expect(engine.status).toBe(GameStatus.BATTLEFIELD_SELECTION);
+
+    // A fresh, unresolved battlefield prompt must exist for player-2 with the
+    // shared battlefield filtered out of the options.
+    const reprompt = state.prompts.find(
+      (p) => p.type === 'battlefield' && p.playerId === 'player-2' && !p.resolved
+    );
+    expect(reprompt).toBeDefined();
+    const optionIds = ((reprompt!.data as any).options as any[]).map(
+      (o) => o.cardId ?? o.slug ?? o.id
+    );
+    expect(optionIds).not.toContain(sharedId);
+  });
+
+  it('advances to MULLIGAN when player-2 re-picks a non-conflicting battlefield', () => {
+    const { engine, sharedId } = setupDuplicatePoolEngine('shared-bf');
+
+    engine.selectBattlefield('player-1', sharedId);
+    engine.selectBattlefield('player-2', sharedId); // rejected, re-prompted
+    engine.selectBattlefield('player-2', 'p2-alt'); // legal, different card
+
+    const ids = engine
+      .getGameState()
+      .battlefields.map((b) => b.card?.id ?? b.battlefieldId);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toContain(sharedId);
+    expect(ids).toContain('p2-alt');
+    expect(engine.status).toBe(GameStatus.MULLIGAN);
   });
 });
