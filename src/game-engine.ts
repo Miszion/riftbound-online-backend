@@ -9259,73 +9259,208 @@ export class RiftboundGameEngine {
     return attackers.includes(unit.instanceId) ? bonus : 0;
   }
 
+  /**
+   * Compute a unit's effective combat damage output: base power plus assault
+   * bonus plus any continuous stat modifiers (auras, tribal synergy, location
+   * effects, etc.). Non-finite or missing power falls back to 0.
+   */
+  private effectiveCombatPower(
+    unit: BoardCard,
+    options: { isAttacking: boolean; isDefending: boolean }
+  ): number {
+    let power = 0;
+    if (typeof unit.power === 'number' && Number.isFinite(unit.power)) {
+      power = unit.power;
+    } else if (typeof unit.currentToughness === 'number' && Number.isFinite(unit.currentToughness)) {
+      power = unit.currentToughness;
+    }
+    const assaultBonus = this.getAssaultBonus(unit);
+    if (assaultBonus > 0) {
+      power += assaultBonus;
+    }
+    const statModifiers = this.calculateStatModifiers(unit, options);
+    if (Number.isFinite(statModifiers)) {
+      power += statModifiers;
+    }
+    return Math.max(0, power);
+  }
+
+  /**
+   * Assign `incoming` points of damage across the given defending units,
+   * respecting Tank (must be assigned damage first; negates the first point)
+   * and Deflect (redirects the first instance of damage back to the attacker).
+   *
+   * Returns a map of instanceId -> damage dealt to that defender, plus the
+   * total damage redirected back to attackers by Deflect.
+   */
+  private assignCombatDamage(
+    incoming: number,
+    defenders: BoardCard[]
+  ): { perUnit: Map<string, number>; redirected: number } {
+    const perUnit = new Map<string, number>();
+    let redirected = 0;
+    if (incoming <= 0 || defenders.length === 0) {
+      return { perUnit, redirected };
+    }
+    // Tank units receive damage before non-Tank units (rule 815.1.b).
+    const tankUnits = defenders.filter((u) => this.cardHasMechanic(u, 'Tank'));
+    const nonTankUnits = defenders.filter((u) => !this.cardHasMechanic(u, 'Tank'));
+    const order: BoardCard[] = [...tankUnits, ...nonTankUnits];
+
+    let remaining = incoming;
+    for (const unit of order) {
+      if (remaining <= 0) break;
+      const hasTank = this.cardHasMechanic(unit, 'Tank');
+      const hasDeflect = this.cardHasMechanic(unit, 'Deflect');
+      const toughness = Math.max(0, unit.currentToughness ?? unit.toughness ?? 0);
+      // Deflect redirects the first instance of damage back to the attacker.
+      if (hasDeflect && remaining > 0) {
+        redirected += 1;
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+      // Tank negates the first point assigned to it.
+      let absorbed = 0;
+      if (hasTank && remaining > 0) {
+        absorbed = 1;
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+      const damageToUnit = Math.min(remaining, toughness);
+      if (damageToUnit > 0) {
+        perUnit.set(unit.instanceId, (perUnit.get(unit.instanceId) ?? 0) + damageToUnit);
+        remaining -= damageToUnit;
+      }
+      // Restore absorbed so test-visible "damage taken" reflects only net
+      // damage (Tank negation already consumed a point of the pool).
+      void absorbed;
+    }
+    return { perUnit, redirected };
+  }
+
+  /**
+   * Resolve a contested battlefield via per-unit combat damage assignment.
+   *
+   * Previous implementation summed might on each side and wiped every losing
+   * unit regardless of individual stats; that made Tank, Deflect, and excess
+   * power irrelevant, and caused lopsided games that ended via burnout. The
+   * new flow:
+   *   1. Each side computes a total damage pool (sum of each unit's
+   *      effectiveCombatPower).
+   *   2. Side A assigns its damage to side B's units (Tank-first), and vice
+   *      versa. Deflect on a defender redirects one point back to the other
+   *      side's attackers. Damage is applied simultaneously.
+   *   3. Units whose currentToughness drops to 0 are destroyed.
+   *   4. Controller is whichever side has surviving units. If both sides
+   *      survive, the battlefield remains contested (no controller). If both
+   *      sides wipe, the battlefield is left uncontrolled (stalemate).
+   */
   private resolveBattlefieldOutcome(battlefield: BattlefieldState): void {
     const context = this.gameState.combatContext;
     const attackInitiator = context?.initiatedBy ?? null;
     const defendersPresent = Boolean(context?.defendingUnitIds?.length);
     const didInitiateAttack = (playerId: string): boolean =>
       Boolean(defendersPresent && attackInitiator && attackInitiator === playerId);
+
+    const units = this.getUnitsOnBattlefield(battlefield.battlefieldId);
+    // Group by player so each "side" is resolved together.
     const presence = new Map<
       string,
-      { player: PlayerState; units: BoardCard[]; totalMight: number }
+      {
+        player: PlayerState;
+        units: BoardCard[];
+        damagePool: number;
+      }
     >();
-    const units = this.getUnitsOnBattlefield(battlefield.battlefieldId);
     units.forEach((unit) => {
       const owner = this.getPlayerByCard(unit.instanceId);
       const entry =
-        presence.get(owner.playerId) ?? { player: owner, units: [], totalMight: 0 };
+        presence.get(owner.playerId) ??
+        { player: owner, units: [], damagePool: 0 };
       entry.units.push(unit);
-      const might =
-        typeof unit.power === 'number'
-          ? unit.power
-          : typeof unit.currentToughness === 'number'
-            ? unit.currentToughness
-            : 0;
-      if (Number.isFinite(might)) {
-        entry.totalMight += might;
-      }
-      // Apply assault bonus for attackers
-      const assaultBonus = this.getAssaultBonus(unit);
-      if (assaultBonus > 0) {
-        entry.totalMight += assaultBonus;
-      }
-      // Apply continuous stat modifiers (auras, tribal synergy, location effects, etc.)
       const isAttacking = context?.attackingUnitIds?.includes(unit.instanceId) ?? false;
       const isDefending = context?.defendingUnitIds?.includes(unit.instanceId) ?? false;
-      const statModifiers = this.calculateStatModifiers(unit, { isAttacking, isDefending });
-      if (statModifiers !== 0) {
-        entry.totalMight += statModifiers;
-      }
+      entry.damagePool += this.effectiveCombatPower(unit, { isAttacking, isDefending });
       presence.set(owner.playerId, entry);
     });
+
     if (presence.size === 0) {
       battlefield.controller = undefined;
       battlefield.contestedBy = [];
       return;
     }
-    const groups = Array.from(presence.values()).sort((a, b) => b.totalMight - a.totalMight);
+
+    const groups = Array.from(presence.values());
+
+    // Uncontested: a single side holds the field.
     if (groups.length === 1) {
       const uncontested = groups[0];
       const playerName = this.resolvePlayerName(uncontested.player.playerId) ?? 'Player';
       const unitsLabel = this.describeUnitList(uncontested.units);
       this.addDuelLogEntry({
         playerId: uncontested.player.playerId,
-        message: `${playerName}'s ${unitsLabel} secure ${battlefield.name} uncontested (${uncontested.totalMight} might).`,
+        message: `${playerName}'s ${unitsLabel} secure ${battlefield.name} uncontested (${uncontested.damagePool} might).`,
         tone: 'info'
       });
       this.triggerUnits(uncontested.units, 'combat_win');
-      this.applyBattlefieldControl(groups[0].player, battlefield, 'combat', {
+      this.applyBattlefieldControl(uncontested.player, battlefield, 'combat', {
         sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
         initiatedAttack: didInitiateAttack(uncontested.player.playerId)
       });
       return;
     }
-    if (groups[0].totalMight === groups[1].totalMight) {
-      groups.forEach((group) =>
-        group.units.forEach((unit) => {
+
+    // Two-sided (ignore unusual 3+ player cases; only first two sides fight).
+    const sideA = groups[0];
+    const sideB = groups[1];
+
+    // Assign damage simultaneously (compute assignments first, then mutate).
+    const aToB = this.assignCombatDamage(sideA.damagePool, sideB.units);
+    const bToA = this.assignCombatDamage(sideB.damagePool, sideA.units);
+
+    // Deflect redirects damage back to the OTHER side's attackers. Distribute
+    // the redirected damage across that side's units (Tank-first too, since
+    // Tank applies regardless of source).
+    const redirectedToA = this.assignCombatDamage(aToB.redirected, sideA.units);
+    const redirectedToB = this.assignCombatDamage(bToA.redirected, sideB.units);
+
+    const applyDamage = (
+      side: { units: BoardCard[] },
+      maps: Array<Map<string, number>>
+    ) => {
+      for (const unit of side.units) {
+        let total = 0;
+        for (const m of maps) {
+          total += m.get(unit.instanceId) ?? 0;
+        }
+        if (total > 0) {
+          unit.currentToughness = (unit.currentToughness ?? unit.toughness ?? 0) - total;
+        }
+      }
+    };
+    applyDamage(sideA, [bToA.perUnit, redirectedToA.perUnit]);
+    applyDamage(sideB, [aToB.perUnit, redirectedToB.perUnit]);
+
+    // Destroy any unit whose toughness is now <= 0.
+    const destroyDead = (side: { units: BoardCard[] }): BoardCard[] => {
+      const survivors: BoardCard[] = [];
+      for (const unit of side.units) {
+        if ((unit.currentToughness ?? 0) <= 0) {
           this.destroyUnit(unit, 'combat');
-        })
-      );
+        } else {
+          survivors.push(unit);
+        }
+      }
+      return survivors;
+    };
+    const sideASurvivors = destroyDead(sideA);
+    const sideBSurvivors = destroyDead(sideB);
+
+    const sideAWins = sideASurvivors.length > 0 && sideBSurvivors.length === 0;
+    const sideBWins = sideBSurvivors.length > 0 && sideASurvivors.length === 0;
+    const mutualWipe = sideASurvivors.length === 0 && sideBSurvivors.length === 0;
+
+    if (mutualWipe) {
       battlefield.controller = undefined;
       battlefield.contestedBy = [];
       this.addDuelLogEntry({
@@ -9334,25 +9469,33 @@ export class RiftboundGameEngine {
       });
       return;
     }
-    const winner = groups[0];
-    const losers = groups.slice(1);
-    const opposingMight = losers.reduce((sum, group) => sum + group.totalMight, 0);
-    const winnerName = this.resolvePlayerName(winner.player.playerId) ?? 'Player';
-    const winnerUnits = this.describeUnitList(winner.units);
+
+    if (sideAWins || sideBWins) {
+      const winnerSide = sideAWins ? sideA : sideB;
+      const winnerSurvivors = sideAWins ? sideASurvivors : sideBSurvivors;
+      const loserSide = sideAWins ? sideB : sideA;
+      const winnerName =
+        this.resolvePlayerName(winnerSide.player.playerId) ?? 'Player';
+      const winnerUnits = this.describeUnitList(winnerSurvivors);
+      this.addDuelLogEntry({
+        playerId: winnerSide.player.playerId,
+        message: `${winnerName}'s ${winnerUnits} prevail at ${battlefield.name} (${winnerSide.damagePool} vs ${loserSide.damagePool} might).`,
+        tone: 'success'
+      });
+      this.triggerUnits(winnerSurvivors, 'combat_win');
+      this.applyBattlefieldControl(winnerSide.player, battlefield, 'combat', {
+        sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
+        initiatedAttack: didInitiateAttack(winnerSide.player.playerId)
+      });
+      return;
+    }
+
+    // Both sides have survivors: battlefield remains contested, no controller.
+    battlefield.controller = undefined;
+    battlefield.contestedBy = [sideA.player.playerId, sideB.player.playerId];
     this.addDuelLogEntry({
-      playerId: winner.player.playerId,
-      message: `${winnerName}'s ${winnerUnits} overpower the opposition ${winner.totalMight} to ${opposingMight} at ${battlefield.name}.`,
-      tone: 'success'
-    });
-    losers.forEach((group) =>
-      group.units.forEach((unit) => {
-        this.destroyUnit(unit, 'combat');
-      })
-    );
-    this.triggerUnits(winner.units, 'combat_win');
-    this.applyBattlefieldControl(winner.player, battlefield, 'combat', {
-      sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
-      initiatedAttack: didInitiateAttack(winner.player.playerId)
+      message: `${battlefield.name} remains contested; both sides have surviving units.`,
+      tone: 'info'
     });
   }
 

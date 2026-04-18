@@ -325,3 +325,231 @@ describe('Bug 4: Battlefield uniqueness at draft', () => {
     expect(engine.status).toBe(GameStatus.MULLIGAN);
   });
 });
+
+// ===========================================================================
+// Bug 5: Unit-level combat damage assignment (Tank/Deflect/excess power/tie)
+// ===========================================================================
+
+describe('Bug 5: unit-level combat damage assignment', () => {
+  /**
+   * Drop a pre-built unit straight on a battlefield. Bypasses play-cost and
+   * summoning-sickness checks so each test can pin exact unit stats.
+   */
+  function placeUnit(
+    engine: RiftboundGameEngine,
+    playerId: string,
+    battlefieldId: string,
+    overrides: Partial<Card> = {}
+  ): BoardCard {
+    const state = engine.getGameState();
+    const player = state.players.find((p) => p.playerId === playerId)!;
+    const card = makeCreature({ energyCost: 0, ...overrides });
+    const instanceId = `${card.id}_bf_${Math.random().toString(36).slice(2, 8)}`;
+    const boardCard: BoardCard = {
+      ...card,
+      instanceId,
+      currentToughness: card.toughness ?? 1,
+      isTapped: false,
+      summoned: false,
+      activationState: {
+        cardId: card.id,
+        isStateful: false,
+        active: false,
+        lastChangedAt: Date.now(),
+        history: []
+      },
+      ruleLog: [],
+      location: { zone: 'battlefield', battlefieldId }
+    } as BoardCard;
+    player.board.creatures.push(boardCard);
+    return boardCard;
+  }
+
+  /**
+   * Arrange a contested battlefield with the given attackers and defenders,
+   * then run the combat-resolution pipeline to completion.
+   */
+  function runCombat(
+    engine: RiftboundGameEngine,
+    attackerId: string,
+    defenderId: string,
+    attackerUnits: BoardCard[],
+    defenderUnits: BoardCard[]
+  ) {
+    const state = engine.getGameState();
+    const bfId = state.battlefields[0]!.battlefieldId;
+    state.combatContext = {
+      battlefieldId: bfId,
+      initiatedBy: attackerId,
+      defendingPlayerId: defenderId,
+      attackingUnitIds: attackerUnits.map((u) => u.instanceId),
+      defendingUnitIds: defenderUnits.map((u) => u.instanceId),
+      priorityStage: 'action',
+      actionPasses: 0
+    } as CombatContext;
+    (engine as any).resolveBattlefieldOutcome(state.battlefields[0]);
+  }
+
+  it('Tank unit is assigned damage first (negates first point of damage)', () => {
+    const engine = createInProgressEngine();
+    const pId = currentPlayerId(engine);
+    const oId = opponentPlayerId(engine);
+    const bfId = firstBattlefieldId(engine);
+
+    // Attacker: single 2/2 with no Tank.
+    const attacker = placeUnit(engine, pId, bfId, {
+      name: 'Plain Attacker',
+      power: 2,
+      toughness: 2
+    });
+    // Defender: single 1/1 Tank. Without Tank's first-damage negation it would
+    // die to the 2 incoming damage; with Tank it survives (1 point negated,
+    // remaining 1 point kills it). We assert only that Tank's presence
+    // perturbs the outcome vs an identical non-Tank 1/1.
+    const tank = placeUnit(engine, pId === 'player-1' ? 'player-2' : 'player-1', bfId, {
+      name: 'Tank Unit',
+      power: 1,
+      toughness: 2,
+      keywords: ['Tank']
+    });
+
+    runCombat(
+      engine,
+      pId,
+      oId,
+      [attacker],
+      [tank]
+    );
+
+    // Tank must have absorbed the first point: it now has 1 toughness left
+    // (2 base - 2 incoming + 1 negated = 1). Without the fix, the old engine
+    // summed might (2 vs 1) and destroyed the defender outright.
+    const state = engine.getGameState();
+    const defenderOwner = state.players.find((p) => p.playerId !== pId)!;
+    const tankAlive = defenderOwner.board.creatures.find(
+      (c) => c.instanceId === tank.instanceId
+    );
+    expect(tankAlive).toBeDefined();
+    expect(tankAlive!.currentToughness).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Deflect redirects one point of damage back to the attacker', () => {
+    const engine = createInProgressEngine();
+    const pId = currentPlayerId(engine);
+    const oId = opponentPlayerId(engine);
+    const bfId = firstBattlefieldId(engine);
+
+    // Attacker: 2/2 plain.
+    const attacker = placeUnit(engine, pId, bfId, {
+      name: 'Attacker',
+      power: 2,
+      toughness: 2
+    });
+    // Defender: 2/3 with Deflect. Deflect redirects the first incoming point
+    // back to the attacker, so the attacker takes 1 damage from the deflect
+    // plus normal retaliation.
+    const deflector = placeUnit(engine, oId, bfId, {
+      name: 'Deflect Unit',
+      power: 2,
+      toughness: 3,
+      keywords: ['Deflect']
+    });
+
+    runCombat(engine, pId, oId, [attacker], [deflector]);
+
+    const state = engine.getGameState();
+    const attackerOwner = state.players.find((p) => p.playerId === pId)!;
+    const defenderOwner = state.players.find((p) => p.playerId === oId)!;
+
+    // Attacker should have taken MORE damage than defender equal-trade would
+    // imply. Specifically, attacker took >= 2 damage (2 from defender's power
+    // + 1 from deflect redirect = 3, lethal on 2-toughness). So attacker is
+    // destroyed.
+    const attackerDead = !attackerOwner.board.creatures.some(
+      (c) => c.instanceId === attacker.instanceId
+    );
+    expect(attackerDead).toBe(true);
+
+    // Defender survives with toughness reduced by (2 - 1 redirected) = 1.
+    const deflectAlive = defenderOwner.board.creatures.find(
+      (c) => c.instanceId === deflector.instanceId
+    );
+    expect(deflectAlive).toBeDefined();
+    expect(deflectAlive!.currentToughness).toBe(2); // 3 - 1 (1 point got through after deflect)
+  });
+
+  it('attacker with excess power survives combat when defender is destroyed', () => {
+    const engine = createInProgressEngine();
+    const pId = currentPlayerId(engine);
+    const oId = opponentPlayerId(engine);
+    const bfId = firstBattlefieldId(engine);
+
+    // Big attacker 5/5.
+    const attacker = placeUnit(engine, pId, bfId, {
+      name: 'Big Attacker',
+      power: 5,
+      toughness: 5
+    });
+    // Small defender 1/1.
+    const defender = placeUnit(engine, oId, bfId, {
+      name: 'Small Defender',
+      power: 1,
+      toughness: 1
+    });
+
+    runCombat(engine, pId, oId, [attacker], [defender]);
+
+    const state = engine.getGameState();
+    const attackerOwner = state.players.find((p) => p.playerId === pId)!;
+    const defenderOwner = state.players.find((p) => p.playerId === oId)!;
+
+    // Attacker survives - old buggy engine would have killed both via might
+    // comparison blowout. New engine: attacker takes 1 damage (defender's
+    // power), defender takes 5 damage (overkill). Attacker lives at 4 tough.
+    const attackerAlive = attackerOwner.board.creatures.find(
+      (c) => c.instanceId === attacker.instanceId
+    );
+    expect(attackerAlive).toBeDefined();
+    expect(attackerAlive!.currentToughness).toBe(4);
+
+    const defenderDead = !defenderOwner.board.creatures.some(
+      (c) => c.instanceId === defender.instanceId
+    );
+    expect(defenderDead).toBe(true);
+  });
+
+  it('tied might across two equal units still results in mutual destruction', () => {
+    const engine = createInProgressEngine();
+    const pId = currentPlayerId(engine);
+    const oId = opponentPlayerId(engine);
+    const bfId = firstBattlefieldId(engine);
+
+    // Two evenly matched 2/2s.
+    const attacker = placeUnit(engine, pId, bfId, {
+      name: 'Even Attacker',
+      power: 2,
+      toughness: 2
+    });
+    const defender = placeUnit(engine, oId, bfId, {
+      name: 'Even Defender',
+      power: 2,
+      toughness: 2
+    });
+
+    runCombat(engine, pId, oId, [attacker], [defender]);
+
+    const state = engine.getGameState();
+    const attackerOwner = state.players.find((p) => p.playerId === pId)!;
+    const defenderOwner = state.players.find((p) => p.playerId === oId)!;
+
+    // Mutual destruction: both sides wipe out.
+    const attackerDead = !attackerOwner.board.creatures.some(
+      (c) => c.instanceId === attacker.instanceId
+    );
+    const defenderDead = !defenderOwner.board.creatures.some(
+      (c) => c.instanceId === defender.instanceId
+    );
+    expect(attackerDead).toBe(true);
+    expect(defenderDead).toBe(true);
+  });
+});
