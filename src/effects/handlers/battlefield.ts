@@ -157,6 +157,15 @@ interface ScoringCtxShape {
   turnState?: { turnNumber?: number };
 }
 
+function parseScoreAmountFromText(text: string): number | null {
+  if (!text) return null;
+  // "score N point(s)" / "you score N point(s)" covers both card text variants.
+  const match = /score\s+(\d+)\s+point/i.exec(text);
+  if (!match) return null;
+  const n = parseInt(match[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function restrictionApplies(
   r: ScoringRestrictionPredicate,
   player: string,
@@ -214,10 +223,29 @@ export const scoringHandler: OpHandler<{ type: 'scoring' }> = {
   },
   execute(ctx, _op, source): OpResult {
     const op = _op as unknown as ScoringOp;
+    const operation = _op as unknown as EffectOperation;
     const shape = ctx as unknown as ScoringCtxShape;
     const patches: Patch[] = [];
     const triggered: TriggerFire[] = [];
     const log: LogEntry[] = [];
+
+    // Engine adapter path: mutate caster.victoryPoints on the live engine.
+    // Parse "score N point(s)" from source text (rule 13.5 allows any numeric
+    // specification in the card text to override the marker op); fall back to
+    // magnitudeHint, then op.amount. Marker-only ops (no text, no
+    // magnitudeHint) are intentional no-ops.
+    if (ctx.engine && ctx.caster) {
+      const parsedFromText = parseScoreAmountFromText(source?.text ?? '');
+      const resolvedAmount =
+        parsedFromText ??
+        (typeof operation.magnitudeHint === 'number' ? operation.magnitudeHint : undefined) ??
+        (typeof op.amount === 'number' ? op.amount : undefined);
+      if (resolvedAmount && resolvedAmount > 0) {
+        ctx.caster.victoryPoints = (ctx.caster.victoryPoints ?? 0) + resolvedAmount;
+        ctx.engine.logRuleUsage?.(source as never, 'scoring');
+      }
+      return emptyResult();
+    }
 
     const player = op.player ?? 'p1';
     const reason = op.reason ?? 'effect';
