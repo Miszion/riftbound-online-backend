@@ -25,7 +25,9 @@ import {
   returnToHandHandler,
   returnFromGraveyardHandler,
   discardCardsHandler,
-  summonUnitHandler
+  summonUnitHandler,
+  millCardsHandler,
+  adjustMulliganHandler
 } from './handlers/zones';
 import { createTokenHandler } from './handlers/tokens';
 import { attachGearHandler, hideModifierHandler } from './handlers/gear';
@@ -149,7 +151,9 @@ export function buildDefaultRegistry(): OpHandlerRegistry {
     playRestrictionHandler,
     followMovementHandler,
     conditionalBuffHandler,
-    hideModifierHandler
+    hideModifierHandler,
+    millCardsHandler,
+    adjustMulliganHandler
   ] as unknown as OpHandler<EffectOp>[];
   registry.registerAll(handlers);
   return registry;

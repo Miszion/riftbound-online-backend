@@ -1,5 +1,6 @@
 import type { BoardCard } from '../../game-engine';
 import { CardType } from '../../game-engine';
+import type { EffectOperation } from '../../card-catalog';
 import type {
   EngineCtx,
   LogEntry,
@@ -367,6 +368,37 @@ export const returnToHandHandler: OpHandler<{ type: 'return_to_hand' }> = {
   op: 'return_to_hand',
   execute(ctx: EngineCtx, _op, source): OpResult {
     const op = _op as unknown as ReturnToHandOp;
+
+    // Engine adapter path: actually move units off the board into their
+    // owner's hand. remove_permanent's adapter path damages-to-kill which is
+    // wrong semantically for rule 438 (bounce). Handle single-target and
+    // globalAll (text "return all units to their owners' hands") both here.
+    if (ctx.engine?.findCardInstance && ctx.caster) {
+      const sourceText = (source as unknown as { text?: string })?.text ?? '';
+      const globalAll = /return\s+all\s+units?/i.test(sourceText);
+
+      const targetIds: string[] = [];
+      if (globalAll) {
+        collectAllBoardUnitIds(ctx, targetIds);
+      } else {
+        const opCtx = ctx.operationContext;
+        if (opCtx?.targets && opCtx.targets.length > 0) {
+          targetIds.push(...opCtx.targets);
+        } else if (opCtx?.boardTarget) {
+          targetIds.push(opCtx.boardTarget.instanceId);
+        } else if (op.target) {
+          targetIds.push(op.target);
+        }
+      }
+
+      for (const instanceId of targetIds) {
+        const target = ctx.engine.findCardInstance(instanceId);
+        if (!target || target.type !== CardType.CREATURE) continue;
+        bounceOrDissipate(ctx, target, source);
+      }
+      return emptyResult();
+    }
+
     return removePermanentHandler.execute(
       ctx,
       { type: 'remove_permanent', target: op.target, mode: 'return_to_hand' } as never,
@@ -374,6 +406,47 @@ export const returnToHandHandler: OpHandler<{ type: 'return_to_hand' }> = {
     );
   }
 };
+
+function collectAllBoardUnitIds(ctx: EngineCtx, out: string[]): void {
+  const caster = ctx.caster;
+  if (caster) {
+    for (const c of caster.board?.creatures ?? []) {
+      if (c.instanceId) out.push(c.instanceId);
+    }
+    const other = ctx.engine?.getOtherPlayer?.(caster);
+    if (other) {
+      for (const c of other.board?.creatures ?? []) {
+        if (c.instanceId) out.push(c.instanceId);
+      }
+    }
+  }
+}
+
+function bounceOrDissipate(ctx: EngineCtx, unit: BoardCard, source: unknown): void {
+  const owner = ctx.engine.getPlayerByCard(unit.instanceId);
+  const idx = owner.board.creatures.findIndex((c) => c.instanceId === unit.instanceId);
+  if (idx < 0) return;
+  const [removed] = owner.board.creatures.splice(idx, 1);
+  if (!removed) return;
+  if (removed.location.zone === 'battlefield' && removed.location.battlefieldId) {
+    // The engine exposes no adapter hook for contestant cleanup; the unit's
+    // removal alone is enough because combat/contest logic re-reads the board.
+  }
+  const tokenLike = isTokenShape(removed);
+  if (!tokenLike) {
+    owner.hand.push(removed);
+  }
+  ctx.engine.logRuleUsage?.(source as never, tokenLike ? 'return_to_hand_dissipate' : 'return_to_hand');
+}
+
+function isTokenShape(card: BoardCard): boolean {
+  const tagMatch = (card.tags ?? []).some(
+    (t) => typeof t === 'string' && t.trim().toLowerCase() === 'token'
+  );
+  if (tagMatch) return true;
+  const name = (card.name ?? '').toLowerCase();
+  return name.includes('token');
+}
 
 // ---------------------------------------------------------------------------
 // return_from_graveyard: move a card from trash back to hand or board.
@@ -612,6 +685,28 @@ export const summonUnitHandler: OpHandler<{ type: 'summon_unit' }> = {
   op: 'summon_unit',
   execute(ctx: EngineCtx, _op, source): OpResult {
     const op = _op as unknown as SummonUnitOp;
+
+    // Engine adapter path: summon_unit mirrors create_token from the engine's
+    // perspective (rule 183 treats summoned units identically to tokens for
+    // spawn/placement semantics). Reuse the existing spawnTokenUnits pipeline
+    // via the adapter so the unit actually lands on player.board.creatures.
+    if (ctx.engine?.getTokenSpec && ctx.caster) {
+      const operation = _op as unknown as EffectOperation;
+      const tokenSpec = ctx.engine.getTokenSpec(operation, source) as
+        | { variableCount?: boolean; flexiblePlacement?: boolean }
+        | null;
+      if (!tokenSpec) {
+        ctx.engine.logRuleUsage?.(source, 'summon_unit-manual');
+        return emptyResult();
+      }
+      if (tokenSpec.variableCount || tokenSpec.flexiblePlacement) {
+        ctx.engine.logRuleUsage?.(source, 'summon_unit-manual');
+        return emptyResult();
+      }
+      ctx.engine.spawnTokenUnits?.(ctx.caster, tokenSpec, ctx.operationContext as never);
+      return emptyResult();
+    }
+
     const patches: Patch[] = [];
     const triggered: TriggerFire[] = [];
     const log: LogEntry[] = [];
@@ -668,5 +763,97 @@ export const summonUnitHandler: OpHandler<{ type: 'summon_unit' }> = {
     });
     log.push({ tick: 0, kind: 'summon_unit_applied', payload: { instanceId, cardId, player, location } });
     return { patches, triggeredAbilities: triggered, log };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// mill_cards: move N cards from top of a player's main deck into graveyard.
+// Rule 400 (card decks) + 431 (burn out replacement) apply when the deck
+// empties mid-mill; burn out is out of scope for the effect mill handler and
+// is covered by the draw-cards pipeline.
+// ---------------------------------------------------------------------------
+
+interface MillCardsOp {
+  type: 'mill_cards';
+  player?: string;
+  count?: number;
+}
+
+export const millCardsHandler: OpHandler<{ type: 'mill_cards' }> = {
+  op: 'mill_cards',
+  execute(ctx: EngineCtx, _op, source): OpResult {
+    const op = _op as unknown as MillCardsOp;
+    const operation = _op as unknown as {
+      targetHint?: 'self' | 'enemy';
+      magnitudeHint?: number;
+      metadata?: { count?: number };
+    };
+
+    if (ctx.engine && ctx.caster) {
+      const targetPlayer =
+        operation.targetHint === 'enemy'
+          ? ctx.engine.getOtherPlayer(ctx.caster)
+          : ctx.caster;
+      const metaCount =
+        operation.metadata && typeof operation.metadata.count === 'number'
+          ? operation.metadata.count
+          : undefined;
+      const rawCount =
+        metaCount ??
+        (typeof operation.magnitudeHint === 'number' ? operation.magnitudeHint : undefined) ??
+        op.count ??
+        1;
+      const count = Math.max(0, rawCount);
+      if (count === 0) return emptyResult();
+      const milled = Math.min(count, targetPlayer.deck.length);
+      for (let i = 0; i < milled; i += 1) {
+        const card = targetPlayer.deck.shift();
+        if (!card) break;
+        targetPlayer.graveyard.push(card);
+      }
+      ctx.engine.logRuleUsage?.(source as never, 'mill_cards');
+      return emptyResult();
+    }
+
+    return emptyResult();
+  }
+};
+
+// ---------------------------------------------------------------------------
+// adjust_mulligan: rule 117 (mulligan window). The concrete engine side
+// effect we model is incrementing firstTurnRuneBoost, which is the "extra
+// rune on turn 1" compensation awarded by mulligan-like effects.
+// ---------------------------------------------------------------------------
+
+interface AdjustMulliganOp {
+  type: 'adjust_mulligan';
+  player?: string;
+  amount?: number;
+}
+
+export const adjustMulliganHandler: OpHandler<{ type: 'adjust_mulligan' }> = {
+  op: 'adjust_mulligan',
+  execute(ctx: EngineCtx, _op, source): OpResult {
+    const op = _op as unknown as AdjustMulliganOp;
+    const operation = _op as unknown as {
+      targetHint?: 'self' | 'enemy';
+      magnitudeHint?: number;
+    };
+
+    if (ctx.engine && ctx.caster) {
+      const targetPlayer =
+        operation.targetHint === 'enemy'
+          ? ctx.engine.getOtherPlayer(ctx.caster)
+          : ctx.caster;
+      const amount =
+        typeof operation.magnitudeHint === 'number'
+          ? operation.magnitudeHint
+          : op.amount ?? 1;
+      if (amount !== 0) {
+        targetPlayer.firstTurnRuneBoost = (targetPlayer.firstTurnRuneBoost ?? 0) + amount;
+        ctx.engine.logRuleUsage?.(source as never, 'adjust_mulligan');
+      }
+    }
+    return emptyResult();
   }
 };
