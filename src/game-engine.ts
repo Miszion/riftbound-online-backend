@@ -489,7 +489,23 @@ export interface GameMove {
   playerIndex: number;
   turn: number;
   phase: GamePhase;
-  action: 'play_card' | 'attack' | 'move' | 'pass' | 'activate_ability' | 'end_turn' | 'hide_card' | 'activate_hidden';
+  // `'move'` is the canonical engine-emitted string (see recordMove calls in
+  // this file). `'move_unit'` is the self-play harness's equivalent action
+  // label (see src/self-play.ts) and is also emitted through the same replay
+  // pipeline. Both are accepted here so the moveHistory type stays in sync
+  // with what downstream consumers (GraphQL replay, frontend reducer) see.
+  // The frontend reducer at riftbound-online/lib/replay/reducer.ts already
+  // aliases both cases — this alias keeps the type contract consistent.
+  action:
+    | 'play_card'
+    | 'attack'
+    | 'move'
+    | 'move_unit'
+    | 'pass'
+    | 'activate_ability'
+    | 'end_turn'
+    | 'hide_card'
+    | 'activate_hidden';
   cardId?: string;
   targetId?: string;
   timestamp: number;
