@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import logger from './logger';
-import { GameStatus, RiftboundGameEngine } from './game-engine';
+import {
+  CardType,
+  Domain,
+  GameStatus,
+  PlayerDeckConfig,
+  RiftboundGameEngine,
+  RuneCard
+} from './game-engine';
 import { serializeGameState } from './game-state-serializer';
 import { persistEngineSnapshot, matchSnapshotExists } from './match-routes';
 import {
@@ -9,13 +16,240 @@ import {
 } from './graphql/pubsub';
 import { recordFrame } from './replay-frame-store';
 import {
-  buildDeckConfigForGame,
   dispatchAction,
   enumerateLegalActions,
   getBot,
   makeRng,
+  pickBattlefieldRecords,
+  pickPlayableCards,
+  Rng,
   StrategyName
 } from './self-play';
+import { EnrichedCardRecord, getCardCatalog } from './card-catalog';
+
+// ---------------------------------------------------------------------------
+// Bot deck construction — draws from the full 723-card catalog.
+// ---------------------------------------------------------------------------
+
+const BOT_MAIN_DECK_SIZE = 40;
+const BOT_MAX_COPIES_NON_LEGEND = 3;
+const BOT_MAX_COPIES_LEGEND = 1;
+const BOT_RUNE_DECK_SIZE = 12;
+
+const DOMAIN_ENUM_LIST: Domain[] = Object.values(Domain) as Domain[];
+const TITLECASE_TO_DOMAIN: Record<string, Domain> = {
+  fury: Domain.FURY,
+  calm: Domain.CALM,
+  mind: Domain.MIND,
+  body: Domain.BODY,
+  chaos: Domain.CHAOS,
+  order: Domain.ORDER
+};
+
+const isColorlessRecord = (card: EnrichedCardRecord): boolean => {
+  const colors = card.colors ?? [];
+  if (colors.length === 0) return true;
+  return colors.every((c) => c.toLowerCase() === 'colorless');
+};
+
+const recordMatchesDomains = (
+  card: EnrichedCardRecord,
+  chosen: Set<Domain>
+): boolean => {
+  const colors = card.colors ?? [];
+  if (colors.length === 0) return true; // truly colorless -> universal
+  for (const raw of colors) {
+    const key = raw.toLowerCase();
+    if (key === 'colorless') return true;
+    const domain = TITLECASE_TO_DOMAIN[key];
+    if (domain && chosen.has(domain)) return true;
+  }
+  return false;
+};
+
+const shuffleRng = <T>(arr: T[], rng: Rng): T[] => {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = rng.int(i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+};
+
+const buildBotRuneDeck = (rng: Rng): RuneCard[] => {
+  const runes: RuneCard[] = [];
+  for (let i = 0; i < BOT_RUNE_DECK_SIZE; i++) {
+    const domain = DOMAIN_ENUM_LIST[i % DOMAIN_ENUM_LIST.length];
+    runes.push({
+      id: `bot-rune-${i}`,
+      name: `Bot Rune ${i}`,
+      domain,
+      energyValue: 1,
+      powerValue: 1,
+      slug: `bot-rune-${i}`,
+      assets: null,
+      isTapped: false,
+      cardSnapshot: null
+    });
+  }
+  return shuffleRng(runes, rng);
+};
+
+const buildSyntheticBotBattlefield = (seed: string) => ({
+  id: `bot-battlefield-${seed}`,
+  slug: `bot-battlefield-${seed}`,
+  name: `Bot Battlefield ${seed}`,
+  type: CardType.ENCHANTMENT,
+  tags: ['Battlefield'],
+  colors: [],
+  keywords: [],
+  text: 'A synthetic battlefield used when catalog load fails.',
+  metadata: {}
+});
+
+/**
+ * Build a legal-ish 40-card bot deck drawing from the full catalog.
+ *
+ * - Picks 1-2 random domains per bot; admits colorless cards universally.
+ * - Enforces max 3 copies per non-legend card, max 1 copy per legend.
+ * - Deck entries are card-id strings; the engine's DeckCardEntry union
+ *   accepts raw ids and will hydrate them against the catalog at init.
+ * - Battlefield is drawn from the catalog's battlefield records when
+ *   available; falls back to a synthetic enchantment otherwise.
+ * - Runes remain synthetic (out of scope for catalog-backed decks).
+ *
+ * On catalog load failure the whole thing falls back to a synthetic deck
+ * so bot matches still start, same behavior as the previous --quick path.
+ */
+const buildBotDeck = (
+  rng: Rng,
+  seedLabel: string
+): PlayerDeckConfig => {
+  let catalog: EnrichedCardRecord[];
+  try {
+    catalog = getCardCatalog();
+  } catch (error) {
+    logger.warn('[BOT-MATCH] catalog load failed, using synthetic fallback deck', {
+      seedLabel,
+      error: (error as Error).message
+    });
+    const synthetic: string[] = [];
+    for (let i = 0; i < BOT_MAIN_DECK_SIZE; i++) {
+      synthetic.push(`synthetic-bot-card-${seedLabel}-${i}`);
+    }
+    return {
+      mainDeck: synthetic,
+      runeDeck: buildBotRuneDeck(rng),
+      battlefields: [buildSyntheticBotBattlefield(seedLabel)] as any,
+      championLegend: null,
+      championLeader: null
+    };
+  }
+
+  const playable = pickPlayableCards(catalog);
+  const battlefieldRecords = pickBattlefieldRecords(catalog);
+
+  // Pick 1-2 random domains. Weighted toward two-domain (60/40) to match
+  // typical riftbound constructed decks.
+  const shuffledDomains = shuffleRng(DOMAIN_ENUM_LIST, rng);
+  const domainCount = rng.next() < 0.6 ? 2 : 1;
+  const chosen = new Set<Domain>(shuffledDomains.slice(0, domainCount));
+
+  // Split playable pool into on-domain + colorless vs. off-domain.
+  const onDomain = playable.filter(
+    (c) => recordMatchesDomains(c, chosen) && !isColorlessRecord(c)
+  );
+  const colorless = playable.filter((c) => isColorlessRecord(c));
+
+  // Shuffle both sub-pools and splice colorless in so ordering is randomized.
+  const shuffledOnDomain = shuffleRng(onDomain, rng);
+  const shuffledColorless = shuffleRng(colorless, rng);
+
+  // Build main deck respecting copy limits.
+  const copies = new Map<string, number>();
+  const mainDeck: string[] = [];
+
+  const tryAdd = (card: EnrichedCardRecord): boolean => {
+    const limit =
+      (card.type ?? '').toLowerCase() === 'legend'
+        ? BOT_MAX_COPIES_LEGEND
+        : BOT_MAX_COPIES_NON_LEGEND;
+    const current = copies.get(card.id) ?? 0;
+    if (current >= limit) return false;
+    copies.set(card.id, current + 1);
+    mainDeck.push(card.id);
+    return true;
+  };
+
+  // Pass 1: seed some copies from on-domain pool (multiple passes so we
+  // can stack up to the copy limit).
+  for (let pass = 0; pass < BOT_MAX_COPIES_NON_LEGEND && mainDeck.length < BOT_MAIN_DECK_SIZE; pass++) {
+    for (const card of shuffledOnDomain) {
+      if (mainDeck.length >= BOT_MAIN_DECK_SIZE) break;
+      tryAdd(card);
+    }
+  }
+
+  // Pass 2: top up with colorless staples if we still haven't hit 40.
+  for (let pass = 0; pass < BOT_MAX_COPIES_NON_LEGEND && mainDeck.length < BOT_MAIN_DECK_SIZE; pass++) {
+    for (const card of shuffledColorless) {
+      if (mainDeck.length >= BOT_MAIN_DECK_SIZE) break;
+      tryAdd(card);
+    }
+  }
+
+  // Pass 3: last-resort widen to any playable if the chosen domains were
+  // too narrow (shouldn't happen with 723 cards and 100+ per domain, but
+  // guard against data drift).
+  if (mainDeck.length < BOT_MAIN_DECK_SIZE) {
+    const anyCards = shuffleRng(playable, rng);
+    for (let pass = 0; pass < BOT_MAX_COPIES_NON_LEGEND && mainDeck.length < BOT_MAIN_DECK_SIZE; pass++) {
+      for (const card of anyCards) {
+        if (mainDeck.length >= BOT_MAIN_DECK_SIZE) break;
+        tryAdd(card);
+      }
+    }
+  }
+
+  // Battlefield: draw one from catalog, else synthetic.
+  let battlefields: any[];
+  if (battlefieldRecords.length > 0) {
+    const shuffledBf = shuffleRng(battlefieldRecords, rng);
+    const bf = shuffledBf[0];
+    battlefields = [
+      {
+        id: bf.id,
+        slug: bf.slug,
+        name: bf.name,
+        type: CardType.ENCHANTMENT,
+        tags: bf.tags && bf.tags.length > 0 ? bf.tags : ['Battlefield'],
+        colors: bf.colors ?? [],
+        keywords: bf.keywords ?? [],
+        text: bf.effect ?? '',
+        metadata: {}
+      }
+    ];
+  } else {
+    battlefields = [buildSyntheticBotBattlefield(seedLabel)];
+  }
+
+  logger.info('[BOT-MATCH] built bot deck from full catalog', {
+    seedLabel,
+    catalogSize: catalog.length,
+    playablePool: playable.length,
+    domains: Array.from(chosen),
+    mainDeckSize: mainDeck.length,
+    uniqueCards: copies.size
+  });
+
+  return {
+    mainDeck,
+    runeDeck: buildBotRuneDeck(rng),
+    battlefields,
+    championLegend: null,
+    championLeader: null
+  };
+};
 
 const hashSeed = (s: string): number => {
   let h = 2166136261 >>> 0;
@@ -223,6 +457,26 @@ const driveMatch = async (
           action: action?.kind,
           error: (error as Error).message
         });
+        // Force forward progress so a persistently-illegal action (e.g. a
+        // commence_battle on a battlefield the engine already resolved this
+        // turn) can't livelock the driver. advance_phase is a no-op when the
+        // bot isn't the current player, so this is safe for both sides.
+        try {
+          dispatchAction(engine, pid, { kind: 'advance_phase' });
+          totalActions += 1;
+          progressed = true;
+        } catch {
+          // Fall back to pass_priority if we're mid-reaction/chain and can't
+          // advance the phase directly.
+          try {
+            dispatchAction(engine, pid, { kind: 'pass_priority' });
+            totalActions += 1;
+            progressed = true;
+          } catch {
+            // Last resort: leave progressed=false so the no-progress guard
+            // finalizes the match instead of spinning.
+          }
+        }
       }
     }
 
@@ -285,9 +539,10 @@ export const startBotMatch = async (
     { playerId: players[0], name: `Bot A (${strategies[0]})` },
     { playerId: players[1], name: `Bot B (${strategies[1]})` }
   ]);
-  const deckRng = makeRng(hashSeed(`${matchId}:deck`));
-  const deckA = buildDeckConfigForGame(deckRng, 0, null, null, true);
-  const deckB = buildDeckConfigForGame(deckRng, 1, null, null, true);
+  const deckRngA = makeRng(hashSeed(`${matchId}:deckA`));
+  const deckRngB = makeRng(hashSeed(`${matchId}:deckB`));
+  const deckA = buildBotDeck(deckRngA, `${matchId}:A`);
+  const deckB = buildBotDeck(deckRngB, `${matchId}:B`);
   engine.initializeGame({ [players[0]]: deckA, [players[1]]: deckB });
 
   await persistEngineSnapshot(matchId, engine);
