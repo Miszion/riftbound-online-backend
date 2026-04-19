@@ -1441,6 +1441,16 @@ export type RiftboundOp =
       targetPlayer?: PlayerId;               // required for variants take_focus, grant_priority, extra_action, skip_priority_pass
       windowScope?: 'this_chain' | 'this_showdown' | 'this_turn';
     }
+
+  // Section 18.1 - Transform ("become a copy of") - Phase 8a
+  | {
+      type: 'transform';
+      to?: InstanceId;                        // single target; ignored when `targets` is provided
+      targets?: InstanceId[];                 // multi-target form (UNL-081 spawns two tokens and transforms both)
+      from?: InstanceId;                      // copy-source instance; defaults to the dispatch source
+      fromTemplate?: string;                  // optional template-id copy source (no printed use yet)
+      reason?: 'become_copy' | 'face_flip' | 'alt_form';
+    }
   ;
 
 // Extend the Phase 1 EffectOp union
@@ -1453,3 +1463,26 @@ Validation pre-contract for Phase 2b handlers (each handler implements these or 
 - `execute` must not mutate `ctx`; it returns patches. Follow the OpResult shape in section 12.
 - Where this section noted "emit a Cleanup", that means pushing a cleanup task onto the outstanding-tasks queue (section 5.3), not running the Cleanup inline.
 - Where this section noted "emit a trigger fire", that means appending a `TriggerFire` to `OpResult.triggeredAbilities` for the outer engine to APNAP-order (section 1.3).
+
+### 18.1 Transform ("become a copy of") - Phase 8a
+
+Rules anchor: the Riftbound core rules do NOT define a formal "transform" action. The label comes from the enricher's text classifier and currently tags exactly one printed card, UNL-081 "Keeper of Masks" (see `docs/effect-ops-frequency-phase7.csv` line 56, count=1). The only semantic we can derive from printed text is section 6.4 "Tokens copying real cards": one or more target units snapshot the public characteristics of a source unit. Rule 110 (temp-mod strip) is applied at characteristic-resolution time, not at transform dispatch.
+
+State-shape change to `EngineCtx`: none. The handler emits patches at `/units/<targetInstanceId>/copyOf` writing `{ source: InstanceId, reason: 'become_copy' | 'face_flip' | 'alt_form' }`. Consumers that compute effective characteristics (might, keywords, abilities) must read `copyOf` and dereference the snapshot-source. Attachments, damage, buffs, and granted temporary keywords on the target are NOT mirrored from the source (rule 110, spec 6.4).
+
+Concrete op shape: see section 18 above. `to` OR `targets` must be present; `from` defaults to the dispatch source (the UNL-081 "copies of me" pattern). Self-copy (`to === from`) is a logged no-op. Missing target or missing source fails `validate`.
+
+Example (UNL-081 "Keeper of Masks", clause 2 "They become copies of me"):
+
+```ts
+// Dispatched once the two Reflection tokens from clause 1 have been
+// spawned by the `create_token` op. `source` is the Keeper's instance.
+const op: EffectOp = {
+  type: 'transform',
+  targets: ['reflection-token-1', 'reflection-token-2'],
+  from: 'keeper-of-masks-instance',
+  reason: 'become_copy'
+};
+```
+
+Trigger handling: the only printed case targets freshly spawned tokens with no prior form, so no on-leave triggers fire from this handler. A future face-flip mechanic that replaces an on-board unit's form must extend this handler's `OpResult.triggeredAbilities` with the on-leave-of-prior-form / on-enter-of-new-form fan-out.

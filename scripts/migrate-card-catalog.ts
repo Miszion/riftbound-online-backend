@@ -17,6 +17,13 @@
  *           `extra_action`, `skip_priority_pass`) remain in operations[] as
  *           genuine priority manipulation.
  *
+ * PHASE 8b UPDATE (2026-04-18): Fix 1 and Fix 2 are now handled upstream in
+ * the enricher itself (scripts/data/transformChampionDump.ts + its mirror in
+ * src/card-catalog.ts). Both fixes SHOULD be a no-op on fresh catalogs.
+ * This script is retained as defense-in-depth so a future enricher
+ * regression can be rolled forward without re-scraping the source dump.
+ * See docs/phase-3-etl-migration.md and docs/phase-7-coverage-audit.md.
+ *
  * Idempotent: running the script twice is a no-op after the first pass.
  * Logs ETL-style counters to stdout. --dry-run skips the disk write.
  *

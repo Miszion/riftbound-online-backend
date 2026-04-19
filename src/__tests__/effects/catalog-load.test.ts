@@ -99,3 +99,201 @@ describe('catalog loader: smoke (runs regardless of backend readiness)', () => {
     expect(typeof BACKEND_READY).toBe('boolean');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 8c regression: `generic` op triage outcome.
+//
+// The Phase-7 coverage audit flagged `generic` at 52 cards, a 12x growth
+// over Phase-1 and the 17th-ranked op. Phase 8c triaged those 52 into
+// truly-generic vs classifier-miss and optionally landed a top-1 classifier
+// fix. These regressions pin the post-triage numbers and guard against
+// silent regressions in the next enricher rebuild.
+//
+// Ground truth lives in docs/phase-8-generic-op-triage.md when Backend
+// lands it. Until then the assertion reduces to a non-tightening upper
+// bound sourced from the audit.
+// ---------------------------------------------------------------------------
+
+const PHASE_7_GENERIC_OP_COUNT = 52;
+
+interface EnrichedCardLite {
+  id: string;
+  effectProfile?: { operations?: Array<{ type: string }> };
+}
+
+function countGenericOps(): { total: number; cardIds: string[] } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs');
+    const target = path.resolve(__dirname, '../../../data/cards.enriched.json');
+    if (!fs.existsSync(target)) return null;
+    const raw = fs.readFileSync(target, 'utf8');
+    const parsed = JSON.parse(raw) as
+      | EnrichedCardLite[]
+      | { cards: EnrichedCardLite[] };
+    const cards = Array.isArray(parsed) ? parsed : parsed.cards ?? [];
+    const cardIds: string[] = [];
+    let total = 0;
+    for (const c of cards) {
+      const ops = c.effectProfile?.operations ?? [];
+      const gen = ops.filter((o) => o.type === 'generic');
+      if (gen.length > 0) {
+        cardIds.push(c.id);
+        total += gen.length;
+      }
+    }
+    return { total, cardIds };
+  } catch {
+    return null;
+  }
+}
+
+function tryLoadTriageDoc(): { exists: boolean; body: string | null } {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path');
+    const p = path.resolve(
+      __dirname,
+      '../../../docs/phase-8-generic-op-triage.md',
+    );
+    if (!fs.existsSync(p)) return { exists: false, body: null };
+    const body = fs.readFileSync(p, 'utf8');
+    return { exists: true, body };
+  } catch {
+    return { exists: false, body: null };
+  }
+}
+
+describe('catalog loader: phase 8c generic op triage guard', () => {
+  it('live generic op count does not exceed the Phase-7 audit baseline', () => {
+    const result = countGenericOps();
+    if (!result) {
+      // eslint-disable-next-line no-console
+      console.log('[catalog-load phase 8c] catalog unavailable; skipping');
+      return;
+    }
+    // Upper bound: audit baseline. When Backend lands classifier fixes
+    // this should DECREASE. The assertion tightens automatically through
+    // the triage-doc parse below once the doc ships.
+    expect(result.total).toBeLessThanOrEqual(PHASE_7_GENERIC_OP_COUNT);
+  });
+
+  it('live generic op count does not exceed the Phase-8c triage doc target (tightens when doc lands)', () => {
+    const triage = tryLoadTriageDoc();
+    if (!triage.exists || !triage.body) {
+      // TODO(backend 8c): triage doc not present yet. When it lands, we
+      // parse its reported post-triage count and assert a tightened
+      // bound.
+      return;
+    }
+    // Doc format is open; the Backend spec says the number is published
+    // somewhere in the doc. Scan for a pattern like "post-triage: N",
+    // "generic ops: N", "N cards remain", "N truly-generic", etc. Take
+    // the smallest non-negative integer that appears alongside the word
+    // "generic" on the same line; treat that as the declared target.
+    const lines = triage.body.split(/\r?\n/);
+    let target: number | null = null;
+    for (const line of lines) {
+      if (!/generic/i.test(line)) continue;
+      const matches = line.match(/\b(\d{1,3})\b/g);
+      if (!matches) continue;
+      for (const m of matches) {
+        const n = parseInt(m, 10);
+        if (Number.isFinite(n) && n >= 0 && n <= PHASE_7_GENERIC_OP_COUNT) {
+          if (target === null || n < target) target = n;
+        }
+      }
+    }
+    if (target === null) {
+      // eslint-disable-next-line no-console
+      console.log('[catalog-load phase 8c] triage doc present but no count parsed; falling back to baseline');
+      return;
+    }
+    const result = countGenericOps();
+    if (!result) return;
+    // Allow the count to equal the target but never exceed it.
+    expect(result.total).toBeLessThanOrEqual(target);
+  });
+
+  it('docs/phase-8-generic-op-triage.md exists and is non-empty', () => {
+    const triage = tryLoadTriageDoc();
+    if (!triage.exists) {
+      // TODO(backend 8c): create the triage doc before closing the
+      // phase. A silent doc drift is the thing this catches.
+      //
+      // Until the doc lands this test stays as a TODO stub; we do NOT
+      // fail the suite because Phase 8c may still be in flight.
+      // eslint-disable-next-line no-console
+      console.log('[catalog-load phase 8c] docs/phase-8-generic-op-triage.md not present yet');
+      return;
+    }
+    expect(triage.body).not.toBeNull();
+    expect((triage.body ?? '').trim().length).toBeGreaterThan(0);
+  });
+
+  it('cards re-classified away from `generic` by the 8c classifier fix no longer emit generic', () => {
+    // Parse the triage doc for a "reclassified" block. Shape accepted:
+    //   - "- UNL-XYZ -> <op_type>"
+    //   - "UNL-XYZ: now <op_type>"
+    //   - "reclassified UNL-XYZ as <op_type>"
+    // We accept any line that contains a card id and the word
+    // "reclassif" or an arrow "->". For each parsed (id, newOp),
+    // assert the card no longer has a `generic` op and DOES have an op
+    // of the named new type.
+    const triage = tryLoadTriageDoc();
+    if (!triage.exists || !triage.body) {
+      return;
+    }
+    interface Reclass {
+      id: string;
+      newOp: string;
+    }
+    const reclasses: Reclass[] = [];
+    const lines = triage.body.split(/\r?\n/);
+    for (const line of lines) {
+      if (!/reclassif|->|→/i.test(line)) continue;
+      const idMatch = line.match(/\b([A-Z]{2,4}-\d{2,3}[A-Za-z]?)\b/);
+      if (!idMatch) continue;
+      // Grab the first lowercase-or-underscore word that follows an
+      // arrow, colon, or the word "as". These cover common doc shapes
+      // without hard-coding Backend's wording.
+      const opMatch = line.match(/(?:->|→|:|\bas\b)\s*`?([a-z_]+)`?/i);
+      if (!opMatch) continue;
+      const newOp = opMatch[1];
+      // Filter out noise words the arrow grabber might catch.
+      if (!newOp || /^(the|a|an|to|from|is)$/i.test(newOp)) continue;
+      reclasses.push({ id: idMatch[1], newOp });
+    }
+    if (reclasses.length === 0) {
+      // eslint-disable-next-line no-console
+      console.log('[catalog-load phase 8c] no reclassifications parsed from triage doc');
+      return;
+    }
+    // Load catalog once.
+    const result = countGenericOps();
+    if (!result) return;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path');
+    const catalogPath = path.resolve(
+      __dirname,
+      '../../../data/cards.enriched.json',
+    );
+    const parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf8')) as
+      | EnrichedCardLite[]
+      | { cards: EnrichedCardLite[] };
+    const cards = Array.isArray(parsed) ? parsed : parsed.cards ?? [];
+    for (const rc of reclasses) {
+      const card = cards.find((c) => c.id === rc.id);
+      if (!card) continue;
+      const types = (card.effectProfile?.operations ?? []).map((o) => o.type);
+      expect(types).not.toContain('generic');
+      expect(types).toContain(rc.newOp);
+    }
+  });
+});

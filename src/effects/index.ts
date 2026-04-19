@@ -73,6 +73,7 @@ import {
   targetingDiscountHandler
 } from './handlers/costs';
 import { genericHandler, abilityCopyHandler } from './handlers/misc';
+import { transformHandler } from './handlers/transform';
 
 export { OpHandlerRegistry } from './registry';
 export { TriggerRegistry } from './triggers';
@@ -88,8 +89,9 @@ export {
 export * from './types';
 
 /**
- * Builds the registry with the 54-op set (Phase 2 top-24 + Phase 3
- * long-tail 30). Call once at engine boot. Ops outside this list fail
+ * Builds the registry with the 56-op set (Phase 2 top-24 + Phase 3
+ * long-tail 30 + Phase 7 rune_resource defense-in-depth + Phase 8a
+ * `transform`). Call once at engine boot. Ops outside this list fail
  * soft via the dispatcher (warn + empty OpResult).
  */
 export function buildDefaultRegistry(): OpHandlerRegistry {
@@ -153,7 +155,10 @@ export function buildDefaultRegistry(): OpHandlerRegistry {
     conditionalBuffHandler,
     hideModifierHandler,
     millCardsHandler,
-    adjustMulliganHandler
+    adjustMulliganHandler,
+    // Phase 8a: covers UNL-081 "Keeper of Masks" "become copies of me"
+    // (docs/effect-ops-frequency-phase7.csv line 56, count=1).
+    transformHandler
   ] as unknown as OpHandler<EffectOp>[];
   registry.registerAll(handlers);
   return registry;

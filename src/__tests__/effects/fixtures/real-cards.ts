@@ -747,6 +747,32 @@ export const SFD_141_IRELIA: FixtureCard = {
   },
 };
 
+// UNL-081 Keeper of Masks. The sole card in Phase-7 catalog emitting the
+// `transform` op (see docs/phase-7-coverage-audit.md sections 2.2 / 4).
+// Backend Phase 8a lands either a real transformHandler (Path A) or a no-op
+// placeholder + enricher migration plan (Path B). This fixture lets the
+// transform regression test dispatch the op without reaching into
+// data/cards.enriched.json directly. Op list below mirrors the catalog
+// verbatim as of 2026-04-19T03:28:03.221Z.
+export const UNL_081_KEEPER_OF_MASKS: FixtureCard = {
+  id: 'UNL-081',
+  name: 'Keeper of Masks',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['token', 'removal', 'transform', 'on_play', 'keyword_hidden', 'phase_trigger'],
+    operations: [
+      { type: 'create_token' },
+      { type: 'remove_permanent' },
+      { type: 'transform' },
+      { type: 'on_play_trigger' },
+      { type: 'keyword_hidden' },
+      { type: 'phase_trigger' },
+    ],
+  },
+};
+
 export const FIXTURES = {
   OGN_179_ACCEPTABLE_LOSSES,
   OGN_056_ADAPTATRON,
@@ -797,4 +823,6 @@ export const FIXTURES = {
   OGN_060_MASK_OF_FORESIGHT,
   OGN_109_DR_MUNDO,
   SFD_141_IRELIA,
+  // Phase 8a: the sole catalog emitter of the `transform` op.
+  UNL_081_KEEPER_OF_MASKS,
 };
