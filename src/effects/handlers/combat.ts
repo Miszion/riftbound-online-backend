@@ -323,6 +323,27 @@ export const shieldHandler: OpHandler<{ type: 'shield' }> = {
           : operation.magnitudeHint ?? 1;
     const value = Math.max(1, rawValue);
     const duration = op.duration ?? 'this_turn';
+
+    // Engine adapter path: register a prevent_damage temporary effect on the
+    // live RiftboundGameEngine so PlayerState.temporaryEffects reflects the
+    // shield. Patch emission remains so patch-consuming callers still see it.
+    if (ctx.engine?.applyTemporaryEffect) {
+      const shieldTargets = resolveBoardTargets(ctx);
+      for (const target of shieldTargets) {
+        if (target.type !== CardType.CREATURE) continue;
+        ctx.engine.applyTemporaryEffect(target.instanceId, {
+          id: `shield_${Date.now()}_${target.instanceId}`,
+          affectedCards: [target.instanceId],
+          // Rule 417.5: shields expire at the end of the current turn; the
+          // begin-turn tick in resolveTemporaryEffects decrements and clears.
+          duration: 1,
+          effect: {
+            type: 'prevent_damage',
+            value
+          }
+        });
+      }
+    }
     // Shields stack (rule 417.5 summed value). Append a fresh entry every
     // time; do not dedup. The layers engine sums across matching source.
     patches.push({
@@ -374,11 +395,7 @@ export const healHandler: OpHandler<{ type: 'heal' }> = {
   execute(ctx: EngineCtx, _op): OpResult {
     const op = _op as unknown as HealOp;
     const operation = _op as unknown as { magnitudeHint?: number };
-    const targetId = op.target;
-    if (!targetId) return emptyResult();
 
-    const patches: Patch[] = [];
-    const log: LogEntry[] = [];
     // No coercion: amount=0 must short-circuit with zero damage patches so
     // the idempotency contract (rule 419) holds.
     const amount =
@@ -387,6 +404,30 @@ export const healHandler: OpHandler<{ type: 'heal' }> = {
         : typeof operation.magnitudeHint === 'number'
           ? operation.magnitudeHint
           : 1;
+
+    // Engine adapter path: restore toughness on the live engine creatures
+    // resolved from operationContext targets so PlayerState damage state
+    // actually reflects the heal.
+    if (ctx.engine) {
+      const healTargets = resolveBoardTargets(ctx);
+      if (amount > 0) {
+        for (const target of healTargets) {
+          if (target.type !== CardType.CREATURE) continue;
+          const baseToughness = target.toughness ?? target.currentToughness;
+          const healed = Math.min(
+            baseToughness,
+            (target.currentToughness ?? baseToughness) + amount
+          );
+          target.currentToughness = healed;
+        }
+      }
+    }
+
+    const targetId = op.target;
+    if (!targetId) return emptyResult();
+
+    const patches: Patch[] = [];
+    const log: LogEntry[] = [];
     if (amount <= 0) {
       log.push({ tick: 0, kind: 'heal_noop_zero_amount', payload: { target: targetId } });
       return { patches, triggeredAbilities: [], log };
