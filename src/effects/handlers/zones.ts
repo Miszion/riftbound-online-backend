@@ -471,6 +471,62 @@ export const discardCardsHandler: OpHandler<{ type: 'discard_cards' }> = {
   op: 'discard_cards',
   execute(ctx: EngineCtx, _op, source): OpResult {
     const op = _op as unknown as DiscardCardsOp;
+    const operation = _op as unknown as {
+      targetHint?: 'self' | 'enemy';
+      magnitudeHint?: number;
+    };
+
+    // Engine adapter path: mutate PlayerState.hand/graveyard directly so the
+    // legacy RiftboundGameEngine reflects the discard. Handlers rooted in
+    // the patch-only path never mutated real engine state, which regressed
+    // the discard_cards regression suites (caster and opponent-target
+    // variants). The adapter path mirrors the rules-compliant semantics:
+    //  - targetHint='enemy' discards from the opponent's hand
+    //  - default ('self' or absent) discards from the caster's hand
+    //  - magnitudeHint clamps to [1..hand.length]
+    // Cards removed go to the player's graveyard in hand-order (top first)
+    // unless an explicit targets list picks them by card id.
+    if (ctx.engine && ctx.caster) {
+      const targetPlayer =
+        operation.targetHint === 'enemy'
+          ? ctx.engine.getOtherPlayer(ctx.caster)
+          : ctx.caster;
+      const rawCount = typeof operation.magnitudeHint === 'number'
+        ? operation.magnitudeHint
+        : Math.max(0, op.count ?? 1);
+      const count = Math.max(0, rawCount);
+      if (count === 0 || targetPlayer.hand.length === 0) {
+        return emptyResult();
+      }
+
+      // Prefer explicit targets (matched by id), else take from top of hand.
+      const indices: number[] = [];
+      if (op.targets && op.targets.length > 0) {
+        for (const id of op.targets) {
+          const idx = targetPlayer.hand.findIndex(
+            (c) => (c as unknown as { instanceId?: string }).instanceId === id || c.id === id
+          );
+          if (idx >= 0 && !indices.includes(idx)) indices.push(idx);
+        }
+      } else {
+        const n = Math.min(count, targetPlayer.hand.length);
+        for (let i = 0; i < n; i += 1) indices.push(i);
+      }
+      if (indices.length === 0) return emptyResult();
+      // Splice highest first so lower indices stay valid.
+      const sortedDesc = [...indices].sort((a, b) => b - a);
+      const discarded: typeof targetPlayer.hand = [];
+      for (const idx of sortedDesc) {
+        const [card] = targetPlayer.hand.splice(idx, 1);
+        if (card) discarded.push(card);
+      }
+      // Graveyard gets discards in original-order for log readability.
+      discarded.reverse();
+      targetPlayer.graveyard.push(...discarded);
+      ctx.engine.logRuleUsage?.(source as never, 'discard_cards');
+      return emptyResult();
+    }
+
     const patches: Patch[] = [];
     const triggered: TriggerFire[] = [];
     const log: LogEntry[] = [];
