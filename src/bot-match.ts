@@ -76,7 +76,33 @@ const shuffleRng = <T>(arr: T[], rng: Rng): T[] => {
   return out;
 };
 
-const buildBotRuneDeck = (rng: Rng): RuneCard[] => {
+const pickCatalogRuneRecords = (
+  catalog: EnrichedCardRecord[]
+): EnrichedCardRecord[] => {
+  return catalog.filter((c) => {
+    const type = (c.type ?? '').toLowerCase();
+    const tags = (c.tags ?? []).map((t) => t.toLowerCase());
+    return type === 'rune' || tags.includes('rune');
+  });
+};
+
+const catalogRuneToRuneCard = (record: EnrichedCardRecord): RuneCard => {
+  const firstColor = (record.colors ?? [])[0]?.toLowerCase();
+  const domain = firstColor ? TITLECASE_TO_DOMAIN[firstColor] : undefined;
+  return {
+    id: record.id,
+    name: record.name,
+    domain,
+    energyValue: 1,
+    powerValue: 1,
+    slug: record.slug,
+    assets: record.assets,
+    isTapped: false,
+    cardSnapshot: null
+  };
+};
+
+const buildSyntheticBotRuneDeck = (rng: Rng): RuneCard[] => {
   const runes: RuneCard[] = [];
   for (let i = 0; i < BOT_RUNE_DECK_SIZE; i++) {
     const domain = DOMAIN_ENUM_LIST[i % DOMAIN_ENUM_LIST.length];
@@ -92,6 +118,49 @@ const buildBotRuneDeck = (rng: Rng): RuneCard[] => {
       cardSnapshot: null
     });
   }
+  return shuffleRng(runes, rng);
+};
+
+/**
+ * Build a rune deck from the real catalog so live match runes carry
+ * the dotgg.gg `assets` the frontend spectate view renders. Picks 12
+ * runes biased toward the chosen deck domains, padding with any runes
+ * so we always hit BOT_RUNE_DECK_SIZE. Falls back to synthetic if the
+ * catalog has zero runes (never in practice; the 723-card dump has 18).
+ */
+const buildBotRuneDeck = (
+  rng: Rng,
+  catalog: EnrichedCardRecord[] | null,
+  chosenDomains: Set<Domain>
+): RuneCard[] => {
+  if (!catalog) return buildSyntheticBotRuneDeck(rng);
+  const runeRecords = pickCatalogRuneRecords(catalog);
+  if (runeRecords.length === 0) return buildSyntheticBotRuneDeck(rng);
+
+  const inDomain = runeRecords.filter((r) =>
+    recordMatchesDomains(r, chosenDomains)
+  );
+  const shuffledInDomain = shuffleRng(inDomain, rng);
+  const shuffledAll = shuffleRng(runeRecords, rng);
+
+  const runes: RuneCard[] = [];
+  // Pass 1: fill from on-domain pool, allowing repeats (cycling the pool).
+  let cursor = 0;
+  while (runes.length < BOT_RUNE_DECK_SIZE && shuffledInDomain.length > 0) {
+    const pick = shuffledInDomain[cursor % shuffledInDomain.length];
+    runes.push(catalogRuneToRuneCard(pick));
+    cursor += 1;
+    // Stop cycling if we've gone around several times already — let
+    // off-domain runes fill the rest so the deck isn't monotone.
+    if (cursor >= shuffledInDomain.length * 2) break;
+  }
+  // Pass 2: any-rune fallback to guarantee BOT_RUNE_DECK_SIZE.
+  let allCursor = 0;
+  while (runes.length < BOT_RUNE_DECK_SIZE && shuffledAll.length > 0) {
+    runes.push(catalogRuneToRuneCard(shuffledAll[allCursor % shuffledAll.length]));
+    allCursor += 1;
+  }
+  if (runes.length === 0) return buildSyntheticBotRuneDeck(rng);
   return shuffleRng(runes, rng);
 };
 
@@ -116,7 +185,9 @@ const buildSyntheticBotBattlefield = (seed: string) => ({
  *   accepts raw ids and will hydrate them against the catalog at init.
  * - Battlefield is drawn from the catalog's battlefield records when
  *   available; falls back to a synthetic enchantment otherwise.
- * - Runes remain synthetic (out of scope for catalog-backed decks).
+ * - Runes are drawn from the catalog's 18 rune records (6 domains x 3
+ *   variants) so live match runes carry dotgg.gg `assets` for the
+ *   frontend spectate view. Biased toward the chosen deck domains.
  *
  * On catalog load failure the whole thing falls back to a synthetic deck
  * so bot matches still start, same behavior as the previous --quick path.
@@ -139,7 +210,7 @@ const buildBotDeck = (
     }
     return {
       mainDeck: synthetic,
-      runeDeck: buildBotRuneDeck(rng),
+      runeDeck: buildBotRuneDeck(rng, null, new Set()),
       battlefields: [buildSyntheticBotBattlefield(seedLabel)] as any,
       championLegend: null,
       championLeader: null
@@ -244,7 +315,7 @@ const buildBotDeck = (
 
   return {
     mainDeck,
-    runeDeck: buildBotRuneDeck(rng),
+    runeDeck: buildBotRuneDeck(rng, catalog, chosen),
     battlefields,
     championLegend: null,
     championLeader: null
