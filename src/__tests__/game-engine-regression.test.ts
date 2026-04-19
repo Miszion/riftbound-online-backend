@@ -379,7 +379,16 @@ describe('Effect Operations - deal_damage', () => {
     expect(board.find((c) => c.instanceId === instanceId)).toBeUndefined();
   });
 
-  it('should throw when deal_damage has no targets (no boardTarget)', () => {
+  it('should soft no-op when deal_damage resolves with no boardTarget', () => {
+    // Phase-5d fix: the deal_damage handler now soft-fails when neither
+    // an explicit targets list nor a resolvable boardTarget is present.
+    // This path covers UNL-134 (Existential Dread) whose effectProfile
+    // emits deal_damage + stun + return_to_hand but whose printed text
+    // only stuns and bounces. See src/effects/handlers/combat.ts lines
+    // 200-206 and the phase-5d notes in docs/phase-5-coverage-baseline.md.
+    // Prior behavior (throw on missing target) is still the contract for
+    // deal_damage that DOES resolve a target but rejects it (e.g. a
+    // non-creature target); that path is exercised elsewhere.
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
 
@@ -390,7 +399,7 @@ describe('Effect Operations - deal_damage', () => {
       }
     });
 
-    expect(() => playSpellAndResolve(engine, pId, 0)).toThrow();
+    expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
 });
 
