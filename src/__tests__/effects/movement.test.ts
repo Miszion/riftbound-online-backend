@@ -18,6 +18,7 @@ import {
   EffectOp,
   CardInstance,
 } from './_harness';
+import { FIXTURES } from './fixtures/real-cards';
 
 beforeEach(() => {
   resetInstanceCounter();
@@ -207,6 +208,43 @@ describeIfBackend('follow_movement: registration-shaped (spec 15.5)', () => {
       makeCtx(),
     );
     expect(selfFires.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6 directed coverage for follow_movement.
+//
+// Only 2 cards in data/cards.enriched.json emit follow_movement (OGN-177
+// Stealthy Pursuer + its promo OGN-177-P). In 20 random bot matches with
+// 40-card decks, the odds of seeing OGN-177 on the board AND a friendly
+// move event trigger are low enough that the handler never fired in Phase
+// 5c. This test forces the dispatch with the real card's op shape from
+// the enriched catalog (targetHint='self', zone='board', automated=false).
+// ---------------------------------------------------------------------------
+
+describeIfBackend('follow_movement: real-card coverage (phase-6)', () => {
+  it('follow_movement: real-card happy path (OGN-177, phase-6 coverage)', () => {
+    const card = FIXTURES.OGN_177_STEALTHY_PURSUER_REAL;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('follow_movement');
+
+    const ctx = makeCtx();
+    const source = makeUnit({ instanceId: 'ogn-177-inst', cardId: card.id });
+    const op: EffectOp = {
+      type: 'follow_movement',
+      source: source.instanceId,
+      trigger: {
+        originMatch: 'self_location',
+        controllerMatch: 'friendly',
+      },
+      action: 'may_follow',
+    };
+    const res = BACKEND!.runOp(ctx, op, source);
+    // Registration shape: no location / presentUnits patches at register.
+    const disallowed = res.patches.some(
+      (p) => /location|presentUnits/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
   });
 });
 

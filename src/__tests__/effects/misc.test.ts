@@ -19,6 +19,7 @@ import {
   resetInstanceCounter,
   EffectOp,
 } from './_harness';
+import { FIXTURES } from './fixtures/real-cards';
 
 beforeEach(() => {
   resetInstanceCounter();
@@ -107,6 +108,52 @@ describeIfBackend('ability_copy: registration-shaped (rule 386)', () => {
     const logged = res.log.some(
       (l) => /copy|register|ability/i.test(l.kind),
     );
+    expect(logged).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6 directed coverage for dormant handlers.
+//
+// The Phase-5c 20-match bot-run hit 41/55 handlers (74.5%); ability_copy is
+// one of 12 dormant handlers that never fired in random play because only 3
+// real cards emit it (OGN-111, OGN-111a, ARC-003 promo). These are targeted
+// unit-ish tests that force a live dispatch through runOp with the card's
+// real op shape from data/cards.enriched.json. They supplement, not replace,
+// the bot-match baseline coverage number.
+// ---------------------------------------------------------------------------
+
+describeIfBackend('ability_copy: real-card coverage (phase-6)', () => {
+  it('ability_copy: real-card happy path (OGN-111, phase-6 coverage)', () => {
+    // OGN-111 Heimerdinger - Inventor emits [attach_gear, ability_copy] per
+    // data/cards.enriched.json effectProfile.operations. The real op carries
+    // targetHint='self' + automated=false + ruleRefs=['430-450']; we fold
+    // that metadata into the dispatch op so the handler sees the same shape
+    // a live match would produce. Rule 386 (Copy Ability) is vague on
+    // copy-targeting semantics for a self-targeted copy; the spec pins down
+    // only that registration MUST NOT mutate might/damage/exhausted and
+    // MUST NOT fire triggers at registration time. Assertions here match
+    // the Phase-3 synthetic contract above, sourced from the real card.
+    const card = FIXTURES.OGN_111_HEIMERDINGER;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('ability_copy');
+
+    const ctx = makeCtx();
+    const source = makeUnit({ instanceId: 'ogn-111-inst', cardId: card.id });
+    // Self-targeting per enricher: targetAbilitySource=source.instanceId.
+    const op: EffectOp = {
+      type: 'ability_copy',
+      source: source.instanceId,
+      targetAbilitySource: source.instanceId,
+    };
+    const res = BACKEND!.runOp(ctx, op, source);
+    // No imperative state mutation per rule 386 registration shape.
+    const disallowed = res.patches.some(
+      (p) => /damage|points|exhausted|\/might$/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
+    // Log trail for replay determinism.
+    const logged = res.log.some((l) => /copy|register|ability/i.test(l.kind));
     expect(logged).toBe(true);
   });
 });

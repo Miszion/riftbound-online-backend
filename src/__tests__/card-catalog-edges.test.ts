@@ -79,7 +79,13 @@ function makeEnrichedCard(
     assets: { remote: null, localPath: 'assets/card-images/test-001-card.webp' },
     pricing: { price: null, foilPrice: null, currency: 'USD' },
     references: { marketUrl: null, source: 'test' },
-    timingTags: []
+    timingTags: [],
+    // Phase 5a added isRuneResource as a required field on EnrichedCardRecord.
+    // The fixture helper defaults to false since these test records are
+    // spells / units by construction. Keeping this alongside the explicit
+    // constructor so new required fields fail loudly at the helper rather
+    // than leaking a partial-record TypeError into each caller site.
+    isRuneResource: false
   };
 }
 

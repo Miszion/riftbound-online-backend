@@ -563,6 +563,190 @@ export const OGN_109_RISING_CHAMPION: FixtureCard = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Phase 6 real-card fixtures. These are the actual card IDs in
+// data/cards.enriched.json that emit the 12 dormant ops. Phase 3 shipped
+// *synthetic* fixtures (above) under invented names; Phase 6 adds the real
+// IDs so the directed coverage tests exercise realistic op shapes sourced
+// from the enriched catalog. See docs/phase-6-coverage-gap.md framing.
+//
+// Op shapes mirror data/cards.enriched.json verbatim (targetHint / zone /
+// automated / ruleRefs). Where the real op carries no magnitudeHint and the
+// handler needs a magnitude anyway (aura_buff mightMod, heal amount), the
+// test builds a reasonable default inline and notes the spec ambiguity.
+// ---------------------------------------------------------------------------
+
+// OGN-111 Heimerdinger - Inventor. Real card emitting ability_copy.
+export const OGN_111_HEIMERDINGER: FixtureCard = {
+  id: 'OGN-111',
+  name: 'Heimerdinger - Inventor',
+  type: 'Unit',
+  tags: [],
+  keywords: ['Mind'],
+  effectProfile: {
+    classes: ['attachment', 'ability_copy'],
+    operations: [
+      { type: 'attach_gear' },
+      { type: 'ability_copy' },
+    ],
+  },
+};
+
+// UNL-147 Baron Nashor. Real card emitting aura_buff + play_restriction.
+export const UNL_147_BARON_NASHOR: FixtureCard = {
+  id: 'UNL-147',
+  name: 'Baron Nashor',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['token', 'movement', 'battlefield_control', 'aura_buff', 'tribal_synergy', 'play_restriction'],
+    operations: [
+      { type: 'create_token' },
+      { type: 'move_unit' },
+      { type: 'control_battlefield' },
+      { type: 'aura_buff' },
+      { type: 'tribal_synergy' },
+      { type: 'play_restriction' },
+    ],
+  },
+};
+
+// SFD-159 Trusty Ramhound. Real card emitting conditional_buff.
+// Note: same card ID as Phase-3 synthetic Steadfast Guard fixture, but real
+// name from catalog is Trusty Ramhound. We keep the real label here.
+export const SFD_159_TRUSTY_RAMHOUND: FixtureCard = {
+  id: 'SFD-159',
+  name: 'Trusty Ramhound',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['conditional_buff'],
+    operations: [{ type: 'conditional_buff' }],
+  },
+};
+
+// OGN-177 Stealthy Pursuer - real catalog label matches Phase-3 synthetic.
+// Re-exported under a Phase-6 alias so test files read as real-card fixtures.
+export const OGN_177_STEALTHY_PURSUER_REAL: FixtureCard = OGN_177_STEALTHY_PURSUER;
+
+// SFD-053 Janna - Savior. Real card emitting heal + move_unit + control_bf.
+export const SFD_053_JANNA: FixtureCard = {
+  id: 'SFD-053',
+  name: 'Janna - Savior',
+  type: 'Unit',
+  tags: [],
+  keywords: ['Mind'],
+  effectProfile: {
+    classes: ['heal', 'movement', 'battlefield_control', 'on_play'],
+    operations: [
+      { type: 'heal' },
+      { type: 'move_unit' },
+      { type: 'control_battlefield' },
+      { type: 'on_play_trigger' },
+    ],
+  },
+};
+
+// OGN-278 Bandle Tree. Real card emitting hide_modifier (battlefield type).
+export const OGN_278_BANDLE_TREE: FixtureCard = {
+  id: 'OGN-278',
+  name: 'Bandle Tree',
+  type: 'Battlefield',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['hide_modifier'],
+    operations: [{ type: 'hide_modifier' }],
+  },
+};
+
+// OGN-015 Captain Farron. Real card emitting location_aura + aura_buff.
+export const OGN_015_CAPTAIN_FARRON: FixtureCard = {
+  id: 'OGN-015',
+  name: 'Captain Farron',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['combat_bonus', 'aura_buff', 'location_aura'],
+    operations: [
+      { type: 'combat_bonus' },
+      { type: 'aura_buff' },
+      { type: 'location_aura' },
+    ],
+  },
+};
+
+// UNL-057 Alpha Wildclaw. Real card emitting play_restriction + keyword_tank.
+export const UNL_057_ALPHA_WILDCLAW: FixtureCard = {
+  id: 'UNL-057',
+  name: 'Alpha Wildclaw',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['keyword_tank', 'play_restriction'],
+    operations: [
+      { type: 'keyword_tank' },
+      { type: 'play_restriction' },
+    ],
+  },
+};
+
+// SFD-209 Forgotten Monument - real catalog label matches Phase-3 synthetic.
+// Alias as a Phase-6 real-card fixture for semantic clarity in tests.
+export const SFD_209_FORGOTTEN_MONUMENT_REAL: FixtureCard = SFD_209_FORGOTTEN_MONUMENT;
+
+// OGN-060 Mask of Foresight. Real card emitting solo_combat (a Gear, not a
+// Unit - the Phase-3 Lone Wolf synthetic was a unit; the real catalog entry
+// is a Gear that grants solo_combat via equip).
+export const OGN_060_MASK_OF_FORESIGHT: FixtureCard = {
+  id: 'OGN-060',
+  name: 'Mask of Foresight',
+  type: 'Gear',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['buff', 'solo_combat'],
+    operations: [
+      { type: 'modify_stats', magnitudeHint: 1 },
+      { type: 'solo_combat' },
+    ],
+  },
+};
+
+// OGN-109 Dr. Mundo - Expert. Real card emitting stat_scaling.
+export const OGN_109_DR_MUNDO: FixtureCard = {
+  id: 'OGN-109',
+  name: 'Dr. Mundo - Expert',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['recycle', 'stat_scaling', 'phase_trigger'],
+    operations: [
+      { type: 'recycle_card', magnitudeHint: 3 },
+      { type: 'stat_scaling' },
+      { type: 'phase_trigger' },
+    ],
+  },
+};
+
+// SFD-141 Irelia - Graceful. Real card emitting targeting_discount.
+export const SFD_141_IRELIA: FixtureCard = {
+  id: 'SFD-141',
+  name: 'Irelia - Graceful',
+  type: 'Unit',
+  tags: [],
+  keywords: [],
+  effectProfile: {
+    classes: ['targeting_discount'],
+    operations: [{ type: 'targeting_discount' }],
+  },
+};
+
 export const FIXTURES = {
   OGN_179_ACCEPTABLE_LOSSES,
   OGN_056_ADAPTATRON,
@@ -600,4 +784,17 @@ export const FIXTURES = {
   OGN_045_ARCANE_TAX,
   OGN_060_LONE_WOLF,
   OGN_109_RISING_CHAMPION,
+  // Phase 6 real-card fixtures for dormant handlers.
+  OGN_111_HEIMERDINGER,
+  UNL_147_BARON_NASHOR,
+  SFD_159_TRUSTY_RAMHOUND,
+  OGN_177_STEALTHY_PURSUER_REAL,
+  SFD_053_JANNA,
+  OGN_278_BANDLE_TREE,
+  OGN_015_CAPTAIN_FARRON,
+  UNL_057_ALPHA_WILDCLAW,
+  SFD_209_FORGOTTEN_MONUMENT_REAL,
+  OGN_060_MASK_OF_FORESIGHT,
+  OGN_109_DR_MUNDO,
+  SFD_141_IRELIA,
 };

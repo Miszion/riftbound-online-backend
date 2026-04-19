@@ -235,3 +235,43 @@ describeIfBackend('hide_modifier: registration-shaped (rule 472 layers)', () => 
     expect(newMutations.length).toBeLessThanOrEqual(first.patches.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 6 directed coverage for hide_modifier.
+//
+// Only 2 cards in data/cards.enriched.json emit hide_modifier (OGN-278
+// Bandle Tree + its OGN-278a promo). The real card is a BATTLEFIELD, not a
+// Gear (the Phase-3 synthetic OGN-278 Cloaked Blade fixture mislabeled the
+// type as Gear because the op was thought to live on equipment). This
+// Phase-6 test uses the real card type from data/cards.enriched.json so
+// the handler sees the op sourced from a Battlefield, mirroring live play.
+// Spec anchor: rule 472 (Layers engine) - hide_modifier conceals a granted
+// modifier until revealed; registration shape only.
+// ---------------------------------------------------------------------------
+
+describeIfBackend('hide_modifier: real-card coverage (phase-6)', () => {
+  it('hide_modifier: real-card happy path (OGN-278, phase-6 coverage)', () => {
+    const card = FIXTURES.OGN_278_BANDLE_TREE;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('hide_modifier');
+    // Real card is a Battlefield, not a Gear.
+    expect(card.type).toBe('Battlefield');
+
+    const ctx = makeCtx();
+    // Source is the battlefield card itself; we model it as a CardInstance
+    // of cardType Battlefield so the handler sees the real shape. makeUnit
+    // is adequate as a minimal CardInstance constructor; cardType override
+    // handles the type distinction.
+    const source = makeUnit({
+      instanceId: 'ogn-278-inst',
+      cardId: card.id,
+      cardType: 'Battlefield',
+    });
+    const op: EffectOp = { type: 'hide_modifier', source: source.instanceId };
+    const res = BACKEND!.runOp(ctx, op, source);
+    const disallowed = res.patches.some(
+      (p) => /damage|\/might$|exhausted|points/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
+  });
+});

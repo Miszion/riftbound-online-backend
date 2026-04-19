@@ -16,6 +16,7 @@ import {
   resetInstanceCounter,
   EffectOp,
 } from './_harness';
+import { FIXTURES } from './fixtures/real-cards';
 
 beforeEach(() => {
   resetInstanceCounter();
@@ -277,5 +278,107 @@ describeIfBackend('play_restriction: registration-shaped (rule 355)', () => {
     );
     expect(disallowed).toBe(false);
     expect(res.triggeredAbilities.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6 directed coverage for location_aura / play_restriction /
+// scoring_restriction. Spec section 13.5 (battlefields + scoring) anchors
+// all three. Phase 5c never fired these handlers because the emitting cards
+// are rare (location_aura=10, play_restriction=8, scoring_restriction=1)
+// and battlefields emit passives on ETB rather than via activated text
+// that the random bot is likely to stumble into. These tests use the real
+// card op shapes from data/cards.enriched.json.
+// ---------------------------------------------------------------------------
+
+describeIfBackend('location_aura: real-card coverage (phase-6)', () => {
+  it('location_aura: real-card happy path (OGN-015, phase-6 coverage)', () => {
+    // OGN-015 Captain Farron emits [combat_bonus, aura_buff, location_aura].
+    // Real op carries targetHint='any', zone='board', automated=true,
+    // ruleRefs=['430-450']. The enricher does not emit effect / magnitude on
+    // location_aura; the dispatch path supplies a reasonable default.
+    const card = FIXTURES.OGN_015_CAPTAIN_FARRON;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('location_aura');
+
+    const ctx = makeCtx();
+    const source = makeUnit({
+      instanceId: 'ogn-015-inst',
+      cardId: card.id,
+      controller: 'p1',
+    });
+    const op: EffectOp = {
+      type: 'location_aura',
+      source: source.instanceId,
+      battlefieldId: 'bf-1',
+      effect: 'might_bonus',
+      magnitude: 1,
+    };
+    const res = BACKEND!.runOp(ctx, op, source);
+    const disallowed = res.patches.some(
+      (p) => /\/might$|temporaryMightMod/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
+  });
+});
+
+describeIfBackend('play_restriction: real-card coverage (phase-6)', () => {
+  it('play_restriction: real-card happy path (UNL-057, phase-6 coverage)', () => {
+    // UNL-057 Alpha Wildclaw emits [keyword_tank, play_restriction]. Real
+    // op carries targetHint='any', zone='board', automated=true,
+    // ruleRefs=['340-360']. Rule 355 (cast/play restrictions) anchors the
+    // registration-only contract; the predicatePayload is enricher-opaque.
+    const card = FIXTURES.UNL_057_ALPHA_WILDCLAW;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('play_restriction');
+
+    const ctx = makeCtx();
+    const source = makeUnit({ instanceId: 'unl-057-inst', cardId: card.id });
+    const op: EffectOp = {
+      type: 'play_restriction',
+      source: source.instanceId,
+      predicateKind: 'custom',
+      predicatePayload: { note: 'Alpha Wildclaw play restriction' },
+    };
+    const res = BACKEND!.runOp(ctx, op, source);
+    const disallowed = res.patches.some(
+      (p) => /damage|points|exhausted|\/might$/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
+  });
+});
+
+describeIfBackend('scoring_restriction: real-card coverage (phase-6)', () => {
+  it('scoring_restriction: real-card happy path (SFD-209, phase-6 coverage)', () => {
+    // SFD-209 Forgotten Monument is the ONLY card in data/cards.enriched.json
+    // that emits scoring_restriction. Real op carries targetHint='any',
+    // zone='board', automated=true, ruleRefs=['106','437']. The card is a
+    // Battlefield; its scoring restriction is ambient-on-play.
+    const card = FIXTURES.SFD_209_FORGOTTEN_MONUMENT_REAL;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('scoring_restriction');
+    expect(card.type).toBe('Battlefield');
+
+    let ctx = makeCtx();
+    const source = makeUnit({
+      instanceId: 'sfd-209-inst',
+      cardId: card.id,
+      cardType: 'Battlefield',
+      controller: 'p1',
+    });
+    const op: EffectOp = {
+      type: 'scoring_restriction',
+      source: source.instanceId,
+      predicateKind: 'per_battlefield_turn_gate',
+      predicatePayload: { battlefieldId: 'bf-1', minTurn: 3 },
+    };
+    const res = BACKEND!.runOp(ctx, op, source);
+    // No points mutations at registration.
+    const disallowed = res.patches.some((p) => /points/.test(p.path));
+    expect(disallowed).toBe(false);
+    ctx = applyPatches(ctx, res.patches);
+    const published =
+      Array.isArray(ctx.scoringRestrictions) && ctx.scoringRestrictions.length > 0;
+    const logged = res.log.some((l) => /restriction|register/i.test(l.kind));
+    expect(published || logged).toBe(true);
   });
 });

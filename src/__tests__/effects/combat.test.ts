@@ -9,10 +9,12 @@ import {
   describeIfBackend,
   makeCtx,
   makeUnit,
+  makeGear,
   applyPatches,
   resetInstanceCounter,
   EffectOp,
 } from './_harness';
+import { FIXTURES } from './fixtures/real-cards';
 
 beforeEach(() => {
   resetInstanceCounter();
@@ -270,6 +272,90 @@ describeIfBackend('solo_combat: registration-shaped', () => {
     const op: EffectOp = { type: 'solo_combat', source: src.instanceId };
     const res = BACKEND!.runOp(ctx, op, src);
     // Not a damage/stat patch; only grantedKeywords / combat registry touches.
+    const disallowed = res.patches.some(
+      (p) => /damage|\/might$|exhausted/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6 directed coverage for heal + solo_combat.
+//
+// heal: 10 cards emit it (UNL-206 Altar of Blood, OGS-020 Highlander,
+// SFD-053 Janna - Savior, ...). solo_combat: 6 cards (OGN-060 Mask of
+// Foresight, UNL-210 Forbidding Waste, OGS-019 Master Yi - Wuju Starter,
+// ...). Both handlers missed the Phase-5c 20-match run because the cards
+// are rare and the specific triggers (damage remaining on friendlies for
+// heal, attack alone condition for solo_combat) rarely align. These tests
+// force the dispatch path using the real card op shapes pulled verbatim
+// from data/cards.enriched.json.
+// ---------------------------------------------------------------------------
+
+describeIfBackend('heal: real-card coverage (phase-6)', () => {
+  it('heal: real-card happy path (SFD-053, phase-6 coverage)', () => {
+    // SFD-053 Janna - Savior emits heal as op[0] of a 4-op chain. Real op
+    // carries targetHint='ally', zone='board', automated=false,
+    // ruleRefs=['520-530']. The enricher does not emit a heal amount; the
+    // dispatch path supplies 1 as the default in live play. Spec rule 419
+    // (Heal) anchors the damage-clamp-at-zero contract; the Phase-3
+    // synthetic already covers that clamp. This test confirms the
+    // dispatcher routes SFD-053's heal through the handler without a
+    // throw and the post-apply damage is zero-bounded.
+    const card = FIXTURES.SFD_053_JANNA;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('heal');
+
+    let ctx = makeCtx();
+    const src = makeUnit({ instanceId: 'sfd-053-inst', cardId: card.id });
+    // Real Janna heals a damaged ally; set up a friendly unit with 2 damage
+    // so there is something to heal.
+    const ally = makeUnit({
+      instanceId: 'ally-1',
+      controller: 'p1',
+      state: { exhausted: false, damage: 2, hasBuffCounter: false, facedown: false },
+    });
+    ctx.zones.board.bases.p1.presentUnits.push(ally.instanceId);
+    (ctx as unknown as { units: Record<string, unknown> }).units = {
+      [src.instanceId]: src,
+      [ally.instanceId]: ally,
+    };
+    const op: EffectOp = { type: 'heal', target: ally.instanceId, amount: 1 };
+    const res = BACKEND!.runOp(ctx, op, src);
+    // A damage patch should land OR the handler logs the heal intent;
+    // either path is acceptable per spec section 8. Handler MUST NOT
+    // throw (Phase-5c regression class).
+    const damageTouched = res.patches.some(
+      (p) => /damage/.test(p.path),
+    );
+    const healLogged = res.log.some((l) => /heal|restore/i.test(l.kind));
+    expect(damageTouched || healLogged).toBe(true);
+    ctx = applyPatches(ctx, res.patches);
+    // Damage cannot go negative.
+    const post = (ctx as unknown as { units?: Record<string, { state: { damage: number } }> }).units?.[ally.instanceId];
+    if (post) {
+      expect(post.state.damage).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describeIfBackend('solo_combat: real-card coverage (phase-6)', () => {
+  it('solo_combat: real-card happy path (OGN-060, phase-6 coverage)', () => {
+    // OGN-060 Mask of Foresight is a Gear (not a Unit); the real card grants
+    // solo_combat to the equipped ally via the 2-op chain [modify_stats,
+    // solo_combat]. Real op carries targetHint='ally', zone='board',
+    // automated=true, ruleRefs=['700-720']. The Phase-3 synthetic assumed
+    // a Unit-sourced op; the real card sources it from Gear. This test
+    // confirms the handler is type-agnostic about the source's cardType.
+    const card = FIXTURES.OGN_060_MASK_OF_FORESIGHT;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('solo_combat');
+    expect(card.type).toBe('Gear');
+
+    const ctx = makeCtx();
+    const source = makeGear({ instanceId: 'ogn-060-inst', cardId: card.id });
+    const op: EffectOp = { type: 'solo_combat', source: source.instanceId };
+    const res = BACKEND!.runOp(ctx, op, source);
+    // Registration shape: no damage / might / exhausted patches at register.
     const disallowed = res.patches.some(
       (p) => /damage|\/might$|exhausted/.test(p.path),
     );

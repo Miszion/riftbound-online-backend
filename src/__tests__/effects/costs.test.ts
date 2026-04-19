@@ -28,6 +28,7 @@ import {
   resetInstanceCounter,
   EffectOp,
 } from './_harness';
+import { FIXTURES } from './fixtures/real-cards';
 
 beforeEach(() => {
   resetInstanceCounter();
@@ -198,6 +199,43 @@ describeIfBackend('targeting_discount: conditional cost_reduction', () => {
     };
     const res = BACKEND!.runOp(ctx, op, source);
     // Log entry MUST carry the predicate so replay can reconstruct intent.
+    const hasLog = res.log.some(
+      (l) => /discount|targeting|cost_modifier/i.test(l.kind),
+    );
+    expect(hasLog).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6 directed coverage for targeting_discount.
+//
+// Only 2 cards in data/cards.enriched.json emit targeting_discount: SFD-141
+// Irelia - Graceful and SFD-141A (Irelia - Graceful promo). Phase 5c random
+// 20-match run did not fire this handler because those cards rarely end up
+// on the board in random decks AND their discount-target predicate rarely
+// aligns with the bot's next play. Spec section 10 (Cost Modifiers)
+// anchors the registration-shaped contract.
+// ---------------------------------------------------------------------------
+
+describeIfBackend('targeting_discount: real-card coverage (phase-6)', () => {
+  it('targeting_discount: real-card happy path (SFD-141, phase-6 coverage)', () => {
+    const card = FIXTURES.SFD_141_IRELIA;
+    expect(card.effectProfile.operations.map((o) => o.type)).toContain('targeting_discount');
+
+    const ctx = makeCtx();
+    const source = makeUnit({ instanceId: 'sfd-141-inst', cardId: card.id });
+    const op: EffectOp = {
+      type: 'targeting_discount',
+      source: source.instanceId,
+      amount: 1,
+      targetPredicate: { tribe: 'Ionia' },
+    };
+    const res = BACKEND!.runOp(ctx, op, source);
+    const disallowed = res.patches.some(
+      (p) => /points|runePool|damage|\/might$/.test(p.path),
+    );
+    expect(disallowed).toBe(false);
+    expect(res.triggeredAbilities.length).toBe(0);
     const hasLog = res.log.some(
       (l) => /discount|targeting|cost_modifier/i.test(l.kind),
     );
