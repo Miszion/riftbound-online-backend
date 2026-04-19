@@ -506,6 +506,65 @@ describe('queryResolvers.recentMatches', () => {
     const result = await queryResolvers.recentMatches(null, { limit: 10 });
     expect(result[0].matchId).toBe('new');
   });
+
+  it('surfaces endReason + status from DDB Reason/Status columns for completed matches', async () => {
+    const now = Date.now();
+    db._scanPromise.mockResolvedValue({
+      Items: [
+        {
+          MatchId: 'm-vp',
+          Players: ['u1', 'u2'],
+          Winner: 'u1',
+          Loser: 'u2',
+          Duration: 300,
+          Turns: 12,
+          Reason: 'victory_points',
+          Status: 'completed',
+          CreatedAt: now
+        },
+        {
+          MatchId: 'm-burn',
+          Players: ['u3', 'u4'],
+          Winner: 'u3',
+          Loser: 'u4',
+          Duration: 180,
+          Turns: 8,
+          Reason: 'burn_out',
+          Status: 'completed',
+          CreatedAt: now - 1000
+        }
+      ]
+    });
+    const result = await queryResolvers.recentMatches(null, { limit: 10 });
+    const vp = result.find((m: any) => m.matchId === 'm-vp');
+    const burn = result.find((m: any) => m.matchId === 'm-burn');
+    expect(vp).toMatchObject({ endReason: 'victory_points', status: 'completed' });
+    expect(burn).toMatchObject({ endReason: 'burn_out', status: 'completed' });
+  });
+
+  it('leaves endReason/status null when DDB row has no Reason/Status columns', async () => {
+    db._scanPromise.mockResolvedValue({
+      Items: [
+        { MatchId: 'legacy-1', Players: [], CreatedAt: Date.now() }
+      ]
+    });
+    const result = await queryResolvers.recentMatches(null, { limit: 10 });
+    expect(result[0]).toMatchObject({
+      matchId: 'legacy-1',
+      endReason: null,
+      status: null
+    });
+  });
+
+  it('requests Reason and Status in the DDB scan projection', async () => {
+    db._scanPromise.mockResolvedValue({ Items: [] });
+    await queryResolvers.recentMatches(null, { limit: 5 });
+    const callArgs = db.scan.mock.calls[db.scan.mock.calls.length - 1][0];
+    expect(callArgs.ProjectionExpression).toContain('#reason');
+    expect(callArgs.ProjectionExpression).toContain('#status');
+    expect(callArgs.ExpressionAttributeNames['#reason']).toBe('Reason');
+    expect(callArgs.ExpressionAttributeNames['#status']).toBe('Status');
+  });
 });
 
 describe('queryResolvers.cardCatalog', () => {

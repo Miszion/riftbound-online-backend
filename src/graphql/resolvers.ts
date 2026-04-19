@@ -1273,8 +1273,17 @@ const fetchRecentMatches = async (limit = 10) => {
     const result = await dynamodb
       .scan({
         TableName: matchTableName,
-        ProjectionExpression: 'MatchId, Players, Winner, Loser, #duration, Turns, CreatedAt',
-        ExpressionAttributeNames: { '#duration': 'Duration' },
+        // Reason + Status are DynamoDB reserved-ish names in some schemas, so
+        // alias them the same way #duration is aliased. They carry the end-
+        // reason (MatchResult['reason']) and lifecycle ('completed' etc.) used
+        // by /spectate to render how each match ended.
+        ProjectionExpression:
+          'MatchId, Players, Winner, Loser, #duration, Turns, CreatedAt, #reason, #status',
+        ExpressionAttributeNames: {
+          '#duration': 'Duration',
+          '#reason': 'Reason',
+          '#status': 'Status'
+        },
         Limit: Math.max(limit * 3, limit)
       })
       .promise();
@@ -1311,7 +1320,14 @@ const mapRecentMatchItem = (item: AWS.DynamoDB.DocumentClient.AttributeMap) => (
   loser: (item.Loser as string) || null,
   duration: (item.Duration as number) ?? null,
   turns: (item.Turns as number) ?? null,
-  createdAt: item.CreatedAt ? new Date(item.CreatedAt as number) : null
+  createdAt: item.CreatedAt ? new Date(item.CreatedAt as number) : null,
+  // Surface the end-reason + lifecycle status the /spectate UI needs per row.
+  // Columns are written by match-routes.ts persistMatchFinalState /
+  // recordMatchHistoryEntries — Reason is MatchResult['reason'], Status is
+  // 'completed' (match-history/match tables). Null for legacy rows that
+  // predate these columns.
+  endReason: (item.Reason as string) || null,
+  status: (item.Status as string) || null
 });
 
 // ============================================================================

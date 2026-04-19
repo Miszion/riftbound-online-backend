@@ -600,6 +600,12 @@ export const listBotMatchesFromJsonl = (
   duration: number | null;
   turns: number | null;
   createdAt: Date | null;
+  // End-reason + lifecycle surfaced onto RecentMatchSummary for /spectate
+  // rows. Mirrors self-play.ts: `terminal.reason` is the terminator
+  // (victory_points/burn_out/turn_cap/…), and `result` flips to 'draw' on
+  // crashes/invariants. Null when the tail event is unreadable.
+  endReason: string | null;
+  status: string | null;
 }> => {
   if (!fs.existsSync(dir)) return [];
   let entries: Array<{ file: string; mtime: number }>;
@@ -653,6 +659,24 @@ export const listBotMatchesFromJsonl = (
       const { winner, loser } = deriveWinner(last ? [last] : []);
       const firstTs = first.timestamp ? Date.parse(first.timestamp) : null;
       const lastTs = last?.timestamp ? Date.parse(last.timestamp) : firstTs;
+      // Self-play terminal event shape (see src/self-play.ts emit(...) at the
+      // bottom of `playOneGame`): the final line carries `terminal.reason`
+      // (the self-play terminator: victory_points / burn_out / turn_cap /
+      // action_cap / infinite_loop / crashed / invariant) and a top-level
+      // `result` of P1_wins / P2_wins / 'draw'. Map draw/crash → 'abandoned',
+      // everything else → 'completed' so the listing row can show lifecycle.
+      const terminal = (last as any)?.terminal;
+      const endReason: string | null =
+        (typeof terminal?.reason === 'string' && terminal.reason) || null;
+      const resultField = typeof (last as any)?.result === 'string' ? (last as any).result : '';
+      const status: string | null = last
+        ? resultField === 'draw' ||
+          endReason === 'crashed' ||
+          endReason === 'invariant' ||
+          endReason === 'infinite_loop'
+          ? 'abandoned'
+          : 'completed'
+        : null;
       out.push({
         matchId,
         players: ['playerA', 'playerB'],
@@ -663,7 +687,9 @@ export const listBotMatchesFromJsonl = (
             ? Math.max(0, Math.round((lastTs - firstTs) / 1000))
             : null,
         turns: last?.turn ?? null,
-        createdAt: firstTs !== null ? new Date(firstTs) : null
+        createdAt: firstTs !== null ? new Date(firstTs) : null,
+        endReason,
+        status
       });
       if (out.length >= limit) break;
     } catch {

@@ -290,6 +290,17 @@ export const typeDefs = `#graphql
     duration: Int
     turns: Int
     createdAt: DateTime
+    # How the match ended - mirrors MatchResult['reason'] union plus self-play
+    # terminators (e.g. "victory_points", "burn_out", "concede", "timeout",
+    # "turn_cap", "action_cap", "infinite_loop"). Free string because the set
+    # is the union of MatchResult['reason'] and self-play GameRecord.terminator,
+    # which don't share a single enum. Null when not yet known.
+    endReason: String
+    # Lifecycle status for the listing row (e.g. "completed", "timeout",
+    # "action_cap", "invariant", "crashed"). Free string for the same reason -
+    # self-play record.status and the DDB Status column overlap but aren't
+    # identical to the GameStatus engine enum. Null when unavailable.
+    status: String
   }
 
   type RuneCardState {
