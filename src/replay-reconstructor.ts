@@ -31,7 +31,11 @@ import {
   pickPlayableCards,
   playOneGame
 } from './self-play';
-import { EnrichedCardRecord, getCardCatalog } from './card-catalog';
+import {
+  CardAssetInfo,
+  EnrichedCardRecord,
+  getCardCatalog
+} from './card-catalog';
 import { recordFrame } from './replay-frame-store';
 
 const SELFPLAY_MATCH_ID = /^selfplay-(\d+)-(\d+)$/;
@@ -77,6 +81,190 @@ const ensureCatalog = (): void => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Asset enrichment for replay frames.
+//
+// The self-play harness builds battlefield/synthetic Card objects without the
+// `assets` field (see self-play.ts `assembleDeck` battlefields and
+// `buildSyntheticBattlefield`/`buildRuneDeck`). Once those go through
+// `serializeGameState`, the resulting snapshots have `assets: null`, so the
+// replay UI can't render dotgg.gg card art.
+//
+// Rather than restructure the engine/harness, we take one enrich pass per
+// frame here: for any Card-ish snapshot with a missing/empty `assets`, look it
+// up in the catalog by cardId/slug/name and copy the catalog's assets onto
+// the snapshot in-place. This keeps the fix surgical and referenced — we do
+// not duplicate card data, we just point at it.
+// ---------------------------------------------------------------------------
+
+interface CatalogAssetIndex {
+  byId: Map<string, CardAssetInfo>;
+  bySlug: Map<string, CardAssetInfo>;
+  byName: Map<string, CardAssetInfo>;
+}
+
+let catalogAssetIndex: CatalogAssetIndex | null = null;
+
+const getCatalogAssetIndex = (): CatalogAssetIndex | null => {
+  if (catalogAssetIndex) return catalogAssetIndex;
+  let catalog: EnrichedCardRecord[];
+  try {
+    catalog = getCardCatalog();
+  } catch {
+    return null;
+  }
+  const byId = new Map<string, CardAssetInfo>();
+  const bySlug = new Map<string, CardAssetInfo>();
+  const byName = new Map<string, CardAssetInfo>();
+  for (const record of catalog) {
+    if (!record.assets) continue;
+    if (record.id) byId.set(record.id.toLowerCase(), record.assets);
+    if (record.slug) bySlug.set(record.slug.toLowerCase(), record.assets);
+    if (record.name) byName.set(record.name.trim().toLowerCase(), record.assets);
+  }
+  catalogAssetIndex = { byId, bySlug, byName };
+  return catalogAssetIndex;
+};
+
+const hasAssets = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const remote = (value as { remote?: unknown }).remote;
+  return typeof remote === 'string' && remote.length > 0;
+};
+
+const lookupAssets = (
+  index: CatalogAssetIndex,
+  cardId?: string | null,
+  slug?: string | null,
+  name?: string | null
+): CardAssetInfo | null => {
+  if (cardId) {
+    const hit = index.byId.get(cardId.toLowerCase());
+    if (hit) return hit;
+  }
+  if (slug) {
+    const hit = index.bySlug.get(slug.toLowerCase());
+    if (hit) return hit;
+  }
+  if (name) {
+    const hit = index.byName.get(name.trim().toLowerCase());
+    if (hit) return hit;
+  }
+  return null;
+};
+
+/**
+ * Populate `card.assets` from the catalog when the snapshot lacks a usable
+ * remote URL. Mutates in place and returns the same reference for chaining.
+ */
+const enrichCardWithCatalog = (
+  card: Record<string, any> | null | undefined,
+  index: CatalogAssetIndex
+): void => {
+  if (!card || typeof card !== 'object') return;
+  if (hasAssets(card.assets)) return;
+  const cardId = (card.cardId ?? card.id) as string | undefined;
+  const assets = lookupAssets(index, cardId, card.slug, card.name);
+  if (assets) {
+    card.assets = assets;
+  }
+};
+
+const enrichCardList = (
+  cards: unknown,
+  index: CatalogAssetIndex
+): void => {
+  if (!Array.isArray(cards)) return;
+  for (const card of cards) {
+    enrichCardWithCatalog(card as Record<string, any>, index);
+  }
+};
+
+const enrichRuneList = (
+  runes: unknown,
+  index: CatalogAssetIndex
+): void => {
+  if (!Array.isArray(runes)) return;
+  for (const rune of runes) {
+    if (!rune || typeof rune !== 'object') continue;
+    const r = rune as Record<string, any>;
+    if (!hasAssets(r.assets)) {
+      const assets = lookupAssets(
+        index,
+        r.runeId ?? r.id,
+        r.slug,
+        r.name
+      );
+      if (assets) r.assets = assets;
+    }
+    if (r.cardSnapshot) enrichCardWithCatalog(r.cardSnapshot, index);
+  }
+};
+
+/**
+ * Walk every card-bearing zone in a serialized frame and fill in `assets`
+ * from the catalog when missing. Mutates the frame in place; callers pass
+ * the reference they already hold.
+ */
+const enrichFrameWithCatalog = (frame: unknown): void => {
+  if (!frame || typeof frame !== 'object') return;
+  const index = getCatalogAssetIndex();
+  if (!index) return;
+  const f = frame as Record<string, any>;
+
+  if (Array.isArray(f.players)) {
+    for (const player of f.players) {
+      if (!player || typeof player !== 'object') continue;
+      const p = player as Record<string, any>;
+      enrichCardList(p.hand, index);
+      enrichCardList(p.graveyard, index);
+      enrichCardList(p.exile, index);
+      if (p.board && typeof p.board === 'object') {
+        enrichCardList(p.board.creatures, index);
+        enrichCardList(p.board.artifacts, index);
+        enrichCardList(p.board.enchantments, index);
+      }
+      enrichRuneList(p.channeledRunes, index);
+      enrichRuneList(p.runeDeck, index);
+      enrichCardWithCatalog(p.championLegend, index);
+      enrichCardWithCatalog(p.championLeader, index);
+    }
+  }
+
+  if (Array.isArray(f.battlefields)) {
+    for (const battlefield of f.battlefields) {
+      if (!battlefield || typeof battlefield !== 'object') continue;
+      const bf = battlefield as Record<string, any>;
+      enrichCardWithCatalog(bf.card, index);
+      if (Array.isArray(bf.hiddenCards)) {
+        for (const hc of bf.hiddenCards) {
+          if (hc && typeof hc === 'object') {
+            enrichCardWithCatalog((hc as Record<string, any>).card, index);
+          }
+        }
+      }
+    }
+  }
+
+  if (f.pendingSpellResolution && typeof f.pendingSpellResolution === 'object') {
+    enrichCardWithCatalog(
+      (f.pendingSpellResolution as Record<string, any>).spell,
+      index
+    );
+  }
+
+  if (f.reactionChain && typeof f.reactionChain === 'object') {
+    const items = (f.reactionChain as Record<string, any>).items;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        if (item && typeof item === 'object') {
+          enrichCardWithCatalog((item as Record<string, any>).card, index);
+        }
+      }
+    }
+  }
+};
+
 /** Return the absolute path of the first JSONL whose first line matches `matchId`, or null. */
 export const findJsonlForMatch = (
   matchId: string,
@@ -85,7 +273,15 @@ export const findJsonlForMatch = (
   if (!fs.existsSync(dir)) return null;
   let entries: string[];
   try {
-    entries = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+    // Sort by mtime descending so re-runs of the same matchId pick the most
+    // recent JSONL. This keeps `matchReplay` aligned with `recentMatches`
+    // (which also sorts by mtime) when multiple files share a seed.
+    entries = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => ({ f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .map((e) => e.f);
   } catch {
     return null;
   }
@@ -191,6 +387,7 @@ export const reconstructFramesForMatch = (
       },
       {
         onFrame: (frame) => {
+          enrichFrameWithCatalog(frame);
           recordFrame(matchId, frame);
           framesRecorded++;
         }
@@ -219,6 +416,7 @@ export const __resetReplayReconstructorCatalog = (): void => {
   catalogCache.playable = null;
   catalogCache.battlefieldRecords = null;
   catalogCache.loaded = false;
+  catalogAssetIndex = null;
 };
 
 // ---------------------------------------------------------------------------
@@ -360,6 +558,7 @@ export const buildMatchReplayFromJsonl = (
       () => {},
       {
         onFrame: (frame) => {
+          enrichFrameWithCatalog(frame);
           lastFrame = frame;
           recordFrame(matchId, frame);
         }
