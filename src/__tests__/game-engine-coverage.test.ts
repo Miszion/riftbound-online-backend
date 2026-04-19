@@ -1979,17 +1979,28 @@ describe('describeScoreReason - all score reason types', () => {
 // burnOut path (empty deck detection)
 // ============================================================================
 
-describe('burnOut - opponent wins when player deck is exhausted', () => {
-  it('should end game when player draws from empty deck', () => {
+describe('burnOut - state, not auto-loss (Rule 418)', () => {
+  it('marks player as burnedOut and awards opponent a VP when drawing from empty deck', () => {
+    // Per Rule 418 (and the burn-out-as-state fix), burning out is a STATE,
+    // not a loss condition. Drawing from an empty deck should:
+    //   1) flag the drawing player as burnedOut,
+    //   2) recycle trash into deck,
+    //   3) award the opponent 1 VP.
+    // The game only ends when that opponent reaches VICTORY_SCORE.
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
+    const oppId = opponentPlayerId(engine);
     engine.beginTurn();
     (engine as any).gameState.currentPhase = GamePhase.MAIN_1;
 
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
     player.deck = [];
 
-    // Inject a draw-2 spell to trigger burnOut
+    const opponentVpBefore = engine
+      .getGameState()
+      .players.find((p) => p.playerId === oppId)!.victoryPoints;
+
+    // Inject a draw-5 spell; resolving on an empty deck triggers burn out.
     injectSpellToHand(engine, pId, {
       effectProfile: {
         classes: [],
@@ -1999,8 +2010,13 @@ describe('burnOut - opponent wins when player deck is exhausted', () => {
     engine.playCard(pId, 0);
     engine.respondToChainReaction(opponentPlayerId(engine), true);
 
-    const status = engine.getGameState().status;
-    expect(status).toBe(GameStatus.WINNER_DETERMINED);
+    const state = engine.getGameState();
+    const playerAfter = state.players.find((p) => p.playerId === pId)!;
+    const opponentAfter = state.players.find((p) => p.playerId === oppId)!;
+
+    expect(playerAfter.burnedOut).toBe(true);
+    expect(opponentAfter.victoryPoints).toBeGreaterThan(opponentVpBefore);
+    expect(state.status).toBe(GameStatus.IN_PROGRESS);
   });
 });
 

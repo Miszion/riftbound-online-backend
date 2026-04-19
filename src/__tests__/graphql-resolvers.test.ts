@@ -99,6 +99,14 @@ jest.mock('../card-catalog', () => ({
   buildActivationStateIndex: jest.fn().mockReturnValue({}),
 }));
 
+// `recentMatches` merges DynamoDB results with bot self-play JSONL files on
+// disk. In tests we want hermetic isolation from the developer's local
+// nexus-data/riftbound-games directory, so stub out the disk reader.
+jest.mock('../replay-reconstructor', () => ({
+  buildMatchReplayFromJsonl: jest.fn().mockReturnValue(null),
+  listBotMatchesFromJsonl:   jest.fn().mockReturnValue([]),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
