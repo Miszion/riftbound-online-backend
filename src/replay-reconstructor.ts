@@ -39,8 +39,19 @@ import {
 import { recordFrame } from './replay-frame-store';
 
 const SELFPLAY_MATCH_ID = /^selfplay-(\d+)-(\d+)$/;
+// Bot-vs-bot matches started via the GraphQL `startBotMatch` mutation are
+// persisted under their `bot-<uuid>` matchId — see src/bot-match.ts's JSONL
+// fallback. They live in a dedicated directory so the self-play dir stays
+// clean.
+const BOT_MATCH_ID = /^bot-[0-9a-f-]{36}$/i;
 
 const DEFAULT_JSONL_DIR = '/Users/miszion/workplace/nexus-data/riftbound-games';
+const DEFAULT_BOT_MATCHES_DIR = path.resolve(
+  __dirname,
+  '..',
+  'data',
+  'bot-matches'
+);
 
 /**
  * Uint32 modular inversion of
@@ -497,8 +508,14 @@ const eventToMove = (event: EventLine) => {
  */
 export const buildMatchReplayFromJsonl = (
   matchId: string,
-  opts: { jsonlDir?: string } = {}
+  opts: { jsonlDir?: string; botMatchesDir?: string } = {}
 ): Record<string, any> | null => {
+  // Bot-vs-bot UI matches (`bot-<uuid>`) are written by bot-match.ts's
+  // finalize path as a two-line JSONL with the full final state + move
+  // history baked in. No engine re-run needed — just read and map.
+  if (BOT_MATCH_ID.test(matchId)) {
+    return buildBotMatchReplayFromJsonl(matchId, opts.botMatchesDir);
+  }
   const selfplay = SELFPLAY_MATCH_ID.exec(matchId);
   if (!selfplay) return null;
 
@@ -585,13 +602,132 @@ export const buildMatchReplayFromJsonl = (
 };
 
 /**
+ * Bot-UI match JSONL reader. Shape is written by bot-match.ts as exactly two
+ * lines per file: a header row keyed by `matchId` and a terminal row carrying
+ * `persisted` with the full moves[] + finalState.
+ *
+ * Returns the same PascalCase record the DynamoDB mapper consumes so
+ * `mapMatchReplayItem` can pass it through unchanged.
+ */
+const buildBotMatchReplayFromJsonl = (
+  matchId: string,
+  dir: string = DEFAULT_BOT_MATCHES_DIR
+): Record<string, any> | null => {
+  const filePath = path.join(dir, `${matchId}.jsonl`);
+  if (!fs.existsSync(filePath)) return null;
+  let events: EventLine[];
+  try {
+    events = readJsonlLines(filePath);
+  } catch (error) {
+    logger.warn('[replay-reconstructor] failed to read bot-match jsonl', {
+      matchId,
+      filePath,
+      error: (error as Error).message
+    });
+    return null;
+  }
+  if (events.length === 0) return null;
+
+  const terminal = events[events.length - 1] as any;
+  const persisted = terminal?.persisted;
+  if (!persisted || typeof persisted !== 'object') return null;
+
+  // Enrich the baked-in final state with catalog assets so the replay UI has
+  // dotgg.gg art when rendering the end-of-match snapshot.
+  if (persisted.finalState) {
+    enrichFrameWithCatalog(persisted.finalState);
+  }
+
+  return {
+    MatchId: persisted.matchId ?? matchId,
+    Players: Array.isArray(persisted.players) ? persisted.players : [],
+    Winner: persisted.winner ?? null,
+    Loser: persisted.loser ?? null,
+    Duration: persisted.duration ?? null,
+    Turns: persisted.turns ?? 0,
+    Moves: Array.isArray(persisted.moves) ? persisted.moves : [],
+    FinalState: persisted.finalState ?? null,
+    CreatedAt: persisted.createdAt ?? null
+  };
+};
+
+/**
+ * Internal helper: enumerate bot-UI matches (`data/bot-matches/*.jsonl`) and
+ * surface the same RecentMatchSummary shape that listBotMatchesFromJsonl
+ * returns for self-play JSONL files.
+ */
+const listBotUiMatchesFromJsonl = (
+  limit: number,
+  dir: string = DEFAULT_BOT_MATCHES_DIR
+): ReturnType<typeof listBotMatchesFromJsonl> => {
+  if (!fs.existsSync(dir)) return [];
+  let entries: Array<{ file: string; mtime: number }>;
+  try {
+    entries = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => ({ file: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, Math.max(limit * 2, limit));
+  } catch {
+    return [];
+  }
+
+  const out: ReturnType<typeof listBotMatchesFromJsonl> = [];
+  for (const { file } of entries) {
+    try {
+      const filePath = path.join(dir, file);
+      const events = readJsonlLines(filePath);
+      if (events.length === 0) continue;
+      const first = events[0] as any;
+      const last = events[events.length - 1] as any;
+      const matchId = first?.matchId;
+      if (!matchId || !BOT_MATCH_ID.test(matchId)) continue;
+      const persisted = last?.persisted ?? {};
+      const createdAt =
+        typeof persisted.createdAt === 'number'
+          ? new Date(persisted.createdAt)
+          : first?.timestamp
+          ? new Date(first.timestamp)
+          : null;
+      const endReason: string | null =
+        (typeof persisted.endReason === 'string' && persisted.endReason) ||
+        (typeof last?.terminal?.reason === 'string' && last.terminal.reason) ||
+        null;
+      const status: string | null =
+        (typeof persisted.status === 'string' && persisted.status) ||
+        (last ? 'completed' : null);
+      out.push({
+        matchId,
+        players: Array.isArray(persisted.players) ? persisted.players : [],
+        winner: persisted.winner ?? null,
+        loser: persisted.loser ?? null,
+        duration:
+          typeof persisted.duration === 'number' ? persisted.duration : null,
+        turns: typeof persisted.turns === 'number' ? persisted.turns : null,
+        createdAt,
+        endReason,
+        status
+      });
+      if (out.length >= limit) break;
+    } catch {
+      // skip unreadable file
+    }
+  }
+  return out;
+};
+
+/**
  * List bot self-play matches that exist as JSONL on disk. Used by
  * `recentMatches` so the spectate UI can surface bot matches even when
- * DynamoDB has no record of them.
+ * DynamoDB has no record of them. Merges self-play JSONL (baked harness
+ * runs) with bot-UI JSONL (matches launched via startBotMatch), sorted by
+ * createdAt desc.
  */
 export const listBotMatchesFromJsonl = (
   limit = 10,
-  dir: string = DEFAULT_JSONL_DIR
+  dir: string = DEFAULT_JSONL_DIR,
+  botUiDir: string = DEFAULT_BOT_MATCHES_DIR
 ): Array<{
   matchId: string;
   players: string[];
@@ -607,7 +743,15 @@ export const listBotMatchesFromJsonl = (
   endReason: string | null;
   status: string | null;
 }> => {
-  if (!fs.existsSync(dir)) return [];
+  const botUiRows = listBotUiMatchesFromJsonl(limit, botUiDir);
+  if (!fs.existsSync(dir)) {
+    return botUiRows
+      .sort(
+        (a, b) =>
+          (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
+      )
+      .slice(0, limit);
+  }
   let entries: Array<{ file: string; mtime: number }>;
   try {
     entries = fs
@@ -696,5 +840,10 @@ export const listBotMatchesFromJsonl = (
       // skip unreadable/malformed file
     }
   }
-  return out;
+  // Merge self-play rows + bot-UI rows, sorted by createdAt desc, capped.
+  const combined = [...out, ...botUiRows].sort(
+    (a, b) =>
+      (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
+  );
+  return combined.slice(0, limit);
 };

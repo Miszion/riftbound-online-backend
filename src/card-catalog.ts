@@ -117,6 +117,13 @@ export type EffectOperationType =
   | 'equip_trigger'
   | 'stun'
   | 'ready'
+  /**
+   * @deprecated Classification label, not a real op. Phase 3 ETL strips
+   * this from `cards.enriched.json` at build time
+   * (scripts/migrate-card-catalog.ts). The runtime guard in
+   * `filterCatalogRuneResourceOps` (src/effects/index.ts) stays in place
+   * as defense-in-depth. Kept in the union so stale payloads still parse.
+   */
   | 'rune_resource'
   | 'tribal_synergy'
   | 'targeting_discount'
@@ -346,11 +353,30 @@ export interface EnrichedCardRecord {
   };
   behaviorHints?: CardBehaviorHints;
   abilities?: CardAbility[];
+  /**
+   * Timing classifications moved out of `effectProfile.operations[]` by the
+   * Phase 3 ETL migration (scripts/migrate-card-catalog.ts). Corresponds to
+   * `manipulate_priority` variants 1-3 per riftbound-effect-spec.md section
+   * 17.3: `"action"` for [Action]-tagged cards (rule 806), `"reaction"` for
+   * [Reaction]-tagged cards (rule 813), `"add_reaction"` for Reaction-tagged
+   * Add abilities (rule 429.3). Default is an empty array.
+   */
+  timingTags: string[];
+  /**
+   * True when `card.type === 'Rune'`. Derived from the authoritative card
+   * type at enrichment time (Phase 5a). Replaces the broken `rune_type`
+   * text classifier that emitted a `rune_resource` op into
+   * `effectProfile.operations[]` for any card with empty effect text.
+   * See docs/phase-4-enricher-fix-spec.md.
+   */
+  isRuneResource: boolean;
 }
 
-type StoredCardRecord = Omit<EnrichedCardRecord, 'effectProfile' | 'activation'> & {
+type StoredCardRecord = Omit<EnrichedCardRecord, 'effectProfile' | 'activation' | 'timingTags' | 'isRuneResource'> & {
   effectProfile?: EffectProfile;
   activation?: ActivationProfile;
+  timingTags?: string[];
+  isRuneResource?: boolean;
 };
 
 export interface ImageManifestEntry {
@@ -869,16 +895,12 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     ]),
     operation: { type: 'ready', targetHint: 'ally', zone: 'board', automated: false }
   },
-  {
-    id: 'rune_type',
-    label: 'Basic rune card',
-    description: 'A basic rune resource card with no special effect.',
-    ruleRefs: ['161-170'],
-    patterns: buildPatterns([
-      /^No effect text provided\.?$/i
-    ]),
-    operation: { type: 'rune_resource', targetHint: 'self', zone: 'board', automated: true }
-  },
+  // PHASE-5-TODO: consolidate classifier table (see
+  // scripts/data/transformChampionDump.ts EFFECT_CLASS_DEFINITIONS). The
+  // `rune_type` entry that previously emitted `{ type: 'rune_resource', ... }`
+  // was removed in Phase 5a (see docs/phase-4-enricher-fix-spec.md).
+  // `isRuneResource` is now derived from `card.type === 'Rune'` in
+  // reshapeDump().
   {
     id: 'tribal_synergy',
     label: 'Tribal / type synergy',
@@ -1724,11 +1746,13 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       behaviorHints.entersTapped = true;
     }
 
+    const cardType = normalize(record.type) || null;
+    const isRuneResource = (cardType || '').toLowerCase() === 'rune';
     const cardRecord: EnrichedCardRecord = {
       id,
       slug,
       name,
-      type: normalize(record.type) || null,
+      type: cardType,
       rarity: normalize(record.rarity) || null,
       setName: normalize(record.set_name) || null,
       colors,
@@ -1738,6 +1762,7 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       effect: normalizedEffect,
       flavor: normalize(record.flavor) || null,
       keywords,
+      isRuneResource,
       effectProfile,
       activation,
       rules,
@@ -1753,7 +1778,8 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       references: {
         marketUrl: normalize(record.cmurl) || null,
         source: 'champion-dump-api'
-      }
+      },
+      timingTags: []
     };
 
     if (Object.keys(behaviorHints).length > 0) {
@@ -1771,10 +1797,16 @@ const normalizeCatalogRecord = (record: StoredCardRecord): EnrichedCardRecord =>
   if (shouldDefaultTapped(record.type) && !behaviorHints.entersUntapped) {
     behaviorHints.entersTapped = true;
   }
+  const isRuneResource =
+    typeof record.isRuneResource === 'boolean'
+      ? record.isRuneResource
+      : (record.type || '').toLowerCase() === 'rune';
   return {
     ...record,
     activation,
     effectProfile,
+    timingTags: Array.isArray(record.timingTags) ? record.timingTags : [],
+    isRuneResource,
     ...(Object.keys(behaviorHints).length > 0 ? { behaviorHints } : {})
   };
 };

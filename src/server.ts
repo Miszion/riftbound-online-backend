@@ -36,7 +36,7 @@ const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID;
 const app: Express = express();
 const normalizedStage = environment.replace(/^\//, '').replace(/\/$/, '');
 const stagePrefix = normalizedStage ? `/${normalizedStage}` : '';
-const PUBLIC_ROUTES = new Set(['/health', '/auth/sign-in', '/auth/sign-up', '/auth/refresh']);
+const PUBLIC_ROUTES = new Set(['/health', '/healthz', '/auth/sign-in', '/auth/sign-up', '/auth/refresh']);
 
 const disableCors = process.env.DISABLE_CORS === 'true';
 
@@ -364,6 +364,10 @@ async function startApolloServer() {
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response): void => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+app.get('/healthz', (_req: Request, res: Response): void => {
+  res.status(200).json({ ok: true, service: 'riftbound-online', uptimeSec: process.uptime() });
 });
 
 // Authentication endpoints (migrated from Lambda)

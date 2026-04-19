@@ -870,7 +870,16 @@ function enumerateLegalActions(engine: RiftboundGameEngine, playerId: string): B
   if (phase === GamePhase.MAIN_1 || phase === GamePhase.COMBAT) {
     const combatInProgress = Boolean((state as any).combatContext);
     if (!combatInProgress) {
+      const currentTurn = engine.turnNumber;
       for (const bf of state.battlefields) {
+        // Skip battlefields where this player already resolved combat this
+        // turn — the engine tracks that on `combatTurnByPlayer` and rejects
+        // `commenceBattle` if we ignore it, producing an infinite
+        // dispatchAction-throws-retry loop (see bot-match.ts driver).
+        const battledRecord = (bf as any).combatTurnByPlayer?.[playerId];
+        if (typeof battledRecord === 'number' && battledRecord === currentTurn) {
+          continue;
+        }
         const hasMyUnit = player.board.creatures.some(
           (c) =>
             c.location && (c.location as any).zone === 'battlefield' &&

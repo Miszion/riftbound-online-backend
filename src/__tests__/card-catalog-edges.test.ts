@@ -78,7 +78,8 @@ function makeEnrichedCard(
     rules: [],
     assets: { remote: null, localPath: 'assets/card-images/test-001-card.webp' },
     pricing: { price: null, foilPrice: null, currency: 'USD' },
-    references: { marketUrl: null, source: 'test' }
+    references: { marketUrl: null, source: 'test' },
+    timingTags: []
   };
 }
 
@@ -497,10 +498,94 @@ describe('buildEffectProfile - effect class detection', () => {
     expect(result.classes).toContain('ready_effect');
   });
 
-  it('detects rune_type for "No effect text provided"', () => {
+  // Phase-5a removed the `rune_type` text classifier (it used to fire on the
+  // "No effect text provided." placeholder and emit a spurious rune_resource
+  // op that no handler consumed). `isRuneResource` is now derived at
+  // reshapeDump() time from `card.type === 'Rune'` (see card-catalog.ts
+  // around line 1750). This test is the retarget: it locks in that the
+  // classifier no longer emits `rune_type` / `rune_resource` for the
+  // placeholder text, and it guards the new record-level derivation so a
+  // future regression can't resurrect the stale classifier path.
+  it('does NOT classify placeholder "No effect text provided" as rune_type (phase-5a regression)', () => {
     const activation = makeActivation();
     const result = buildEffectProfile('No effect text provided.', activation);
-    expect(result.classes).toContain('rune_type');
+    expect(result.classes).not.toContain('rune_type');
+    const ops = result.operations.map((o) => o.type);
+    expect(ops).not.toContain('rune_resource');
+  });
+
+  it('record-level: card.type=Rune sets isRuneResource=true, card.type=Unit with empty effect is false (phase-5a regression)', () => {
+    const rawRune: RawDump = {
+      names: [
+        'id',
+        'name',
+        'slug',
+        'effect',
+        'type',
+        'rarity',
+        'set_name',
+        'color',
+        'tags',
+        'cost',
+        'might',
+        'flavor',
+        'image',
+        'cmurl',
+        'price',
+        'foilPrice'
+      ],
+      data: [
+        [
+          'RUNE-001',
+          'Basic Fury Rune',
+          'rune-001-basic-fury-rune',
+          '',
+          'Rune',
+          'Basic',
+          'Test',
+          'fury',
+          '',
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    };
+    const runeRecord = reshapeDump(rawRune)[0];
+    expect(runeRecord.isRuneResource).toBe(true);
+
+    const rawUnit: RawDump = {
+      names: rawRune.names,
+      data: [
+        [
+          'UNIT-001',
+          'Empty-text Unit',
+          'unit-001-empty-text-unit',
+          '',
+          'Unit',
+          'Common',
+          'Test',
+          'fury',
+          '',
+          '1',
+          2,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    };
+    const unitRecord = reshapeDump(rawUnit)[0];
+    expect(unitRecord.isRuneResource).toBe(false);
+    // And the classifier must not emit rune_resource into the unit's op list.
+    const unitOps = unitRecord.effectProfile.operations.map((o) => o.type);
+    expect(unitOps).not.toContain('rune_resource');
   });
 
   it('detects tribal_synergy for "your Xs have"', () => {

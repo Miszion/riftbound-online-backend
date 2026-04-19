@@ -30,6 +30,21 @@ import {
   parseChampionAbilityCost,
   summarizeChampionCost
 } from './champion-utils';
+import logger from './logger';
+import {
+  buildDefaultRegistry,
+  filterCatalogRuneResourceOps,
+  OpHandlerRegistry,
+  runOpSequence,
+  TriggerRegistry,
+  recordOp
+} from './effects';
+import type {
+  DispatcherStats,
+  EngineAdapter,
+  EngineCtx as EffectsEngineCtx,
+  OperationContext as EffectsOperationContext
+} from './effects';
 
 /**
  * Riftbound TCG Game State Engine
@@ -44,6 +59,54 @@ import {
  *
  * All game logic is kept in a single file for full traceability.
  */
+
+// ============================================================================
+// SEEDED RNG
+// ============================================================================
+
+/**
+ * Deterministic PRNG injected into the engine so tests can pin match
+ * outcomes without monkey-patching Math.random. Production callers can omit
+ * the Rng and get a Date.now()-seeded default.
+ */
+export interface Rng {
+  next(): number;
+  nextInt(minInclusive: number, maxExclusive: number): number;
+  seed: number | string;
+}
+
+/**
+ * mulberry32. Accepts a number or string seed; strings are hashed
+ * (FNV-1a 32) so callers can pass human-readable seeds like "match-1".
+ */
+export function createRng(seed: number | string): Rng {
+  let a = (typeof seed === 'number' ? seed : hashSeedString(seed)) >>> 0;
+  const next = (): number => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const nextInt = (minInclusive: number, maxExclusive: number): number => {
+    if (maxExclusive <= minInclusive) return minInclusive;
+    return minInclusive + Math.floor(next() * (maxExclusive - minInclusive));
+  };
+  return { next, nextInt, seed };
+}
+
+function hashSeedString(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+export interface EngineOptions {
+  rng?: Rng;
+}
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -648,6 +711,24 @@ const INITIATIVE_BEATS: Record<number, number> = {
 // GAME ENGINE CLASS
 // ============================================================================
 
+// Module-level guard: run the rune_resource filter on the catalog exactly
+// once, the first time any engine is built. Phase 2b Tech Lead note.
+let CATALOG_RUNE_RESOURCE_STRIPPED = false;
+function runCatalogSanitization(): void {
+  if (CATALOG_RUNE_RESOURCE_STRIPPED) return;
+  CATALOG_RUNE_RESOURCE_STRIPPED = true;
+  try {
+    const catalog = getCardCatalog();
+    const stripped = filterCatalogRuneResourceOps(catalog);
+    logger.info('[game-engine] catalog sanitized', {
+      rune_resource_stripped: stripped,
+      cards: catalog.length
+    });
+  } catch (err) {
+    logger.warn('[game-engine] catalog sanitization skipped', { err });
+  }
+}
+
 export class RiftboundGameEngine {
   private static readonly MAX_DUEL_LOG_ENTRIES = 200;
   private static readonly MAX_CHAT_LOG_ENTRIES = 200;
@@ -660,10 +741,22 @@ export class RiftboundGameEngine {
   private readonly DEFAULT_BATTLEFIELD_COUNT = 2;
   private readonly cardActivationTemplates = buildActivationStateIndex();
   private readonly catalogCardCache = new Map<string, Card>();
+  private readonly opRegistry: OpHandlerRegistry = buildDefaultRegistry();
+  private readonly triggerRegistry: TriggerRegistry = new TriggerRegistry();
+  /**
+   * Phase 4 observer. When set, every effect-op dispatched by this engine
+   * is counted (handled vs unknown) in the recorder. Opt-in: integration
+   * tests assign this before running a match; unit tests leave it undefined
+   * and pay no cost.
+   */
+  public statsRecorder: DispatcherStats | undefined = undefined;
   private promptCounter = 0;
   private cardInstanceCounter = 0;
+  private readonly rng: Rng;
 
-  constructor(matchId: string, players: PlayerSeed[]) {
+  constructor(matchId: string, players: PlayerSeed[], options?: EngineOptions) {
+    runCatalogSanitization();
+    this.rng = options?.rng ?? createRng(Date.now());
     if (players.length !== 2) {
       throw new Error('Riftbound requires exactly 2 players');
     }
@@ -1567,7 +1660,7 @@ export class RiftboundGameEngine {
     }
     const tone = this.normalizeLogTone(entry.tone);
     const identifier =
-      (entry.id ?? '').trim() || `log_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      (entry.id ?? '').trim() || `log_${Date.now()}_${this.rng.nextInt(0, 1000)}`;
     const existing = this.gameState.duelLog.find((log) => log.id === identifier);
     if (existing) {
       return existing;
@@ -1597,7 +1690,7 @@ export class RiftboundGameEngine {
       throw new Error('Chat message cannot be empty');
     }
     const identifier =
-      (entry.id ?? '').trim() || `chat_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      (entry.id ?? '').trim() || `chat_${Date.now()}_${this.rng.nextInt(0, 1000)}`;
     const existing = this.gameState.chatLog.find((message) => message.id === identifier);
     if (existing) {
       return existing;
@@ -4014,7 +4107,7 @@ export class RiftboundGameEngine {
     const now = Date.now();
     const chainItem: ChainItem = {
       ...item,
-      id: `chain_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `chain_${now}_${this.rng.next().toString(36).slice(2, 8)}`,
       createdAt: now
     };
 
@@ -4523,8 +4616,34 @@ export class RiftboundGameEngine {
       }
       return context.boardTarget ? [context.boardTarget] : [];
     };
+    // Phase 2b dispatcher pass-through. The effects registry owns the
+    // top-24 ops from the frequency CSV; anything it does not recognize
+    // falls through to the legacy switch below for backwards compat.
+    const registry = this.opRegistry;
+    const statsRecorder = this.statsRecorder;
+    const effectsCtx: EffectsEngineCtx = {
+      engine: this.getEffectsAdapter(),
+      caster,
+      operationContext: context as unknown as EffectsOperationContext,
+      // Phase 4: propagate the opt-in observer through the dispatcher.
+      // Widened via `as` because the shared EffectsEngineCtx type in
+      // src/effects/types.ts is kept deliberately narrow; the dispatcher
+      // resolves statsRecorder via a ctx-shape cast of its own.
+      ...(statsRecorder ? { statsRecorder } : {})
+    } as EffectsEngineCtx;
     for (let index = startIndex; index < operations.length; index++) {
       const operation = operations[index];
+      if (registry.has(operation.type)) {
+        runOpSequence(effectsCtx, [operation], context.source, registry);
+        continue;
+      }
+      // Phase 4: record ops that fall through the dispatcher to the legacy
+      // switch as "unknown-to-dispatcher". This is the coverage gap we
+      // want to measure for Phase 5 handler backlog planning. The legacy
+      // switch still runs immediately below - we are only observing.
+      if (statsRecorder) {
+        recordOp(statsRecorder, operation.type, 'unknown');
+      }
       switch (operation.type) {
         case 'draw_cards': {
           const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
@@ -5134,6 +5253,66 @@ export class RiftboundGameEngine {
     }
   }
 
+  /**
+   * Bridge the RiftboundGameEngine's private helpers to the narrow
+   * EngineAdapter surface consumed by effect handlers. Cached on first use
+   * so each executeEffectOperations call doesn't reallocate the closure
+   * set.
+   */
+  private _effectsAdapter: EngineAdapter | null = null;
+  private getEffectsAdapter(): EngineAdapter {
+    if (this._effectsAdapter) return this._effectsAdapter;
+    const self = this;
+    const triggerRegistry = this.triggerRegistry;
+    const adapter: EngineAdapter & { getTriggerRegistry: () => TriggerRegistry } = {
+      getTriggerRegistry: () => triggerRegistry,
+      getOtherPlayer: (p) => self.getOtherPlayer(p),
+      drawCards: (p, c, r) => self.drawCards(p, c, r),
+      recycleTopOfGraveyard: (p, count) => {
+        let moved = 0;
+        for (let i = 0; i < count; i++) {
+          const recovered = p.graveyard.shift();
+          if (!recovered) break;
+          p.deck.push(recovered);
+          moved++;
+        }
+        if (moved > 0) {
+          self.shuffle(p.deck);
+        }
+        return moved;
+      },
+      applyTemporaryEffect: (id, effect) => self.applyTemporaryEffect(id, effect as TemporaryEffect),
+      damageCreature: (target, amount, source) =>
+        self.damageCreature(target, amount, source ?? self.buildSpellReference()),
+      ensureDamageableTarget: (target, source) => self.ensureDamageableTarget(target, source),
+      findCardInstance: (id) => self.findCardInstance(id),
+      channelRunes: (p, amount, opts) => self.channelRunes(p, amount, opts),
+      exhaustRunes: (p, amount) => self.exhaustRunes(p, amount),
+      logRuneChange: (p, amount, opts) =>
+        self.logRuneChange(p, amount, opts as Parameters<typeof self.logRuneChange>[2]),
+      logRuleUsage: (card, reason) => {
+        if (card) self.logRuleUsage(card, reason);
+      },
+      applyBattlefieldControl: (p, bf, reason, options) =>
+        self.applyBattlefieldControl(p, bf, reason, options),
+      resolveBattlefieldTargetForControl: (p, target) =>
+        self.resolveBattlefieldTargetForControl(p, target),
+      getTokenSpec: (operation, source) => self.getTokenSpec(operation, source),
+      spawnTokenUnits: (p, tokenSpec, ctx) =>
+        self.spawnTokenUnits(p, tokenSpec as TokenSpec, ctx as EffectOperationContext),
+      getPlayerByCard: (id) => self.getPlayerByCard(id),
+      moveUnitToBattlefield: (owner, unit, bf) => self.moveUnitToBattlefield(owner, unit, bf),
+      moveUnitToBase: (owner, unit) => self.moveUnitToBase(owner, unit),
+      openPriorityWindow: (type, holder, event) => self.openPriorityWindow(type, holder, event),
+      getCurrentPhase: () => String(self.gameState.currentPhase),
+      setFocusPlayerId: (id) => { self.gameState.focusPlayerId = id; },
+      addDuelLogEntry: (entry) => { self.addDuelLogEntry(entry); },
+      resolvePlayerName: (id) => self.resolvePlayerName(id)
+    };
+    this._effectsAdapter = adapter;
+    return adapter;
+  }
+
   private handleSpecialSpell(spell: Card, caster: PlayerState, targets?: string[]): boolean {
     const effectText = (spell.text ?? '').toLowerCase();
     if (!effectText) {
@@ -5717,6 +5896,31 @@ export class RiftboundGameEngine {
     return true;
   }
 
+  /**
+   * Phase 3 ETL Fix 2 ported to the runtime boundary.
+   *
+   * `buildEffectProfile` (card-catalog.ts EFFECT_TAXONOMY `priority` class)
+   * re-derives a variantless `{ type: 'manipulate_priority' }` op whenever a
+   * card's printed text matches /REACTION|ACTION|showdown|priority/. The ETL
+   * migration stripped these from the JSON, but the enricher/normalizer
+   * re-emits them on load and `deriveCardAbilities` also re-emits them per
+   * rule clause. Those ops carry no `variant`, so the priority handler's
+   * `inferVariant` fallback rounds them to `action_tagged` and warns
+   * `PRIORITY_TAG_DISPATCHED_AS_OP` on every ability resolution.
+   *
+   * The op is a no-op at the handler; filtering it before dispatch is
+   * behavior-equivalent and silences the warn at its source. The warn in
+   * `effects/handlers/priority.ts` stays in place as defense-in-depth for
+   * any op still synthesized outside this boundary.
+   */
+  private stripTimingTagOps(operations: EffectOperation[]): EffectOperation[] {
+    return operations.filter(
+      (operation) =>
+        operation.type !== 'manipulate_priority' ||
+        typeof (operation as { variant?: string }).variant === 'string',
+    );
+  }
+
   private normalizeEffectOperations(
     text: string,
     operations?: EffectOperation[]
@@ -5724,10 +5928,11 @@ export class RiftboundGameEngine {
     if (!operations || operations.length === 0) {
       return operations;
     }
+    const stripped = this.stripTimingTagOps(operations);
     if (!this.shouldDefaultDiscardToSelf(text)) {
-      return operations;
+      return stripped;
     }
-    return operations.map((operation) => {
+    return stripped.map((operation) => {
       if (operation.type !== 'discard_cards' || operation.targetHint !== 'enemy') {
         return { ...operation };
       }
@@ -5745,7 +5950,7 @@ export class RiftboundGameEngine {
     const description = ability.description ?? '';
     const normalizedDescription = description.toLowerCase();
     const effectText = this.stripTriggerPrefix(normalizedDescription);
-    let operations = ability.operations.map((operation) => ({
+    let operations = this.stripTimingTagOps(ability.operations).map((operation) => ({
       ...operation,
       metadata: operation.metadata ? { ...operation.metadata } : undefined
     }));
@@ -7757,7 +7962,7 @@ export class RiftboundGameEngine {
   private openPriorityWindow(type: PriorityWindow['type'], holder: string, event?: string): void {
     const timestamp = Date.now();
     this.gameState.priorityWindow = {
-      id: `priority_${timestamp}_${Math.random()}`,
+      id: `priority_${timestamp}_${this.rng.next()}`,
       type,
       holder,
       openedAt: timestamp,
@@ -8282,7 +8487,7 @@ export class RiftboundGameEngine {
 
   private shuffle<T>(items: T[]): void {
     for (let i = items.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = this.rng.nextInt(0, i + 1);
       [items[i], items[j]] = [items[j], items[i]];
     }
   }

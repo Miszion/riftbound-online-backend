@@ -467,15 +467,11 @@ const EFFECT_CLASS_DEFINITIONS = [
     operation: { type: 'ready', targetHint: 'ally', zone: 'board', automated: false },
     ruleRefs: ['161-170']
   },
-  {
-    id: 'rune_type',
-    label: 'Basic rune card',
-    patterns: [
-      /^No effect text provided\.?$/i
-    ],
-    operation: { type: 'rune_resource', targetHint: 'self', zone: 'board', automated: true },
-    ruleRefs: ['161-170']
-  },
+  // PHASE-5-TODO: consolidate classifier table (see src/card-catalog.ts
+  // EFFECT_CLASS_DEFINITIONS). The `rune_type` entry that previously emitted
+  // `{ type: 'rune_resource', ... }` was removed in Phase 5a (see
+  // docs/phase-4-enricher-fix-spec.md). `isRuneResource` is now derived from
+  // `card.type === 'Rune'` in reshapeDump().
   {
     id: 'tribal_synergy',
     label: 'Tribal / type synergy',
@@ -1343,11 +1339,13 @@ const reshapeDump = (raw) => {
     if (shouldDefaultTapped(record.type) && !behaviorHints.entersUntapped) {
       behaviorHints.entersTapped = true;
     }
+    const cardType = normalize(record.type) || null;
+    const isRuneResource = (cardType || '').toLowerCase() === 'rune';
     const cardRecord = {
       id,
       slug,
       name: normalize(record.name),
-      type: normalize(record.type) || null,
+      type: cardType,
       rarity: normalize(record.rarity) || null,
       setName: normalize(record.set_name) || null,
       colors,
@@ -1357,6 +1355,7 @@ const reshapeDump = (raw) => {
       effect: normalizedEffect,
       flavor: normalize(record.flavor) || null,
       keywords,
+      isRuneResource,
       activation,
       effectProfile,
       rules,
@@ -1441,10 +1440,41 @@ const applyCardSpecificFixes = (cards) => {
   });
 };
 
+/**
+ * Build-time assertion: no card may carry a `rune_resource` op anywhere in
+ * effectProfile.operations[] or abilities[].operations[]. `rune_resource` is
+ * a classification label, not a dispatcher op (riftbound-effect-spec.md
+ * section 16.5). See docs/phase-4-enricher-fix-spec.md section 3.1.
+ *
+ * Throws with the offending card IDs listed so a regression is actionable.
+ */
+const assertNoRuneResourceOps = (cards) => {
+  const offenders = [];
+  for (const card of cards) {
+    const effectOps = (card.effectProfile && card.effectProfile.operations) || [];
+    const abilityOps = ((card.abilities || [])).flatMap(
+      (ability) => (ability && ability.operations) || []
+    );
+    const ops = [...effectOps, ...abilityOps];
+    if (ops.some((op) => op && op.type === 'rune_resource')) {
+      offenders.push(card.id);
+    }
+  }
+  if (offenders.length > 0) {
+    throw new Error(
+      `Enricher regression: ${offenders.length} card(s) carry a rune_resource op ` +
+      `in effectProfile.operations[] or abilities[].operations[]. ` +
+      `rune_resource is a classification label, not a dispatcher op. ` +
+      `Offenders: ${offenders.join(', ')}`
+    );
+  }
+};
+
 const main = async () => {
   const rawDump = await fetchChampionDump();
   let cards = reshapeDump(rawDump);
   cards = applyCardSpecificFixes(cards);
+  assertNoRuneResourceOps(cards);
   const manifest = cards.map((card) => ({
     id: card.id,
     name: card.name,

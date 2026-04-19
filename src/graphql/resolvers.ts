@@ -26,8 +26,10 @@ import {
   startBotMatch,
   listActiveBotMatches,
   cancelBotMatch,
-  cancelAllBotMatches
+  cancelAllBotMatches,
+  getActiveBotMatch
 } from '../bot-match';
+import { getFrames as getRecordedFrames } from '../replay-frame-store';
 import {
   startReplaySession,
   controlReplaySession,
@@ -1330,6 +1332,117 @@ const mapRecentMatchItem = (item: AWS.DynamoDB.DocumentClient.AttributeMap) => (
   status: (item.Status as string) || null
 });
 
+// Build the lifecycle/record view for Query.matchStatus. Resolves in this
+// order: in-memory bot registry (for in-progress matches) -> DynamoDB (real
+// PvP + bot matches that persisted successfully) -> JSONL fallback (bot-UI
+// matches when DDB was unavailable, and self-play harness runs). Returns
+// null when no source has the match, so the resolver can cleanly return a
+// null field rather than throwing a 500 for unknown ids.
+const buildMatchStatus = async (matchId: string) => {
+  const active = getActiveBotMatch(matchId);
+  if (active && (active.status === 'initializing' || active.status === 'running')) {
+    // Pull currentPhase / turnNumber from the most recent serialized frame
+    // (what publishSpectatorState writes into replay-frame-store every tick).
+    // Falling back to the registry's `turn` covers the narrow window between
+    // REGISTRY insert and the first frame publish.
+    const frames = getRecordedFrames(matchId);
+    const latest = frames.length ? (frames[frames.length - 1] as any) : null;
+    return {
+      matchId,
+      status: 'in_progress',
+      winner: null,
+      loser: null,
+      turns: null,
+      duration: null,
+      endReason: null,
+      players: active.players,
+      currentPhase: latest?.currentPhase ?? null,
+      turnNumber: typeof latest?.turnNumber === 'number' ? latest.turnNumber : active.turn,
+      createdAt: active.startedAt ? new Date(active.startedAt) : null,
+      completedAt: null
+    };
+  }
+
+  let record: AWS.DynamoDB.DocumentClient.AttributeMap | Record<string, any> | null = null;
+  try {
+    const result = await dynamodb
+      .query({
+        TableName: matchTableName,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        Limit: 1
+      })
+      .promise();
+    if (result.Items?.[0]) {
+      record = result.Items[0];
+    }
+  } catch (error) {
+    logger.warn('[matchStatus] DynamoDB lookup failed, trying JSONL fallback', {
+      matchId,
+      error: (error as Error).message
+    });
+  }
+
+  if (!record) {
+    // Covers bot-UI JSONL (data/bot-matches/<id>.jsonl) and self-play JSONL.
+    // buildMatchReplayFromJsonl returns the same PascalCase shape as DDB.
+    record = buildMatchReplayFromJsonl(matchId);
+  }
+
+  if (!record) {
+    // Terminal in-memory bot record that never persisted (e.g. crashed
+    // before finalize wrote anywhere). Surface what we have so pollers
+    // still learn the match ended.
+    if (active) {
+      return {
+        matchId,
+        status: active.status,
+        winner: active.winner ?? null,
+        loser: null,
+        turns: active.turn ?? null,
+        duration: null,
+        endReason: active.reason ?? null,
+        players: active.players,
+        currentPhase: null,
+        turnNumber: active.turn ?? null,
+        createdAt: active.startedAt ? new Date(active.startedAt) : null,
+        completedAt: active.endedAt ? new Date(active.endedAt) : null
+      };
+    }
+    return null;
+  }
+
+  const finalState = (record as any).FinalState || {};
+  const createdAtRaw = (record as any).CreatedAt;
+  const timestampRaw = (record as any).Timestamp;
+  const createdAt =
+    createdAtRaw instanceof Date
+      ? createdAtRaw
+      : typeof createdAtRaw === 'number'
+      ? new Date(createdAtRaw)
+      : null;
+  const completedAt =
+    typeof timestampRaw === 'number' ? new Date(timestampRaw) : createdAt;
+
+  return {
+    matchId: (record as any).MatchId || matchId,
+    status: (record as any).Status || 'completed',
+    winner: (record as any).Winner ?? null,
+    loser: (record as any).Loser ?? null,
+    turns: (record as any).Turns ?? null,
+    duration: (record as any).Duration ?? null,
+    endReason: (record as any).Reason ?? null,
+    players: Array.isArray((record as any).Players) ? (record as any).Players : [],
+    currentPhase: finalState?.currentPhase ?? null,
+    turnNumber:
+      typeof finalState?.turnNumber === 'number'
+        ? finalState.turnNumber
+        : (record as any).Turns ?? null,
+    createdAt,
+    completedAt
+  };
+};
+
 // ============================================================================
 // QUERY RESOLVERS
 // ============================================================================
@@ -1404,6 +1517,18 @@ export const queryResolvers = {
     } catch (error) {
       logger.error('Error fetching match:', error);
       throw error;
+    }
+  },
+
+  async matchStatus(_parent: any, { matchId }: { matchId: string }) {
+    try {
+      return await buildMatchStatus(matchId);
+    } catch (error) {
+      logger.error('[matchStatus] failed to build record', {
+        matchId,
+        error: (error as Error).message
+      });
+      return null;
     }
   },
 

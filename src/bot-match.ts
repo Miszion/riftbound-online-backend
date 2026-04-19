@@ -1,15 +1,22 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import logger from './logger';
 import {
   CardType,
   Domain,
   GameStatus,
+  MatchResult,
   PlayerDeckConfig,
   RiftboundGameEngine,
   RuneCard
 } from './game-engine';
 import { serializeGameState } from './game-state-serializer';
-import { persistEngineSnapshot, matchSnapshotExists } from './match-routes';
+import {
+  persistEngineSnapshot,
+  matchSnapshotExists,
+  persistMatchFinalState
+} from './match-routes';
 import {
   publishGameStateChange,
   publishMatchCompletion
@@ -430,6 +437,129 @@ const publishSpectatorState = (matchId: string, engine: RiftboundGameEngine) => 
   }
 };
 
+// Dedicated directory for bot-UI match JSONL fallbacks. We intentionally keep
+// these separate from the self-play harness JSONL dir so the two consumers
+// (self-play fleet reports vs. live bot-vs-bot UI matches) stay isolated.
+const BOT_MATCHES_JSONL_DIR = path.resolve(
+  __dirname,
+  '..',
+  'data',
+  'bot-matches'
+);
+
+const buildBotMatchJsonlRecords = (
+  matchId: string,
+  record: InternalRecord,
+  engine: RiftboundGameEngine,
+  matchResult: MatchResult | null,
+  endReason: string,
+  status: 'completed' | 'crashed'
+): unknown[] => {
+  const rawState = engine.getGameState();
+  const finalState = serializeGameState(rawState);
+  const moveHistory = matchResult?.moves ?? rawState.moveHistory ?? [];
+  const startedAtMs = Date.parse(record.startedAt);
+  const endedAtMs = record.endedAt ? Date.parse(record.endedAt) : Date.now();
+  const durationSec =
+    Number.isFinite(startedAtMs) && Number.isFinite(endedAtMs)
+      ? Math.max(0, Math.round((endedAtMs - startedAtMs) / 1000))
+      : null;
+
+  // Map engine-winner playerId to P1/P2 labels (same convention as self-play
+  // JSONL) so the existing `deriveWinner` helper in replay-reconstructor
+  // returns playerA/playerB correctly without a second code path.
+  const [p1, p2] = record.players;
+  const winnerLabel: 'P1' | 'P2' | null =
+    matchResult?.winner === p1 ? 'P1' : matchResult?.winner === p2 ? 'P2' : null;
+  const loserLabel: 'P1' | 'P2' | null =
+    winnerLabel === 'P1' ? 'P2' : winnerLabel === 'P2' ? 'P1' : null;
+  const resultField: 'P1_wins' | 'P2_wins' | 'draw' =
+    winnerLabel === 'P1' ? 'P1_wins' : winnerLabel === 'P2' ? 'P2_wins' : 'draw';
+
+  // Header line carries the match identity, player identities, strategies,
+  // and createdAt. `listBotMatchesFromJsonl` reads the first line for
+  // matchId + createdAt, so this placement matters.
+  const header = {
+    matchId,
+    timestamp: record.startedAt,
+    kind: 'bot-match-header',
+    players: record.players,
+    strategies: record.strategies
+  };
+
+  // Terminal line carries the full payload needed by `buildMatchReplayFromJsonl`
+  // to return populated `finalState` + `moves` without re-running the engine,
+  // and by `listBotMatchesFromJsonl` to surface winner/turns/duration/endReason/status.
+  const terminal = {
+    matchId,
+    timestamp: record.endedAt ?? new Date().toISOString(),
+    kind: 'bot-match-terminal',
+    turn: engine.turnNumber,
+    result: resultField,
+    winReason: endReason,
+    terminal: {
+      winner: winnerLabel,
+      loser: loserLabel,
+      reason: endReason,
+      turns: engine.turnNumber,
+      durationMs:
+        Number.isFinite(startedAtMs) && Number.isFinite(endedAtMs)
+          ? endedAtMs - startedAtMs
+          : null,
+      violations: []
+    },
+    // Persisted payload — consumed by buildMatchReplayFromJsonl.
+    persisted: {
+      matchId,
+      players: record.players,
+      winner: matchResult?.winner ?? null,
+      loser: matchResult?.loser ?? null,
+      turns: engine.turnNumber,
+      duration: durationSec,
+      createdAt: Number.isFinite(startedAtMs) ? startedAtMs : Date.now(),
+      status,
+      endReason,
+      moves: moveHistory,
+      finalState
+    }
+  };
+  return [header, terminal];
+};
+
+const writeBotMatchJsonlFallback = (
+  matchId: string,
+  record: InternalRecord,
+  engine: RiftboundGameEngine,
+  matchResult: MatchResult | null,
+  endReason: string,
+  status: 'completed' | 'crashed'
+): void => {
+  try {
+    fs.mkdirSync(BOT_MATCHES_JSONL_DIR, { recursive: true });
+    const filePath = path.join(BOT_MATCHES_JSONL_DIR, `${matchId}.jsonl`);
+    const lines = buildBotMatchJsonlRecords(
+      matchId,
+      record,
+      engine,
+      matchResult,
+      endReason,
+      status
+    );
+    const body = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+    fs.writeFileSync(filePath, body, { encoding: 'utf8' });
+    logger.info('[BOT-MATCH] wrote JSONL fallback for bot match', {
+      matchId,
+      filePath,
+      moves: (lines[1] as any)?.persisted?.moves?.length ?? 0
+    });
+  } catch (error) {
+    logger.error('[BOT-MATCH] JSONL fallback write failed', {
+      matchId,
+      error: (error as Error).message
+    });
+  }
+};
+
 const finalize = (
   matchId: string,
   status: 'completed' | 'crashed',
@@ -455,6 +585,52 @@ const finalize = (
         logger.warn('[BOT-MATCH] match-completion publish failed', { matchId, error });
       }
     }
+    // Persist the final state. Dynamo first (canonical store used by real
+    // PvP); on failure (missing table in local dev) fall back to a JSONL on
+    // disk so replay-reconstructor / matchReplay / recentMatches have
+    // something to read. Done inline-async; do not block finalize return.
+    const effectiveResult: MatchResult =
+      result ??
+      {
+        matchId,
+        winner: record.winner ?? record.players[0],
+        loser:
+          record.winner && record.winner !== record.players[0]
+            ? record.players[0]
+            : record.players[1],
+        reason: 'timeout',
+        duration: Date.now() - Date.parse(record.startedAt),
+        turns: engine.turnNumber,
+        moves: engine.getGameState().moveHistory ?? []
+      };
+    (async () => {
+      try {
+        await persistMatchFinalState(
+          matchId,
+          engine.getGameState(),
+          effectiveResult,
+          `bot_match_${reason}`
+        );
+      } catch (error) {
+        logger.warn(
+          '[BOT-MATCH] persistMatchFinalState failed, writing JSONL fallback',
+          { matchId, error: (error as Error).message }
+        );
+        writeBotMatchJsonlFallback(
+          matchId,
+          record,
+          engine,
+          result ?? effectiveResult,
+          reason,
+          status
+        );
+      }
+    })().catch((error) => {
+      logger.error('[BOT-MATCH] finalize persistence task threw', {
+        matchId,
+        error: (error as Error).message
+      });
+    });
   }
   trimRegistry();
 };
@@ -474,6 +650,16 @@ const driveMatch = async (
 
   let totalActions = 0;
   let consecutiveNoProgress = 0;
+  // Defense-in-depth wall-clock stall cap. Some bot seeds hang indefinitely at
+  // e.g. turn 6 / main_1 with `consecutiveNoProgress` never flipping because
+  // each round dispatches advance_phase/pass_priority fallbacks that keep
+  // `totalActions` incrementing without real state change. We track real
+  // forward progress via (turnNumber, phase, totalActions) triple and fire 60s
+  // after the last observed change. Complements — does not replace — the
+  // existing `no_progress` detector.
+  let lastProgressAt = Date.now();
+  let lastProgressSignature = `${engine.turnNumber}:${engine.currentPhase}:0`;
+  const STALL_CAP_MS = 60_000;
 
   while (true) {
     const record = REGISTRY.get(matchId);
@@ -498,6 +684,17 @@ const driveMatch = async (
     }
     if (totalActions > MAX_TOTAL_ACTIONS) {
       finalize(matchId, 'completed', 'action_limit_reached', engine);
+      return;
+    }
+    if (Date.now() - lastProgressAt > STALL_CAP_MS) {
+      logger.warn('[BOT-MATCH] wall-clock stall cap fired', {
+        matchId,
+        turn: engine.turnNumber,
+        phase: engine.currentPhase,
+        totalActions,
+        sinceProgressMs: Date.now() - lastProgressAt
+      });
+      finalize(matchId, 'completed', 'stalled', engine);
       return;
     }
 
@@ -566,6 +763,17 @@ const driveMatch = async (
       }
     } else {
       consecutiveNoProgress = 0;
+    }
+
+    // Update the wall-clock progress marker only on real forward motion —
+    // turn advance or phase change or a new totalActions count. If the bot
+    // is stuck spamming advance_phase at turn 6 / main_1, the signature
+    // still changes for a couple of iterations (totalActions bumps) but then
+    // plateaus once engine state freezes, and the 60s cap kicks in.
+    const currentSignature = `${engine.turnNumber}:${engine.currentPhase}:${totalActions}`;
+    if (currentSignature !== lastProgressSignature) {
+      lastProgressSignature = currentSignature;
+      lastProgressAt = Date.now();
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -652,6 +860,16 @@ export const listActiveBotMatches = (): BotMatchSummary[] => {
   return Array.from(REGISTRY.values())
     .map(({ cancelled: _cancelled, ...summary }) => summary)
     .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+};
+
+// Snapshot lookup of a single in-memory bot match record. Used by
+// Query.matchStatus to report on in-progress matches. Returns null when the
+// matchId is not currently tracked (never started, or already pruned).
+export const getActiveBotMatch = (matchId: string): BotMatchSummary | null => {
+  const record = REGISTRY.get(matchId);
+  if (!record) return null;
+  const { cancelled: _cancelled, ...summary } = record;
+  return summary;
 };
 
 export const cancelBotMatch = (matchId: string): boolean => {

@@ -282,6 +282,26 @@ export const typeDefs = `#graphql
     createdAt: DateTime
   }
 
+  # Top-level record view of a match. Unlike Query.match (which returns the
+  # full playable GameState snapshot for GameBoard), this exposes only the
+  # lifecycle fields pollers care about: is it finished, who won, how long,
+  # how many turns. Works for in-progress, DynamoDB-persisted, and JSONL
+  # fallback records (bot + self-play).
+  type MatchStatus {
+    matchId: ID!
+    status: String!
+    winner: ID
+    loser: ID
+    turns: Int
+    duration: Int
+    endReason: String
+    players: [String!]!
+    currentPhase: String
+    turnNumber: Int
+    createdAt: DateTime
+    completedAt: DateTime
+  }
+
   type RecentMatchSummary {
     matchId: ID!
     players: [ID!]
@@ -570,6 +590,10 @@ export const typeDefs = `#graphql
 
     # Match queries
     match(matchId: ID!): GameState
+    # Lifecycle/record view for pollers (QA, replay-ready wait, integrations).
+    # Does not return the playable GameState. Safe for in-progress and
+    # completed (DynamoDB + JSONL fallback) matches.
+    matchStatus(matchId: ID!): MatchStatus
     playerMatch(matchId: ID!, playerId: ID!): PlayerView
     matchHistory(userId: ID!, limit: Int): [MatchHistory!]!
     matchResult(matchId: ID!): MatchResult

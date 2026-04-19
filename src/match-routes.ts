@@ -213,7 +213,7 @@ const recordMatchHistoryEntries = async (
   }
 };
 
-const persistMatchFinalState = async (
+export const persistMatchFinalState = async (
   matchId: string,
   rawState: GameState,
   matchResult: MatchResult,
@@ -802,7 +802,13 @@ matchRouter.get('/matches/:matchId/player/:playerId', async (req: Request, res: 
       });
       return;
     }
-    res.status(500).json({ error: 'Failed to fetch player view' });
+    const { matchId, playerId } = req.params;
+    const err = error as Error;
+    logger.error('[playerView] fetch failed', { matchId, playerId, error: err.message, stack: err.stack });
+    const stage = process.env.ENVIRONMENT || process.env.STAGE || 'dev';
+    const body: Record<string, unknown> = { error: 'Failed to fetch player view' };
+    if (stage !== 'prod') body.message = err.message;
+    res.status(500).json(body);
   }
 });
 
