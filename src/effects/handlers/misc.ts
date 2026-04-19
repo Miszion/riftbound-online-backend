@@ -24,9 +24,31 @@ const GENERIC_KNOWN_CARDS = new Set<string>(['OGN-029', 'OGN-248', 'OGN-105', 'S
 
 export const genericHandler: OpHandler<{ type: 'generic' }> = {
   op: 'generic',
-  execute(_ctx: EngineCtx, _op, source): OpResult {
+  execute(ctx: EngineCtx, _op, source): OpResult {
+    const op = _op as unknown as { targetHint?: string; magnitudeHint?: number };
     const sourceCardId = (source as unknown as { id?: string })?.id;
     const known = sourceCardId ? GENERIC_KNOWN_CARDS.has(sourceCardId) : false;
+
+    // Engine adapter path: a generic op targeting a battlefield with a
+    // claim-like text intent resolves as a battlefield control award. This
+    // covers "Claim a battlefield" and similar text where the enricher could
+    // not classify the op but the intent is unambiguous in context (a
+    // battlefieldTarget was supplied at spell-play time).
+    const bfTarget = ctx.operationContext?.battlefieldTarget;
+    if (
+      ctx.engine?.applyBattlefieldControl &&
+      ctx.caster &&
+      bfTarget &&
+      op.targetHint === 'battlefield'
+    ) {
+      const points = Math.max(1, op.magnitudeHint ?? 1);
+      ctx.engine.applyBattlefieldControl(ctx.caster, bfTarget, 'objective', {
+        points,
+        sourceCardId
+      });
+      return emptyResult();
+    }
+
     logger.warn('[effects] GENERIC_OP_SKIPPED', {
       sourceCardId,
       known,
