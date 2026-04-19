@@ -4497,7 +4497,16 @@ export class RiftboundGameEngine {
     const boardTarget = targetId ? this.findCardInstance(targetId) : undefined;
     const playerTarget = targetId ? this.gameState.players.find((p) => p.playerId === targetId) : undefined;
     const battlefieldTarget = targetId ? this.findBattlefieldState(targetId) : undefined;
-    const operations = spell.effectProfile?.operations ?? [];
+    // Run normalizeEffectOperations against the spell's live text + ops so
+    // spells injected outside the catalog-load pipeline (tests, synthesized
+    // cards, etc.) still get the targetHint adjustments that the load-time
+    // pass applies. Without this, a spell with text "Discard a card" but an
+    // upstream-enriched `discard_cards` op carrying `targetHint: 'enemy'`
+    // would discard from the opponent even though the printed text has no
+    // opponent qualifier (Rule 435: default pronouns bind to the caster).
+    const rawOperations = spell.effectProfile?.operations ?? [];
+    const operations =
+      this.normalizeEffectOperations(spell.text ?? '', rawOperations) ?? rawOperations;
 
     if (operations.length > 0) {
       this.executeEffectOperations(operations, caster, {
