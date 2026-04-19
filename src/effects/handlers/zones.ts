@@ -213,7 +213,18 @@ export const removePermanentHandler: OpHandler<{ type: 'remove_permanent' }> = {
     // the kill/deathknell pipeline).
     const targets = resolveBoardTargets(ctx);
     if (targets.length === 0 && ctx.operationContext?.boardTarget) {
-      targets.push(ctx.operationContext.boardTarget);
+      // Re-validate the fallback boardTarget via findCardInstance so a
+      // stale reference to a unit that was already destroyed (for example
+      // by a preceding op in the same operation list that killed a token,
+      // or by a chained trigger) no longer reaches damageCreature ->
+      // destroyUnit -> getPlayerByCard, which throws
+      // "Card instance <id> not found". This is the phase-5c bot-match
+      // regression gate's surfaced failure mode.
+      const fallback = ctx.operationContext.boardTarget;
+      const stillOnBoard = ctx.engine?.findCardInstance?.(fallback.instanceId);
+      if (stillOnBoard) {
+        targets.push(stillOnBoard);
+      }
     }
     for (const target of targets) {
       // SFD-186 (Spinning Axe) is itself a Gear whose operation list ends
@@ -222,6 +233,13 @@ export const removePermanentHandler: OpHandler<{ type: 'remove_permanent' }> = {
       // throw; skip gear so sibling attach/equip ops still resolve. Units
       // still route through the damage-to-toughness pipeline as before.
       if (target.type !== CardType.CREATURE) continue;
+      // Re-validate per-target: a prior iteration's damageCreature call
+      // can chain into deathknell triggers that in turn kill later targets
+      // in this same loop. Once the unit has left the board,
+      // damageCreature -> destroyUnit -> getPlayerByCard throws. Skip
+      // targets that are no longer findable so the operation list resolves
+      // cleanly.
+      if (!ctx.engine?.findCardInstance?.(target.instanceId)) continue;
       ctx.engine.damageCreature(target, target.currentToughness, source);
     }
     return emptyResult();
