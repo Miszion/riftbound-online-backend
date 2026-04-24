@@ -475,14 +475,21 @@ describe('GET /matches/:matchId/player/:playerId', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 500 when engine.getPlayerState returns null', async () => {
+  it('returns a spectator envelope when requester is not a participant', async () => {
+    // BE-4: when engine.getPlayerState returns null (the playerId is not a
+    // participant of this match), the route must no longer 500. It falls back
+    // to a spectator-safe envelope built from players[0], with canAct=false.
     givenStateExists();
     eng.getPlayerState.mockReturnValue(null);
 
-    const res = await request(app).get('/matches/test-match/player/player-1');
+    const res = await request(app).get('/matches/test-match/player/stranger-user-id');
 
-    expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/failed to fetch player view/i);
+    expect(res.status).toBe(200);
+    expect(res.body.matchId).toBe('test-match');
+    expect(res.body.currentPlayer).toBeDefined();
+    expect(res.body.opponent).toBeDefined();
+    expect(res.body.gameState).toBeDefined();
+    expect(res.body.gameState.canAct).toBe(false);
   });
 });
 
