@@ -29,6 +29,9 @@ jobs:
       - name: TypeScript compile check
         run: npx tsc --noEmit
 
+      - name: Generate card catalog
+        run: npm run generate:cards
+
       - name: Run tests
         run: npm test -- --coverage --ci --forceExit
 
@@ -57,12 +60,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate card catalog
+        run: npm run generate:cards
+
       - name: Build
         run: npm run build
 
       - name: Verify dist output
         run: |
-          test -f dist/server.js || (echo "dist/server.js missing" && exit 1)
+          test -f dist/src/server.js || (echo "dist/src/server.js missing" && exit 1)
           echo "Build output verified"
 
   docker:

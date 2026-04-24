@@ -67,7 +67,7 @@ const mockSqsInstance = awsMock._sqsInstance as {
 };
 const mockReceivePromise = awsMock._receivePromise as jest.Mock;
 const mockDeletePromise = awsMock._deletePromise as jest.Mock;
-const mockLogger = logger as {
+const mockLogger = logger as unknown as {
   info: jest.Mock;
   warn: jest.Mock;
   debug: jest.Mock;

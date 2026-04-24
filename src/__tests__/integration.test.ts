@@ -6,8 +6,7 @@
  */
 import {
   RiftboundGameEngine,
-  GameStatus,
-  GamePhase
+  GameStatus
 } from '../game-engine';
 import {
   createInitializedEngine,

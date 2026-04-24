@@ -21,19 +21,15 @@ import {
   RiftboundGameEngine,
   GameStatus,
   GamePhase,
-  CardType,
   Domain,
-  CardRarity,
   Card,
   CombatContext,
   PriorityWindow
 } from '../game-engine';
 import {
   createInProgressEngine,
-  buildDeckConfig,
   makeCreature,
   makeSpell,
-  makeArtifact,
   makeRuneCard,
   resetCardCounter
 } from './test-helpers';
@@ -569,7 +565,6 @@ describe('ensureCombatTiming', () => {
   it('should throw when non-action/reaction spell played during action combat stage', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
-    const state = engine.getGameState();
     const bfId = firstBattlefieldId(engine);
 
     givePlayerRunes(engine, pId, 5);
@@ -591,7 +586,6 @@ describe('ensureCombatTiming', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const oId = opponentPlayerId(engine);
-    const state = engine.getGameState();
     const bfId = firstBattlefieldId(engine);
 
     givePlayerRunes(engine, pId, 5);
@@ -618,7 +612,6 @@ describe('ensureCombatTiming', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const oId = opponentPlayerId(engine);
-    const state = engine.getGameState();
     const bfId = firstBattlefieldId(engine);
 
     givePlayerRunes(engine, pId, 5);
@@ -1679,11 +1672,14 @@ describe('checkLegionBonus', () => {
     const pIndex = state.players.findIndex(p => p.playerId === pId);
     const currentTurn = state.turnNumber;
 
-    // Inject Legion unit to battlefield
+    // Inject Legion unit to battlefield. Toughness is 4 so the unit survives
+    // the opponent's 3 damage pool — the point of the test is that the Legion
+    // +2 Might bonus lets the attacker (base power 2) kill the 3-toughness
+    // defender with 4 effective damage.
     const legionUnit = injectCreatureToBattlefield(engine, pId, bfId, {
       name: 'Legion Warrior',
       power: 2,
-      toughness: 2,
+      toughness: 4,
       text: '[Legion] — +2 Might.',
       effectProfile: {
         classes: ['keyword_legion'],
@@ -1705,7 +1701,7 @@ describe('checkLegionBonus', () => {
     });
 
     // Set up combat with the Legion unit attacking
-    // Legion gives +2, so legion unit has 2+2=4 might vs opponent 3
+    // Legion gives +2, so legion unit has 2+2=4 might vs opponent 3 toughness
     setupCombatPriority(engine, pId, bfId, [legionUnit], [oUnitId]);
     state.combatContext!.initiatedBy = pId;
 

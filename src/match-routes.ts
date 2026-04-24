@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express, { type Express, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import AWS from 'aws-sdk';
 import logger from './logger';
 import {
@@ -32,6 +34,97 @@ const dynamodb = new AWS.DynamoDB.DocumentClient({
 
 const LOCAL_BYPASS = process.env.ALLOW_LOCAL_BYPASS === 'true';
 const LOCAL_STATE_STORE = new Map<string, GameState>();
+
+// ============================================================================
+// BOT DECK PRESETS
+// Replace opponent deck placeholders (__opponent_pending__ / empty / unknown
+// deckId) with a legal 2-color preset so the engine never falls through to
+// the unsafe color-mixed fallback in materializeDeckEntry.
+// ============================================================================
+
+const BOT_DECK_SENTINELS = new Set([
+  '__opponent_pending__',
+  '__bot__',
+  '__ai__'
+]);
+
+const loadBotDeckPresets = (): any[] => {
+  const candidates = [
+    path.join(__dirname, '..', 'data', 'bot-decks.json'),
+    path.join(process.cwd(), 'data', 'bot-decks.json'),
+    path.join(__dirname, '..', '..', 'data', 'bot-decks.json')
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          logger.info('[BOT-DECKS] Loaded bot deck presets', { path: p, count: parsed.length });
+          return parsed;
+        }
+      }
+    } catch (err) {
+      logger.warn('[BOT-DECKS] Failed to load preset candidate', { path: p, error: String(err) });
+    }
+  }
+  logger.warn('[BOT-DECKS] No bot deck presets found; bot opponents may get invalid decks', {
+    tried: candidates
+  });
+  return [];
+};
+
+const BOT_DECK_PRESETS: any[] = loadBotDeckPresets();
+
+const pickBotDeckPreset = (): any | null => {
+  if (BOT_DECK_PRESETS.length === 0) return null;
+  const idx = Math.floor(Math.random() * BOT_DECK_PRESETS.length);
+  return BOT_DECK_PRESETS[idx];
+};
+
+const isPendingBotDeck = (deck: any): boolean => {
+  if (deck == null) return true;
+  if (typeof deck === 'object' && !Array.isArray(deck)) {
+    if (Object.keys(deck).length === 0) return true;
+    const deckId = typeof deck.deckId === 'string' ? deck.deckId : null;
+    if (deckId && BOT_DECK_SENTINELS.has(deckId)) return true;
+    const hasMain = Array.isArray(deck.mainDeck) && deck.mainDeck.length > 0;
+    const hasCards = Array.isArray(deck.cards) && deck.cards.length > 0;
+    if (!hasMain && !hasCards && !deckId) return true;
+  }
+  return false;
+};
+
+const resolveDecksForBots = (
+  decks: Record<string, any>,
+  matchId: string,
+  requestId?: string
+): Record<string, any> => {
+  const resolved: Record<string, any> = { ...decks };
+  for (const [playerId, deck] of Object.entries(decks || {})) {
+    if (isPendingBotDeck(deck)) {
+      const preset = pickBotDeckPreset();
+      if (preset) {
+        resolved[playerId] = preset;
+        logger.info('[BOT-DECKS] Swapped pending deck for preset', {
+          matchId,
+          playerId,
+          presetId: preset.id,
+          presetName: preset.name,
+          colors: preset.colors,
+          requestId
+        });
+      } else {
+        logger.error('[BOT-DECKS] No preset available for pending deck', {
+          matchId,
+          playerId,
+          requestId
+        });
+      }
+    }
+  }
+  return resolved;
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -120,7 +213,7 @@ const recordMatchHistoryEntries = async (
   }
 };
 
-const persistMatchFinalState = async (
+export const persistMatchFinalState = async (
   matchId: string,
   rawState: GameState,
   matchResult: MatchResult,
@@ -611,10 +704,14 @@ matchRouter.post('/matches/init', async (req: Request, res: Response): Promise<v
       }
     ];
 
+    // Replace pending / empty bot deck slots with legal presets so the engine
+    // never falls through to an unsafe color-mixed fallback.
+    const resolvedDecks = resolveDecksForBots(decks, matchId, requestId);
+
     // Create and initialize game engine
     const engine = new RiftboundGameEngine(matchId, playerMetadata);
     try {
-      engine.initializeGame(decks);
+      engine.initializeGame(resolvedDecks);
     } catch (error) {
       logger.error('[MATCH-INIT] Engine initialization failed', {
         matchId,
@@ -705,7 +802,13 @@ matchRouter.get('/matches/:matchId/player/:playerId', async (req: Request, res: 
       });
       return;
     }
-    res.status(500).json({ error: 'Failed to fetch player view' });
+    const { matchId, playerId } = req.params;
+    const err = error as Error;
+    logger.error('[playerView] fetch failed', { matchId, playerId, error: err.message, stack: err.stack });
+    const stage = process.env.ENVIRONMENT || process.env.STAGE || 'dev';
+    const body: Record<string, unknown> = { error: 'Failed to fetch player view' };
+    if (stage !== 'prod') body.message = err.message;
+    res.status(500).json(body);
   }
 });
 

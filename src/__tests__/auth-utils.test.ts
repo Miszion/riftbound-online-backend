@@ -5,7 +5,7 @@
  * parseCookies (via authenticateRequest), token extraction from all sources.
  */
 import { decodeJwtPayload, authenticateRequest, requireAuthenticatedUser, AuthContext } from '../auth-utils';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
 
 // ---------------------------------------------------------------------------
 // Helpers: build minimal fake JWTs

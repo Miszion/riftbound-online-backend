@@ -99,6 +99,14 @@ jest.mock('../card-catalog', () => ({
   buildActivationStateIndex: jest.fn().mockReturnValue({}),
 }));
 
+// `recentMatches` merges DynamoDB results with bot self-play JSONL files on
+// disk. In tests we want hermetic isolation from the developer's local
+// nexus-data/riftbound-games directory, so stub out the disk reader.
+jest.mock('../replay-reconstructor', () => ({
+  buildMatchReplayFromJsonl: jest.fn().mockReturnValue(null),
+  listBotMatchesFromJsonl:   jest.fn().mockReturnValue([]),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
@@ -221,7 +229,7 @@ describe('toIsoString (via mapDecklistItem / decklists query)', () => {
       Items: [{ UserId: 'u1', DeckId: 'd1', Name: 'My Deck', Tags: [], Cards: [], CreatedAt: ts, UpdatedAt: ts }]
     });
     const result = await queryResolvers.decklists(null, { userId: 'user-1' }, authedCtx('user-1'));
-    expect(result[0].createdAt).toBe(new Date(ts).toISOString());
+    expect(result![0]!.createdAt).toBe(new Date(ts).toISOString());
   });
 
   it('returns null when CreatedAt is missing', async () => {
@@ -229,7 +237,7 @@ describe('toIsoString (via mapDecklistItem / decklists query)', () => {
       Items: [{ UserId: 'u1', DeckId: 'd1', Name: 'No Dates', Tags: [], Cards: [] }]
     });
     const result = await queryResolvers.decklists(null, { userId: 'user-1' }, authedCtx('user-1'));
-    expect(result[0].createdAt).toBeNull();
+    expect(result![0]!.createdAt).toBeNull();
   });
 });
 
@@ -393,8 +401,8 @@ describe('queryResolvers.decklists', () => {
     });
     const result = await queryResolvers.decklists(null, { userId: 'user-1' }, authedCtx('user-1'));
     expect(result).toHaveLength(1);
-    expect(result[0].deckId).toBe('d1');
-    expect(result[0].name).toBe('Deck A');
+    expect(result![0]!.deckId).toBe('d1');
+    expect(result![0]!.name).toBe('Deck A');
   });
 });
 
@@ -498,6 +506,65 @@ describe('queryResolvers.recentMatches', () => {
     const result = await queryResolvers.recentMatches(null, { limit: 10 });
     expect(result[0].matchId).toBe('new');
   });
+
+  it('surfaces endReason + status from DDB Reason/Status columns for completed matches', async () => {
+    const now = Date.now();
+    db._scanPromise.mockResolvedValue({
+      Items: [
+        {
+          MatchId: 'm-vp',
+          Players: ['u1', 'u2'],
+          Winner: 'u1',
+          Loser: 'u2',
+          Duration: 300,
+          Turns: 12,
+          Reason: 'victory_points',
+          Status: 'completed',
+          CreatedAt: now
+        },
+        {
+          MatchId: 'm-burn',
+          Players: ['u3', 'u4'],
+          Winner: 'u3',
+          Loser: 'u4',
+          Duration: 180,
+          Turns: 8,
+          Reason: 'burn_out',
+          Status: 'completed',
+          CreatedAt: now - 1000
+        }
+      ]
+    });
+    const result = await queryResolvers.recentMatches(null, { limit: 10 });
+    const vp = result.find((m: any) => m.matchId === 'm-vp');
+    const burn = result.find((m: any) => m.matchId === 'm-burn');
+    expect(vp).toMatchObject({ endReason: 'victory_points', status: 'completed' });
+    expect(burn).toMatchObject({ endReason: 'burn_out', status: 'completed' });
+  });
+
+  it('leaves endReason/status null when DDB row has no Reason/Status columns', async () => {
+    db._scanPromise.mockResolvedValue({
+      Items: [
+        { MatchId: 'legacy-1', Players: [], CreatedAt: Date.now() }
+      ]
+    });
+    const result = await queryResolvers.recentMatches(null, { limit: 10 });
+    expect(result[0]).toMatchObject({
+      matchId: 'legacy-1',
+      endReason: null,
+      status: null
+    });
+  });
+
+  it('requests Reason and Status in the DDB scan projection', async () => {
+    db._scanPromise.mockResolvedValue({ Items: [] });
+    await queryResolvers.recentMatches(null, { limit: 5 });
+    const callArgs = db.scan.mock.calls[db.scan.mock.calls.length - 1][0];
+    expect(callArgs.ProjectionExpression).toContain('#reason');
+    expect(callArgs.ProjectionExpression).toContain('#status');
+    expect(callArgs.ExpressionAttributeNames['#reason']).toBe('Reason');
+    expect(callArgs.ExpressionAttributeNames['#status']).toBe('Status');
+  });
 });
 
 describe('queryResolvers.cardCatalog', () => {
@@ -590,7 +657,7 @@ describe('queryResolvers.cardImageManifest', () => {
     (getImageManifest as jest.Mock).mockReturnValue([{ slug: 'fire-imp', url: '/img/fire-imp.png' }]);
     const result = queryResolvers.cardImageManifest();
     expect(result).toHaveLength(1);
-    expect(result[0].slug).toBe('fire-imp');
+    expect((result[0] as any).slug).toBe('fire-imp');
   });
 });
 
@@ -601,7 +668,7 @@ describe('queryResolvers.cardActivationStates', () => {
     });
     const result = queryResolvers.cardActivationStates();
     expect(result).toHaveLength(1);
-    expect(result[0].slug).toBe('fire-imp');
+    expect((result[0] as any).slug).toBe('fire-imp');
   });
 
   it('returns empty array when no activation states', () => {
@@ -1298,7 +1365,7 @@ describe('mutationResolvers.leaveMatchmakingQueue', () => {
 
 describe('subscriptionResolvers', () => {
   it('gameStateChanged.subscribe returns asyncIterator for match', () => {
-    const iter = subscriptionResolvers.gameStateChanged.subscribe(null, { matchId: 'm1' });
+    subscriptionResolvers.gameStateChanged.subscribe(null, { matchId: 'm1' });
     expect(pubSub.asyncIterator).toHaveBeenCalledWith(['GAME_STATE_CHANGED:m1']);
   });
 

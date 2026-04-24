@@ -24,6 +24,12 @@ npm-debug.log
 yarn-error.log
 .pnpm-debug.log
 
+# Test coverage (regenerated locally)
+coverage/
+*.lcov
+docs/phase-*-coverage-baseline.md
+docs/phase-*-coverage-audit.md
+
 # IDEs
 .vscode/
 .idea/

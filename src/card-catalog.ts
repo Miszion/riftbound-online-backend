@@ -117,6 +117,13 @@ export type EffectOperationType =
   | 'equip_trigger'
   | 'stun'
   | 'ready'
+  /**
+   * @deprecated Classification label, not a real op. Phase 3 ETL strips
+   * this from `cards.enriched.json` at build time
+   * (scripts/migrate-card-catalog.ts). The runtime guard in
+   * `filterCatalogRuneResourceOps` (src/effects/index.ts) stays in place
+   * as defense-in-depth. Kept in the union so stale payloads still parse.
+   */
   | 'rune_resource'
   | 'tribal_synergy'
   | 'targeting_discount'
@@ -346,11 +353,30 @@ export interface EnrichedCardRecord {
   };
   behaviorHints?: CardBehaviorHints;
   abilities?: CardAbility[];
+  /**
+   * Timing classifications moved out of `effectProfile.operations[]` by the
+   * Phase 3 ETL migration (scripts/migrate-card-catalog.ts). Corresponds to
+   * `manipulate_priority` variants 1-3 per riftbound-effect-spec.md section
+   * 17.3: `"action"` for [Action]-tagged cards (rule 806), `"reaction"` for
+   * [Reaction]-tagged cards (rule 813), `"add_reaction"` for Reaction-tagged
+   * Add abilities (rule 429.3). Default is an empty array.
+   */
+  timingTags: string[];
+  /**
+   * True when `card.type === 'Rune'`. Derived from the authoritative card
+   * type at enrichment time (Phase 5a). Replaces the broken `rune_type`
+   * text classifier that emitted a `rune_resource` op into
+   * `effectProfile.operations[]` for any card with empty effect text.
+   * See docs/phase-4-enricher-fix-spec.md.
+   */
+  isRuneResource: boolean;
 }
 
-type StoredCardRecord = Omit<EnrichedCardRecord, 'effectProfile' | 'activation'> & {
+type StoredCardRecord = Omit<EnrichedCardRecord, 'effectProfile' | 'activation' | 'timingTags' | 'isRuneResource'> & {
   effectProfile?: EffectProfile;
   activation?: ActivationProfile;
+  timingTags?: string[];
+  isRuneResource?: boolean;
 };
 
 export interface ImageManifestEntry {
@@ -453,7 +479,17 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     label: 'Direct damage',
     description: 'Deals damage outside combat (rules 500-520, 437).',
     ruleRefs: ['437', '500-520'],
-    patterns: buildPatterns([/\bdeal\b.*\bdamage\b/i, /\bstrike\b/i, /\bblast\b/i, /\bburn\b/i]),
+    // Phase 9: tightened to catch plural `deals` plus `Deal N to <target>`
+    // phrasing that omits the word "damage" (OGN-029, OGN-248, OGN-105,
+    // SFD-107). See docs/phase-9-classifier-fixes.md.
+    patterns: buildPatterns([
+      /\bdeals?\b[^.]*\bdamage\b/i,
+      /\bdeals?\s+\d+\s+damage\b/i,
+      /\bdeals?\s+\d+\s+to\b/i,
+      /\bstrike\b/i,
+      /\bblast\b/i,
+      /\bburn\b/i
+    ]),
     operation: { type: 'deal_damage', targetHint: 'enemy', zone: 'board', automated: false }
   },
   {
@@ -601,11 +637,16 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     label: 'Assault / attack bonus',
     description: 'Grants bonus might while attacking (rule 713).',
     ruleRefs: ['713'],
+    // Phase 9: added `attacking` and `gets +N/+M ... while attacking`
+    // phrasing to catch UNL-154 ("I have +2 :rb_might: while I'm attacking
+    // with another unit."). See docs/phase-9-classifier-fixes.md.
     patterns: buildPatterns([
       /\[Assault\b/i,
       /\bASSAULT\b/i,
-      /\+\d+.*:rb_might:.*while.*attacker/i,
-      /\+\d+.*might.*while.*attacker/i
+      /\+\d+.*:rb_might:.*while.*(attacker|attacking)/i,
+      /\+\d+.*might.*while.*(attacker|attacking)/i,
+      /\bwhile\s+.*\battacking\b[^.]*\+\d+/i,
+      /\bgets?\s+\+\d+[^.]*\bwhile\s+.*\battacking\b/i
     ]),
     operation: { type: 'combat_bonus', targetHint: 'self', zone: 'board', automated: true }
   },
@@ -614,11 +655,15 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     label: 'Shield / defense bonus',
     description: 'Grants bonus might while defending (rule 714).',
     ruleRefs: ['714'],
+    // Phase 9: mirrored the attack patterns for `blocking`/`defending`
+    // phrasings. See docs/phase-9-classifier-fixes.md.
     patterns: buildPatterns([
       /\[Shield\b/i,
       /\bSHIELD\b/i,
-      /\+\d+.*:rb_might:.*while.*defender/i,
-      /\+\d+.*might.*while.*defender/i
+      /\+\d+.*:rb_might:.*while.*(defender|defending|blocking)/i,
+      /\+\d+.*might.*while.*(defender|defending|blocking)/i,
+      /\bwhile\s+.*\b(defending|blocking)\b[^.]*\+\d+/i,
+      /\bgets?\s+\+\d+[^.]*\bwhile\s+.*\b(defending|blocking)\b/i
     ]),
     operation: { type: 'combat_bonus', targetHint: 'self', zone: 'board', automated: true }
   },
@@ -869,16 +914,12 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     ]),
     operation: { type: 'ready', targetHint: 'ally', zone: 'board', automated: false }
   },
-  {
-    id: 'rune_type',
-    label: 'Basic rune card',
-    description: 'A basic rune resource card with no special effect.',
-    ruleRefs: ['161-170'],
-    patterns: buildPatterns([
-      /^No effect text provided\.?$/i
-    ]),
-    operation: { type: 'rune_resource', targetHint: 'self', zone: 'board', automated: true }
-  },
+  // PHASE-5-TODO: consolidate classifier table (see
+  // scripts/data/transformChampionDump.ts EFFECT_CLASS_DEFINITIONS). The
+  // `rune_type` entry that previously emitted `{ type: 'rune_resource', ... }`
+  // was removed in Phase 5a (see docs/phase-4-enricher-fix-spec.md).
+  // `isRuneResource` is now derived from `card.type === 'Rune'` in
+  // reshapeDump().
   {
     id: 'tribal_synergy',
     label: 'Tribal / type synergy',
@@ -1036,11 +1077,18 @@ const EFFECT_CLASS_DEFINITIONS: EffectClassDefinition[] = [
     label: 'Conditional stat buff',
     description: 'Stat buffs that require a specific game condition to be met.',
     ruleRefs: ['430-450'],
+    // Phase 9: added `[Level N]` level-gated prefix for UNL-098
+    // "[Level 11][>] I have +4 :rb_might:. (While you have 11+ XP, get
+    // the effect.)." plus an XP-threshold variant so the "(While you have
+    // N+ XP...)" parenthetical alone suffices when a bracket prefix is
+    // absent. See docs/phase-9-classifier-fixes.md.
     patterns: buildPatterns([
       /\bwhile\s+you\s+have\s+another\s+unit\b/i,
       /\bwhile\s+.*\s+is\s+in\s+combat\b/i,
       /\bwhile\s+I'?m\s+in\s+combat\b/i,
-      /\bwhile\s+there\s+are?\s+\d+\b/i
+      /\bwhile\s+there\s+are?\s+\d+\b/i,
+      /\[Level\s+\d+\]/i,
+      /\bwhile\s+you\s+have\s+\d+\+\s+xp\b/i
     ]),
     operation: { type: 'conditional_buff', targetHint: 'self', zone: 'board', automated: true }
   },
@@ -1068,6 +1116,46 @@ const GENERIC_EFFECT_CLASS: EffectClassDefinition = {
 };
 
 export const effectClassDefinitions = [...EFFECT_CLASS_DEFINITIONS, GENERIC_EFFECT_CLASS];
+
+// Phase 8b: timing-tag variants of `manipulate_priority` are classifications,
+// not dispatcher ops. See riftbound-effect-spec.md section 17.3 and
+// docs/phase-3-etl-migration.md. This helper is the authoritative text
+// derivation used during enrichment; it replaces the post-hoc move performed
+// by scripts/migrate-card-catalog.ts Fix 2.
+// PHASE-8b-TODO: consolidate with scripts/data/transformChampionDump.ts
+// classifier.
+export const deriveTimingTag = (effectText: string | null | undefined):
+  | 'action'
+  | 'reaction'
+  | 'add_reaction'
+  | null => {
+  const e = String(effectText ?? '');
+  const hasAction = /\[Action\]/i.test(e) || /\bACTION\b/.test(e);
+  const hasReaction = /\[Reaction\]/i.test(e) || /\bREACTION\b/.test(e);
+  const isActivated =
+    /:rb_exhaust:|\[tap\]|:rb_rune_[a-z]+:|:rb_energy_\d+:|\bKill\s+this\s*:/i.test(e);
+  const hasAdd =
+    /\[Add\]/i.test(e) ||
+    /\bADD\b/.test(e) ||
+    /\badd\b\s*(?:that\s+much|any\s+amount|\[|:rb_)/i.test(e);
+  if (hasReaction && (isActivated || hasAdd) && hasAdd) return 'add_reaction';
+  if (hasReaction) return 'reaction';
+  if (hasAction) return 'action';
+  return null;
+};
+
+// Phase 8c: blank / placeholder effect text produces zero operations (and
+// zero classes) rather than falling through to the generic catch-all. The
+// Phase-5a regeneration removed `rune_resource` as an op; before Phase 8c
+// those 36 blank-text Rune cards and 10 blank-text Unit cards fell through
+// to `generic`, driving the 4 -> 52 spike documented in
+// docs/phase-7-coverage-audit.md.
+export const isEmptyEffectText = (text: string | null | undefined): boolean => {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return true;
+  if (/^no effect text provided\.?$/i.test(trimmed)) return true;
+  return false;
+};
 
 const TARGET_HINT_PATTERNS: Array<{ hint: TargetHint; pattern: RegExp }> = [
   { hint: 'ally', pattern: /\bfriendly\b|\ballied\b|\byou control\b/i },
@@ -1184,13 +1272,45 @@ export const buildEffectProfile = (
   tokenSpecsOverride?: TokenSpec[]
 ): EffectProfile => {
   const text = effect || '';
+  // Phase 8c: empty-effect cards (blank string or the "No effect text
+  // provided." placeholder from the source dump) emit zero operations and
+  // zero classes. This prevents the generic-op catch-all from filing 46
+  // blank rune/unit cards as "generic" after Phase 5a removed the
+  // rune_resource op. See docs/phase-7-coverage-audit.md.
+  if (isEmptyEffectText(text)) {
+    return {
+      classes: [],
+      primaryClass: null,
+      operations: [],
+      targeting: {
+        mode: detectTargetMode(text, activation.requiresTarget),
+        hint: detectTargetHint(text),
+        requiresSelection: activation.requiresTarget
+      },
+      priority: detectPriority(text, activation),
+      references: [],
+      reliability: 'exact'
+    };
+  }
   const matchedClasses = matchEffectClasses(text, activation);
   const tokenSpecs = tokenSpecsOverride ?? extractTokenSpecs(text);
   const hasExplicitTokenClass = matchedClasses.some((definition) => definition.id === 'token');
+  // Phase 8b: the `priority` class emits `manipulate_priority`, but variants
+  // 1-3 per spec section 17.3 are timing classifications (action / reaction
+  // / add_reaction), not ops. They're attached to `card.timingTags[]` in
+  // reshapeDump via deriveTimingTag, and the `priority` class is suppressed
+  // here entirely so neither the timing-tagged cards nor bare
+  // `showdown`/`priority` trigger cards leak a `manipulate_priority` op.
+  // Variants 4+ (take_focus, grant_priority, extra_action,
+  // skip_priority_pass) are not currently emitted; when they are, add them
+  // as a separate class rather than re-entering the `priority` bucket.
+  const prioritySuppressed = matchedClasses.filter(
+    (definition) => definition.id !== 'priority'
+  );
   const classes =
     hasExplicitTokenClass && tokenSpecs.length > 0
-      ? matchedClasses.filter((definition) => definition.id !== 'summon')
-      : matchedClasses;
+      ? prioritySuppressed.filter((definition) => definition.id !== 'summon')
+      : prioritySuppressed;
   let tokenCursor = 0;
   const operations = classes.map((definition) => {
     const operation = {
@@ -1724,11 +1844,13 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       behaviorHints.entersTapped = true;
     }
 
+    const cardType = normalize(record.type) || null;
+    const isRuneResource = (cardType || '').toLowerCase() === 'rune';
     const cardRecord: EnrichedCardRecord = {
       id,
       slug,
       name,
-      type: normalize(record.type) || null,
+      type: cardType,
       rarity: normalize(record.rarity) || null,
       setName: normalize(record.set_name) || null,
       colors,
@@ -1738,6 +1860,7 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       effect: normalizedEffect,
       flavor: normalize(record.flavor) || null,
       keywords,
+      isRuneResource,
       effectProfile,
       activation,
       rules,
@@ -1753,7 +1876,15 @@ export const reshapeDump = (raw: RawDump): EnrichedCardRecord[] => {
       references: {
         marketUrl: normalize(record.cmurl) || null,
         source: 'champion-dump-api'
-      }
+      },
+      // Phase 8b: derive timingTags directly at enrichment time. This
+      // replaces the post-hoc move performed by
+      // scripts/migrate-card-catalog.ts Fix 2, which is now a no-op on
+      // fresh catalogs.
+      timingTags: ((): string[] => {
+        const tag = deriveTimingTag(normalizedEffect);
+        return tag !== null ? [tag] : [];
+      })()
     };
 
     if (Object.keys(behaviorHints).length > 0) {
@@ -1771,10 +1902,27 @@ const normalizeCatalogRecord = (record: StoredCardRecord): EnrichedCardRecord =>
   if (shouldDefaultTapped(record.type) && !behaviorHints.entersUntapped) {
     behaviorHints.entersTapped = true;
   }
+  const isRuneResource =
+    typeof record.isRuneResource === 'boolean'
+      ? record.isRuneResource
+      : (record.type || '').toLowerCase() === 'rune';
+  // Phase 8b: if stored record lacks timingTags, derive them from the effect
+  // text at load time. The enricher (reshapeDump above) now populates the
+  // field directly; this fallback keeps the loader correct for legacy
+  // catalog files that predate the Phase-8b regeneration.
+  const storedTimingTags = Array.isArray(record.timingTags) ? record.timingTags : null;
+  const timingTags =
+    storedTimingTags ??
+    (((): string[] => {
+      const tag = deriveTimingTag(record.effect ?? '');
+      return tag !== null ? [tag] : [];
+    })());
   return {
     ...record,
     activation,
     effectProfile,
+    timingTags,
+    isRuneResource,
     ...(Object.keys(behaviorHints).length > 0 ? { behaviorHints } : {})
   };
 };

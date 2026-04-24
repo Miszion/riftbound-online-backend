@@ -26,8 +26,22 @@ import {
   startBotMatch,
   listActiveBotMatches,
   cancelBotMatch,
-  cancelAllBotMatches
+  cancelAllBotMatches,
+  getActiveBotMatch
 } from '../bot-match';
+import { getFrames as getRecordedFrames } from '../replay-frame-store';
+import {
+  startReplaySession,
+  controlReplaySession,
+  getReplaySession,
+  getReplaySessionLastFrame,
+  getReplaySessionViewFrame,
+  ReplayAction
+} from '../replay-session';
+import {
+  buildMatchReplayFromJsonl,
+  listBotMatchesFromJsonl
+} from '../replay-reconstructor';
 
 // Initialize AWS SDK
 const dynamodb = new AWS.DynamoDB.DocumentClient({
@@ -1234,37 +1248,199 @@ const mapMatchReplayItem = (
 };
 
 const getMatchReplayRecord = async (matchId: string) => {
-  const result = await dynamodb
-    .query({
-      TableName: matchTableName,
-      KeyConditionExpression: 'MatchId = :matchId',
-      ExpressionAttributeValues: { ':matchId': matchId },
-      Limit: 1
-    })
-    .promise();
-  return result.Items?.[0] ?? null;
+  try {
+    const result = await dynamodb
+      .query({
+        TableName: matchTableName,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        Limit: 1
+      })
+      .promise();
+    if (result.Items?.[0]) return result.Items[0];
+  } catch (error) {
+    // DynamoDB may be unavailable in local dev; fall through to JSONL fallback.
+    logger.warn('[matchReplay] DynamoDB lookup failed, falling back to JSONL', {
+      matchId,
+      error: (error as Error).message
+    });
+  }
+  // Bot self-play matches live on disk as JSONL, not in DynamoDB.
+  return buildMatchReplayFromJsonl(matchId);
 };
 
 const fetchRecentMatches = async (limit = 10) => {
-  const result = await dynamodb
-    .scan({
-      TableName: matchTableName,
-      ProjectionExpression: 'MatchId, Players, Winner, Loser, Duration, Turns, CreatedAt',
-      Limit: Math.max(limit * 3, limit)
-    })
-    .promise();
-  const items = (result.Items || []).sort(
-    (a, b) => (b.CreatedAt ?? 0) - (a.CreatedAt ?? 0)
-  );
-  return items.slice(0, limit).map((item) => ({
-    matchId: item.MatchId,
-    players: item.Players || [],
-    winner: item.Winner || null,
-    loser: item.Loser || null,
-    duration: item.Duration ?? null,
-    turns: item.Turns ?? null,
-    createdAt: item.CreatedAt ? new Date(item.CreatedAt) : null
-  }));
+  const ddbMatches: Array<ReturnType<typeof mapRecentMatchItem>> = [];
+  try {
+    const result = await dynamodb
+      .scan({
+        TableName: matchTableName,
+        // Reason + Status are DynamoDB reserved-ish names in some schemas, so
+        // alias them the same way #duration is aliased. They carry the end-
+        // reason (MatchResult['reason']) and lifecycle ('completed' etc.) used
+        // by /spectate to render how each match ended.
+        ProjectionExpression:
+          'MatchId, Players, Winner, Loser, #duration, Turns, CreatedAt, #reason, #status',
+        ExpressionAttributeNames: {
+          '#duration': 'Duration',
+          '#reason': 'Reason',
+          '#status': 'Status'
+        },
+        Limit: Math.max(limit * 3, limit)
+      })
+      .promise();
+    for (const item of result.Items || []) {
+      ddbMatches.push(mapRecentMatchItem(item));
+    }
+  } catch (error) {
+    logger.warn('[recentMatches] DynamoDB scan failed, using JSONL bot matches only', {
+      error: (error as Error).message
+    });
+  }
+  // Merge bot self-play matches (JSONL on disk) with any DynamoDB-persisted
+  // matches so the spectate UI surfaces both in one list.
+  const botMatches = listBotMatchesFromJsonl(limit);
+  const combined = [...ddbMatches, ...botMatches].sort((a, b) => {
+    const aTs = a.createdAt ? a.createdAt.getTime() : 0;
+    const bTs = b.createdAt ? b.createdAt.getTime() : 0;
+    return bTs - aTs;
+  });
+  // De-dupe by matchId in case the same match exists in both DynamoDB and disk.
+  const seen = new Set<string>();
+  const deduped = combined.filter((m) => {
+    if (seen.has(m.matchId)) return false;
+    seen.add(m.matchId);
+    return true;
+  });
+  return deduped.slice(0, limit);
+};
+
+const mapRecentMatchItem = (item: AWS.DynamoDB.DocumentClient.AttributeMap) => ({
+  matchId: item.MatchId as string,
+  players: (item.Players as string[]) || [],
+  winner: (item.Winner as string) || null,
+  loser: (item.Loser as string) || null,
+  duration: (item.Duration as number) ?? null,
+  turns: (item.Turns as number) ?? null,
+  createdAt: item.CreatedAt ? new Date(item.CreatedAt as number) : null,
+  // Surface the end-reason + lifecycle status the /spectate UI needs per row.
+  // Columns are written by match-routes.ts persistMatchFinalState /
+  // recordMatchHistoryEntries — Reason is MatchResult['reason'], Status is
+  // 'completed' (match-history/match tables). Null for legacy rows that
+  // predate these columns.
+  endReason: (item.Reason as string) || null,
+  status: (item.Status as string) || null
+});
+
+// Build the lifecycle/record view for Query.matchStatus. Resolves in this
+// order: in-memory bot registry (for in-progress matches) -> DynamoDB (real
+// PvP + bot matches that persisted successfully) -> JSONL fallback (bot-UI
+// matches when DDB was unavailable, and self-play harness runs). Returns
+// null when no source has the match, so the resolver can cleanly return a
+// null field rather than throwing a 500 for unknown ids.
+const buildMatchStatus = async (matchId: string) => {
+  const active = getActiveBotMatch(matchId);
+  if (active && (active.status === 'initializing' || active.status === 'running')) {
+    // Pull currentPhase / turnNumber from the most recent serialized frame
+    // (what publishSpectatorState writes into replay-frame-store every tick).
+    // Falling back to the registry's `turn` covers the narrow window between
+    // REGISTRY insert and the first frame publish.
+    const frames = getRecordedFrames(matchId);
+    const latest = frames.length ? (frames[frames.length - 1] as any) : null;
+    return {
+      matchId,
+      status: 'in_progress',
+      winner: null,
+      loser: null,
+      turns: null,
+      duration: null,
+      endReason: null,
+      players: active.players,
+      currentPhase: latest?.currentPhase ?? null,
+      turnNumber: typeof latest?.turnNumber === 'number' ? latest.turnNumber : active.turn,
+      createdAt: active.startedAt ? new Date(active.startedAt) : null,
+      completedAt: null
+    };
+  }
+
+  let record: AWS.DynamoDB.DocumentClient.AttributeMap | Record<string, any> | null = null;
+  try {
+    const result = await dynamodb
+      .query({
+        TableName: matchTableName,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        Limit: 1
+      })
+      .promise();
+    if (result.Items?.[0]) {
+      record = result.Items[0];
+    }
+  } catch (error) {
+    logger.warn('[matchStatus] DynamoDB lookup failed, trying JSONL fallback', {
+      matchId,
+      error: (error as Error).message
+    });
+  }
+
+  if (!record) {
+    // Covers bot-UI JSONL (data/bot-matches/<id>.jsonl) and self-play JSONL.
+    // buildMatchReplayFromJsonl returns the same PascalCase shape as DDB.
+    record = buildMatchReplayFromJsonl(matchId);
+  }
+
+  if (!record) {
+    // Terminal in-memory bot record that never persisted (e.g. crashed
+    // before finalize wrote anywhere). Surface what we have so pollers
+    // still learn the match ended.
+    if (active) {
+      return {
+        matchId,
+        status: active.status,
+        winner: active.winner ?? null,
+        loser: null,
+        turns: active.turn ?? null,
+        duration: null,
+        endReason: active.reason ?? null,
+        players: active.players,
+        currentPhase: null,
+        turnNumber: active.turn ?? null,
+        createdAt: active.startedAt ? new Date(active.startedAt) : null,
+        completedAt: active.endedAt ? new Date(active.endedAt) : null
+      };
+    }
+    return null;
+  }
+
+  const finalState = (record as any).FinalState || {};
+  const createdAtRaw = (record as any).CreatedAt;
+  const timestampRaw = (record as any).Timestamp;
+  const createdAt =
+    createdAtRaw instanceof Date
+      ? createdAtRaw
+      : typeof createdAtRaw === 'number'
+      ? new Date(createdAtRaw)
+      : null;
+  const completedAt =
+    typeof timestampRaw === 'number' ? new Date(timestampRaw) : createdAt;
+
+  return {
+    matchId: (record as any).MatchId || matchId,
+    status: (record as any).Status || 'completed',
+    winner: (record as any).Winner ?? null,
+    loser: (record as any).Loser ?? null,
+    turns: (record as any).Turns ?? null,
+    duration: (record as any).Duration ?? null,
+    endReason: (record as any).Reason ?? null,
+    players: Array.isArray((record as any).Players) ? (record as any).Players : [],
+    currentPhase: finalState?.currentPhase ?? null,
+    turnNumber:
+      typeof finalState?.turnNumber === 'number'
+        ? finalState.turnNumber
+        : (record as any).Turns ?? null,
+    createdAt,
+    completedAt
+  };
 };
 
 // ============================================================================
@@ -1311,6 +1487,27 @@ export const queryResolvers = {
 
   // Match Queries
   async match(_parent: any, { matchId }: { matchId: string }, context: ResolverContext) {
+    // Replay sessions ("replay-<uuid>") are not real match rows in the DB.
+    // Synthesize the match view directly from the most recently emitted
+    // frame so GameBoard does not show a "Match not found" banner while it
+    // waits for the first subscription tick. Non-replay ids preserve the
+    // original internal-API fetch path.
+    if (typeof matchId === 'string' && matchId.startsWith('replay-')) {
+      const frame = getReplaySessionViewFrame(matchId);
+      if (!frame) {
+        return null;
+      }
+      // `serializeGameState` already produces the exact shape of the
+      // `GameState` GraphQL type (what this resolver normally returns from
+      // `/matches/:id`). Override `matchId` so the client sees the replay
+      // sessionId, not the original match row id.
+      const synthesized = { ...frame, matchId };
+      const state = ensureGameStateDefaults(synthesized);
+      if (state?.players?.length) {
+        await Promise.all(state.players.map((player: MatchPlayerLike) => hydratePlayerName(player)));
+      }
+      return state;
+    }
     try {
       const state = await fetchSpectatorState(matchId, context.authToken);
       if (state?.players?.length) {
@@ -1323,11 +1520,80 @@ export const queryResolvers = {
     }
   },
 
+  async matchStatus(_parent: any, { matchId }: { matchId: string }) {
+    try {
+      return await buildMatchStatus(matchId);
+    } catch (error) {
+      logger.error('[matchStatus] failed to build record', {
+        matchId,
+        error: (error as Error).message
+      });
+      return null;
+    }
+  },
+
   async playerMatch(
     _parent: any,
     { matchId, playerId }: { matchId: string; playerId: string },
     context: ResolverContext
   ) {
+    // Replay sessions are bot-vs-bot today; there is no live engine to call
+    // and no per-player hidden information to protect. Synthesize a
+    // spectate-style PlayerView from the most recent replay frame, matching
+    // the shape that the `/matches/:id/player/:playerId` route produces for
+    // live matches (see `buildPlayerViewSnapshot` in match-routes.ts).
+    if (typeof matchId === 'string' && matchId.startsWith('replay-')) {
+      const frame = getReplaySessionViewFrame(matchId);
+      if (!frame) {
+        return null;
+      }
+      const players = Array.isArray((frame as any).players) ? (frame as any).players : [];
+      // Prefer the player matching the requested id; fall back to players[0]
+      // if the caller passed an unknown id (the frontend sometimes passes
+      // the local user id during spectate mount).
+      const currentPlayer =
+        players.find((p: any) => p?.playerId === playerId) ?? players[0] ?? null;
+      const opponentRaw = players.find((p: any) => p !== currentPlayer) ?? null;
+      const opponent = opponentRaw
+        ? {
+            playerId: opponentRaw.playerId ?? null,
+            victoryPoints: opponentRaw.victoryPoints ?? 0,
+            victoryScore: opponentRaw.victoryScore ?? (frame as any).victoryScore ?? 0,
+            handSize: opponentRaw.handSize ?? 0,
+            runeDeckSize: opponentRaw.runeDeckSize ?? 0,
+            board: opponentRaw.board ?? { creatures: [], artifacts: [], enchantments: [] },
+            championLegend: opponentRaw.championLegend ?? null,
+            championLeader: opponentRaw.championLeader ?? null
+          }
+        : {
+            playerId: null,
+            victoryPoints: 0,
+            victoryScore: (frame as any).victoryScore ?? 0,
+            handSize: 0,
+            runeDeckSize: 0,
+            board: { creatures: [], artifacts: [], enchantments: [] },
+            championLegend: null,
+            championLeader: null
+          };
+      const view = {
+        matchId,
+        currentPlayer,
+        opponent,
+        gameState: {
+          matchId,
+          currentPhase: (frame as any).currentPhase ?? 'unknown',
+          turnNumber: (frame as any).turnNumber ?? 0,
+          currentPlayerIndex: (frame as any).currentPlayerIndex ?? 0,
+          // Replay is read-only; no one can act on a past frame.
+          canAct: false,
+          turnSequenceStep: (frame as any).turnSequenceStep ?? null,
+          focusPlayerId: (frame as any).focusPlayerId ?? null,
+          combatContext: (frame as any).combatContext ?? null
+        }
+      };
+      await hydratePlayerName(view.currentPlayer);
+      return view;
+    }
     try {
       const view = await fetchPlayerView(matchId, playerId, context.authToken);
       await hydratePlayerName(view?.currentPlayer);
@@ -1478,6 +1744,10 @@ export const queryResolvers = {
       logger.error('Error fetching replay:', error);
       throw error;
     }
+  },
+
+  replaySession(_parent: any, { sessionId }: { sessionId: string }) {
+    return getReplaySession(sessionId);
   },
 
   async recentMatches(_parent: any, { limit = 10 }: { limit?: number }) {
@@ -2824,6 +3094,48 @@ export const mutationResolvers = {
 
   cancelAllBotMatches() {
     return cancelAllBotMatches();
+  },
+
+  startMatchReplay(
+    _parent: any,
+    args: { matchId: string; speedMs?: number | null },
+    context: ResolverContext
+  ) {
+    // Spectate-grade auth: any authenticated user can start a replay session.
+    // Mirrors the `requireUser` pattern used elsewhere — no admin gating.
+    requireUser(context);
+    try {
+      return startReplaySession({
+        originalMatchId: args.matchId,
+        speedMs: args.speedMs ?? null
+      });
+    } catch (error) {
+      logger.error('Error starting match replay:', error);
+      throw error;
+    }
+  },
+
+  controlMatchReplay(
+    _parent: any,
+    args: {
+      sessionId: string;
+      action: ReplayAction;
+      speedMs?: number | null;
+      cursor?: number | null;
+    },
+    context: ResolverContext
+  ) {
+    requireUser(context);
+    try {
+      return controlReplaySession(args.sessionId, {
+        action: args.action,
+        speedMs: args.speedMs ?? null,
+        cursor: args.cursor ?? null
+      });
+    } catch (error) {
+      logger.error('Error controlling match replay:', error);
+      throw error;
+    }
   }
 };
 
@@ -2831,10 +3143,53 @@ export const mutationResolvers = {
 // SUBSCRIPTION RESOLVERS
 // ============================================================================
 
+/**
+ * Wrap a pubSub asyncIterator so subscribers receive a cached `initial`
+ * frame as their first value before falling through to live pubsub events.
+ *
+ * `graphql-subscriptions` has no first-class "replay last value on
+ * subscribe" mechanism, so we adapt the underlying iterator with an async
+ * generator. Used only for replay sessions, where a late-mounting client
+ * (see P0.1) would otherwise see an empty `gameStateChanged` channel.
+ */
+async function* withInitialFrame(
+  iter: AsyncIterator<any>,
+  initial: any
+): AsyncGenerator<any, void, undefined> {
+  if (initial) {
+    yield { gameStateChanged: initial };
+  }
+  try {
+    while (true) {
+      const { value, done } = await iter.next();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    // Propagate cancellation so the underlying pubsub iterator cleans up.
+    try {
+      await iter.return?.(undefined);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export const subscriptionResolvers = {
   gameStateChanged: {
     subscribe: (_parent: any, { matchId }: { matchId: string }) => {
-      return pubSub.asyncIterator([`${SubscriptionEvents.GAME_STATE_CHANGED}:${matchId}`]);
+      const iter = pubSub.asyncIterator([
+        `${SubscriptionEvents.GAME_STATE_CHANGED}:${matchId}`
+      ]);
+      // For replay sessions, seed the subscriber with the most recent frame
+      // so late-mounting GameBoards (match already ended before React
+      // subscribed) still have something to render instead of an empty
+      // channel. Live matches keep the original behaviour byte-for-byte.
+      if (typeof matchId === 'string' && matchId.startsWith('replay-')) {
+        const initial = getReplaySessionLastFrame(matchId);
+        return withInitialFrame(iter as AsyncIterator<any>, initial);
+      }
+      return iter;
     },
   },
 

@@ -282,6 +282,26 @@ export const typeDefs = `#graphql
     createdAt: DateTime
   }
 
+  # Top-level record view of a match. Unlike Query.match (which returns the
+  # full playable GameState snapshot for GameBoard), this exposes only the
+  # lifecycle fields pollers care about: is it finished, who won, how long,
+  # how many turns. Works for in-progress, DynamoDB-persisted, and JSONL
+  # fallback records (bot + self-play).
+  type MatchStatus {
+    matchId: ID!
+    status: String!
+    winner: ID
+    loser: ID
+    turns: Int
+    duration: Int
+    endReason: String
+    players: [String!]!
+    currentPhase: String
+    turnNumber: Int
+    createdAt: DateTime
+    completedAt: DateTime
+  }
+
   type RecentMatchSummary {
     matchId: ID!
     players: [ID!]
@@ -290,6 +310,17 @@ export const typeDefs = `#graphql
     duration: Int
     turns: Int
     createdAt: DateTime
+    # How the match ended - mirrors MatchResult['reason'] union plus self-play
+    # terminators (e.g. "victory_points", "burn_out", "concede", "timeout",
+    # "turn_cap", "action_cap", "infinite_loop"). Free string because the set
+    # is the union of MatchResult['reason'] and self-play GameRecord.terminator,
+    # which don't share a single enum. Null when not yet known.
+    endReason: String
+    # Lifecycle status for the listing row (e.g. "completed", "timeout",
+    # "action_cap", "invariant", "crashed"). Free string for the same reason -
+    # self-play record.status and the DDB Status column overlap but aren't
+    # identical to the GameStatus engine enum. Null when unavailable.
+    status: String
   }
 
   type RuneCardState {
@@ -559,6 +590,10 @@ export const typeDefs = `#graphql
 
     # Match queries
     match(matchId: ID!): GameState
+    # Lifecycle/record view for pollers (QA, replay-ready wait, integrations).
+    # Does not return the playable GameState. Safe for in-progress and
+    # completed (DynamoDB + JSONL fallback) matches.
+    matchStatus(matchId: ID!): MatchStatus
     playerMatch(matchId: ID!, playerId: ID!): PlayerView
     matchHistory(userId: ID!, limit: Int): [MatchHistory!]!
     matchResult(matchId: ID!): MatchResult
@@ -581,8 +616,29 @@ export const typeDefs = `#graphql
     matchReplay(matchId: ID!): MatchReplay
     recentMatches(limit: Int): [RecentMatchSummary!]!
 
+    # Live replay session status (poll-friendly)
+    replaySession(sessionId: ID!): ReplaySessionInfo
+
     # Bot-vs-bot live matches (local dev / showcase)
     activeBotMatches: [BotMatchSummary!]!
+  }
+
+  enum ReplayAction {
+    PLAY
+    PAUSE
+    SEEK
+    SET_SPEED
+    STOP
+  }
+
+  type ReplaySessionInfo {
+    sessionId: ID!
+    originalMatchId: ID!
+    totalFrames: Int!
+    cursor: Int!
+    playing: Boolean!
+    speedMs: Int!
+    status: String!
   }
 
   type BotMatchSummary {
@@ -689,6 +745,16 @@ export const typeDefs = `#graphql
 
     cancelBotMatch(matchId: ID!): Boolean!
     cancelAllBotMatches: Int!
+
+    # Replay sessions — drive a completed/running match's recorded frames
+    # back through the live spectate pipeline (gameStateChanged).
+    startMatchReplay(matchId: ID!, speedMs: Int): ReplaySessionInfo!
+    controlMatchReplay(
+      sessionId: ID!
+      action: ReplayAction!
+      speedMs: Int
+      cursor: Int
+    ): ReplaySessionInfo!
 
     submitInitiativeChoice(
       matchId: ID!

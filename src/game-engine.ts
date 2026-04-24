@@ -18,6 +18,7 @@ import {
   findCardById,
   findCardByName,
   findCardBySlug,
+  getCardCatalog,
   parseAssaultBonus,
   parseTokenSpecs
 } from './card-catalog';
@@ -29,6 +30,20 @@ import {
   parseChampionAbilityCost,
   summarizeChampionCost
 } from './champion-utils';
+import logger from './logger';
+import {
+  buildDefaultRegistry,
+  filterCatalogRuneResourceOps,
+  OpHandlerRegistry,
+  runOpSequence,
+  TriggerRegistry
+} from './effects';
+import type {
+  DispatcherStats,
+  EngineAdapter,
+  EngineCtx as EffectsEngineCtx,
+  OperationContext as EffectsOperationContext
+} from './effects';
 
 /**
  * Riftbound TCG Game State Engine
@@ -45,6 +60,54 @@ import {
  */
 
 // ============================================================================
+// SEEDED RNG
+// ============================================================================
+
+/**
+ * Deterministic PRNG injected into the engine so tests can pin match
+ * outcomes without monkey-patching Math.random. Production callers can omit
+ * the Rng and get a Date.now()-seeded default.
+ */
+export interface Rng {
+  next(): number;
+  nextInt(minInclusive: number, maxExclusive: number): number;
+  seed: number | string;
+}
+
+/**
+ * mulberry32. Accepts a number or string seed; strings are hashed
+ * (FNV-1a 32) so callers can pass human-readable seeds like "match-1".
+ */
+export function createRng(seed: number | string): Rng {
+  let a = (typeof seed === 'number' ? seed : hashSeedString(seed)) >>> 0;
+  const next = (): number => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const nextInt = (minInclusive: number, maxExclusive: number): number => {
+    if (maxExclusive <= minInclusive) return minInclusive;
+    return minInclusive + Math.floor(next() * (maxExclusive - minInclusive));
+  };
+  return { next, nextInt, seed };
+}
+
+function hashSeedString(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+export interface EngineOptions {
+  rng?: Rng;
+}
+
+// ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
 
@@ -53,7 +116,8 @@ export enum CardType {
   SPELL = 'spell',
   ARTIFACT = 'artifact',
   ENCHANTMENT = 'enchantment',
-  RUNE = 'rune'
+  RUNE = 'rune',
+  BATTLEFIELD = 'battlefield'
 }
 
 export enum CardRarity {
@@ -183,6 +247,7 @@ export interface PlayerState {
   championLegendStatus?: ChampionAbilityRuntimeState | null;
   championLeaderStatus?: ChampionAbilityRuntimeState | null;
   championLeaderDeployed?: boolean;
+  burnedOut?: boolean;
 }
 
 export interface ChampionAbilityRuntimeState {
@@ -262,7 +327,8 @@ export type ScoreReason =
   | 'decking'
   | 'concede'
   | 'timeout'
-  | 'hold';
+  | 'hold'
+  | 'burn_out';
 
 export type PromptType =
   | 'mulligan'
@@ -423,7 +489,23 @@ export interface GameMove {
   playerIndex: number;
   turn: number;
   phase: GamePhase;
-  action: 'play_card' | 'attack' | 'move' | 'pass' | 'activate_ability' | 'end_turn' | 'hide_card' | 'activate_hidden';
+  // `'move'` is the canonical engine-emitted string (see recordMove calls in
+  // this file). `'move_unit'` is the self-play harness's equivalent action
+  // label (see src/self-play.ts) and is also emitted through the same replay
+  // pipeline. Both are accepted here so the moveHistory type stays in sync
+  // with what downstream consumers (GraphQL replay, frontend reducer) see.
+  // The frontend reducer at riftbound-online/lib/replay/reducer.ts already
+  // aliases both cases — this alias keeps the type contract consistent.
+  action:
+    | 'play_card'
+    | 'attack'
+    | 'move'
+    | 'move_unit'
+    | 'pass'
+    | 'activate_ability'
+    | 'end_turn'
+    | 'hide_card'
+    | 'activate_hidden';
   cardId?: string;
   targetId?: string;
   timestamp: number;
@@ -435,19 +517,6 @@ interface EffectContextSnapshot {
   boardTargetInstanceId?: string | null;
   battlefieldId?: string | null;
   targetIds?: string[] | null;
-}
-
-interface ReturnCriteria {
-  allowUnits: boolean;
-  allowGear: boolean;
-  friendlyOnly: boolean;
-  enemyOnly: boolean;
-  battlefieldOnly: boolean;
-  maxMight?: number | null;
-  optional: boolean;
-  globalAll: boolean;
-  minTargets: number;
-  maxTargets: number;
 }
 
 interface PendingEffect {
@@ -613,6 +682,7 @@ export interface BattlefieldState {
   controller?: string;
   contestedBy: string[];
   lastConqueredTurn?: number;
+  lastConqueredTurnByPlayer?: Record<string, number>;
   lastHoldTurn?: number;
   lastCombatTurn?: number;
   lastHoldScoreTurn?: number;
@@ -643,22 +713,52 @@ const INITIATIVE_BEATS: Record<number, number> = {
 // GAME ENGINE CLASS
 // ============================================================================
 
+// Module-level guard: run the rune_resource filter on the catalog exactly
+// once, the first time any engine is built. Phase 2b Tech Lead note.
+let CATALOG_RUNE_RESOURCE_STRIPPED = false;
+function runCatalogSanitization(): void {
+  if (CATALOG_RUNE_RESOURCE_STRIPPED) return;
+  CATALOG_RUNE_RESOURCE_STRIPPED = true;
+  try {
+    const catalog = getCardCatalog();
+    const stripped = filterCatalogRuneResourceOps(catalog);
+    logger.info('[game-engine] catalog sanitized', {
+      rune_resource_stripped: stripped,
+      cards: catalog.length
+    });
+  } catch (err) {
+    logger.warn('[game-engine] catalog sanitization skipped', { err });
+  }
+}
+
 export class RiftboundGameEngine {
   private static readonly MAX_DUEL_LOG_ENTRIES = 200;
   private static readonly MAX_CHAT_LOG_ENTRIES = 200;
   private gameState: GameState;
   private readonly INITIAL_HAND_SIZE = 4;
   private readonly VICTORY_SCORE = 8;
-  private readonly MIN_DECK_SIZE = 39;
+  private readonly MIN_DECK_SIZE = 40;
   private readonly RUNE_DECK_SIZE = 12;
   private readonly RUNES_PER_TURN = 2;
   private readonly DEFAULT_BATTLEFIELD_COUNT = 2;
   private readonly cardActivationTemplates = buildActivationStateIndex();
   private readonly catalogCardCache = new Map<string, Card>();
+  private readonly opRegistry: OpHandlerRegistry = buildDefaultRegistry();
+  private readonly triggerRegistry: TriggerRegistry = new TriggerRegistry();
+  /**
+   * Phase 4 observer. When set, every effect-op dispatched by this engine
+   * is counted (handled vs unknown) in the recorder. Opt-in: integration
+   * tests assign this before running a match; unit tests leave it undefined
+   * and pay no cost.
+   */
+  public statsRecorder: DispatcherStats | undefined = undefined;
   private promptCounter = 0;
   private cardInstanceCounter = 0;
+  private readonly rng: Rng;
 
-  constructor(matchId: string, players: PlayerSeed[]) {
+  constructor(matchId: string, players: PlayerSeed[], options?: EngineOptions) {
+    runCatalogSanitization();
+    this.rng = options?.rng ?? createRng(Date.now());
     if (players.length !== 2) {
       throw new Error('Riftbound requires exactly 2 players');
     }
@@ -989,6 +1089,13 @@ export class RiftboundGameEngine {
         player.championLeader = null;
       }
 
+      // Rule 133 / 110: every main-deck card must share at least one domain
+      // with the Champion Legend. Skip if no legend has been registered (some
+      // test harnesses intentionally run champion-less decks).
+      if (player.championLegend) {
+        this.enforceDomainIdentity(player.playerId, player.championLegend, normalizedMainDeck);
+      }
+
       if (normalizedRuneDeck.length < this.RUNE_DECK_SIZE) {
         throw new Error(
           `Invalid rune deck for player ${player.playerId} (requires ${this.RUNE_DECK_SIZE}, got ${normalizedRuneDeck.length})`
@@ -1000,7 +1107,8 @@ export class RiftboundGameEngine {
       player.channeledRunes = [];
       this.shuffle(player.deck);
       this.shuffle(player.runeDeck);
-      this.drawCards(player, this.INITIAL_HAND_SIZE);
+      // Opening hand draw is REQUIRED by setup rules.
+      this.drawCards(player, this.INITIAL_HAND_SIZE, true);
     }
 
     this.gameState.status = GameStatus.COIN_FLIP;
@@ -1178,6 +1286,52 @@ export class RiftboundGameEngine {
       return;
     }
 
+    // Rule 103.4: the two active battlefields in a match must be DIFFERENT cards.
+    // If both players picked the same battlefield card, deterministically reject the
+    // later player's selection (the second player in gameState.players order), clear
+    // it, and re-prompt them to choose a different battlefield from their pool.
+    const [firstPlayer, secondPlayer] = this.gameState.players;
+    if (firstPlayer && secondPlayer) {
+      const firstCardId = firstPlayer.selectedBattlefield?.card?.id
+        ?? firstPlayer.selectedBattlefield?.battlefieldId;
+      const secondCardId = secondPlayer.selectedBattlefield?.card?.id
+        ?? secondPlayer.selectedBattlefield?.battlefieldId;
+      if (firstCardId && secondCardId && firstCardId === secondCardId) {
+        // Clear the duplicate (second player's) selection and re-prompt them.
+        secondPlayer.selectedBattlefield = undefined;
+
+        // Filter the second player's options so the duplicate card cannot be chosen
+        // again. Fall back to the full pool if filtering would leave no options.
+        const fullOptions = this.ensureBattlefieldOptions(secondPlayer);
+        const filteredOptions = fullOptions.filter(
+          (card) => card.id !== firstCardId && card.slug !== firstCardId
+        );
+        const promptOptions = filteredOptions.length > 0 ? filteredOptions : fullOptions;
+
+        // Drop any stale battlefield prompts for this player and re-issue.
+        this.gameState.prompts = this.gameState.prompts.filter(
+          (prompt) => !(prompt.type === 'battlefield' && prompt.playerId === secondPlayer.playerId)
+        );
+        this.enqueuePrompt('battlefield', secondPlayer.playerId, {
+          options: promptOptions.map((card) => this.buildBattlefieldPromptOption(card)),
+          conflict: true,
+          conflictReason: 'duplicate_battlefield',
+          conflictWithPlayerId: firstPlayer.playerId
+        });
+
+        const playerName = this.resolvePlayerName(secondPlayer.playerId) ?? 'Player';
+        const conflictName =
+          firstPlayer.selectedBattlefield?.name ?? firstPlayer.selectedBattlefield?.card?.name ?? 'the same battlefield';
+        this.addDuelLogEntry({
+          playerId: secondPlayer.playerId,
+          message: `${playerName} must pick a different battlefield (conflict with ${conflictName}).`,
+          tone: 'warning'
+        });
+        this.recordSnapshot('battlefield-conflict');
+        return;
+      }
+    }
+
     const orderedSelections = this.gameState.players
       .map((player) => player.selectedBattlefield!)
       .map((state) => this.cloneBattlefieldState(state))
@@ -1226,7 +1380,8 @@ export class RiftboundGameEngine {
     }
 
     this.recycleCards(player, setAside);
-    this.drawCards(player, setAside.length);
+    // Mulligan redraw is REQUIRED: the recycled cards must be replaced.
+    this.drawCards(player, setAside.length, true);
 
     this.resolvePrompt(prompt, {
       replaced: setAside.length
@@ -1454,9 +1609,9 @@ export class RiftboundGameEngine {
     this.channelRunes(currentPlayer, runesToChannel);
     currentPlayer.firstTurnRuneBoost = 0;
 
-    // D — Draw
+    // D — Draw (REQUIRED: the draw step's mandatory card draw).
     this.updateTurnSequenceStep('draw', currentPlayer, 'turn-draw');
-    this.drawCards(currentPlayer, 1);
+    this.drawCards(currentPlayer, 1, true);
 
     if (this.hasBlockingBeginPhaseActivity()) {
       this.openPriorityWindow('main', currentPlayer.playerId, 'begin-phase');
@@ -1507,7 +1662,7 @@ export class RiftboundGameEngine {
     }
     const tone = this.normalizeLogTone(entry.tone);
     const identifier =
-      (entry.id ?? '').trim() || `log_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      (entry.id ?? '').trim() || `log_${Date.now()}_${this.rng.nextInt(0, 1000)}`;
     const existing = this.gameState.duelLog.find((log) => log.id === identifier);
     if (existing) {
       return existing;
@@ -1537,7 +1692,7 @@ export class RiftboundGameEngine {
       throw new Error('Chat message cannot be empty');
     }
     const identifier =
-      (entry.id ?? '').trim() || `chat_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      (entry.id ?? '').trim() || `chat_${Date.now()}_${this.rng.nextInt(0, 1000)}`;
     const existing = this.gameState.chatLog.find((message) => message.id === identifier);
     if (existing) {
       return existing;
@@ -3719,7 +3874,13 @@ export class RiftboundGameEngine {
     reason: ScoreReason,
     sourceCardId?: string
   ): void {
-    if (amount <= 0 || this.gameState.status !== GameStatus.IN_PROGRESS) {
+    if (amount <= 0) {
+      return;
+    }
+    if (this.gameState.status !== GameStatus.IN_PROGRESS) {
+      console.warn(
+        `awardVictoryPoints skipped: status=${this.gameState.status} reason=${reason} player=${player.playerId}`
+      );
       return;
     }
 
@@ -3793,6 +3954,8 @@ export class RiftboundGameEngine {
         return 'after the opponent conceded';
       case 'timeout':
         return 'after a timeout';
+      case 'burn_out':
+        return 'from an opponent burning out';
       default:
         return null;
     }
@@ -3803,13 +3966,34 @@ export class RiftboundGameEngine {
   // ========================================================================
 
   /**
-   * Draw cards from deck
+   * Draw cards from deck.
+   *
+   * Per rule book: "burn out" is a STATE, not a loss condition on its own. The
+   * loss only happens when a player is REQUIRED to draw and cannot. Optional
+   * "you may draw" effects on an empty deck simply draw 0 and continue.
+   *
+   * @param player   The player drawing.
+   * @param count    Number of cards to attempt to draw.
+   * @param required When true (default), a failed draw on an empty deck
+   *                 triggers the burn-out loss via `burnOut()`. When false,
+   *                 the draw silently short-circuits and no loss fires.
    */
-  private drawCards(player: PlayerState, count: number): void {
+  private drawCards(player: PlayerState, count: number, required: boolean = true): void {
     for (let i = 0; i < count; i++) {
       if (player.deck.length === 0) {
+        // Mark the informational "burned out" state the moment the deck is empty.
+        player.burnedOut = true;
+        if (!required) {
+          return;
+        }
+        // Rule 418: perform the burn out procedure (recycle trash into deck,
+        // award opponent 1 VP), then continue trying to complete the draw
+        // against the recycled deck. If the deck is still empty after recycle
+        // (both deck and trash were empty), stop drawing but do not end game.
         this.burnOut(player);
-        return;
+        if (player.deck.length === 0) {
+          return;
+        }
       }
 
       const card = player.deck.shift();
@@ -3817,50 +4001,45 @@ export class RiftboundGameEngine {
         player.hand.push(card);
       }
     }
-  }
-
-  private millCards(
-    player: PlayerState,
-    amount: number,
-    context: EffectOperationContext | undefined
-  ): void {
-    const total = Math.max(1, amount);
-    const moved: Card[] = [];
-    for (let i = 0; i < total; i++) {
-      if (player.deck.length === 0) {
-        break;
-      }
-      const card = player.deck.shift();
-      if (!card) {
-        break;
-      }
-      player.graveyard.push(card);
-      moved.push(card);
-    }
-    if (moved.length > 0) {
-      const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
-      const suffix = context ? this.describeEffectSuffix(context) : '';
-      this.addDuelLogEntry({
-        playerId: player.playerId,
-        message: `${playerName} mills ${moved.length} card${moved.length === 1 ? '' : 's'}${suffix}.`,
-        tone: 'warning'
-      });
+    // Keep the flag in sync if drawing emptied the deck on this call.
+    if (player.deck.length === 0) {
+      player.burnedOut = true;
     }
   }
 
+  /**
+   * Handle burn out per Rule 418 (Riftbound rulebook).
+   *
+   * Burn out is a game STATE, not a loss condition. When a player must draw
+   * but their deck is empty:
+   *   1) complete as much of the draw as possible (already handled by the caller),
+   *   2) recycle the player's trash/graveyard into the deck, randomized,
+   *   3) award the opponent 1 Victory Point,
+   *   4) the caller then continues drawing against the recycled deck.
+   * The game ends only when the opponent reaches VICTORY_SCORE, which falls
+   * out naturally from awardVictoryPoints.
+   */
   private burnOut(player: PlayerState): void {
     const opponent = this.getOtherPlayer(player);
-    if (!Array.isArray(this.gameState.scoreLog)) {
-      this.gameState.scoreLog = [];
+    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
+    const recycledCount = player.graveyard.length;
+
+    if (recycledCount > 0) {
+      player.deck.push(...player.graveyard);
+      player.graveyard = [];
+      this.shuffle(player.deck);
     }
-    this.gameState.scoreLog.push({
-      playerId: opponent.playerId,
-      amount: 0,
-      reason: 'decking',
-      sourceCardId: undefined,
-      timestamp: Date.now()
+
+    this.addDuelLogEntry({
+      playerId: player.playerId,
+      message:
+        recycledCount > 0
+          ? `${playerName} burns out. Shuffled ${recycledCount} card${recycledCount === 1 ? '' : 's'} from trash back into deck.`
+          : `${playerName} burns out with no cards left to recycle.`,
+      tone: 'warning'
     });
-    this.endGame(opponent, player, 'burn_out');
+
+    this.awardVictoryPoints(opponent, 1, 'burn_out', undefined);
   }
 
   // ========================================================================
@@ -3901,7 +4080,7 @@ export class RiftboundGameEngine {
     const now = Date.now();
     const chainItem: ChainItem = {
       ...item,
-      id: `chain_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `chain_${now}_${this.rng.next().toString(36).slice(2, 8)}`,
       createdAt: now
     };
 
@@ -4318,7 +4497,16 @@ export class RiftboundGameEngine {
     const boardTarget = targetId ? this.findCardInstance(targetId) : undefined;
     const playerTarget = targetId ? this.gameState.players.find((p) => p.playerId === targetId) : undefined;
     const battlefieldTarget = targetId ? this.findBattlefieldState(targetId) : undefined;
-    const operations = spell.effectProfile?.operations ?? [];
+    // Run normalizeEffectOperations against the spell's live text + ops so
+    // spells injected outside the catalog-load pipeline (tests, synthesized
+    // cards, etc.) still get the targetHint adjustments that the load-time
+    // pass applies. Without this, a spell with text "Discard a card" but an
+    // upstream-enriched `discard_cards` op carrying `targetHint: 'enemy'`
+    // would discard from the opponent even though the printed text has no
+    // opponent qualifier (Rule 435: default pronouns bind to the caster).
+    const rawOperations = spell.effectProfile?.operations ?? [];
+    const operations =
+      this.normalizeEffectOperations(spell.text ?? '', rawOperations) ?? rawOperations;
 
     if (operations.length > 0) {
       this.executeEffectOperations(operations, caster, {
@@ -4333,7 +4521,9 @@ export class RiftboundGameEngine {
       const profile = spell.activationProfile;
       if (profile) {
         if (profile.actions.includes('draw')) {
-          this.drawCards(caster, 1);
+          // Spell-text "draw N" is mandatory by default. Future card effects
+          // using "you may draw" phrasing should pass `required: false`.
+          this.drawCards(caster, 1, true);
         }
 
         if (profile.actions.includes('buff') && boardTarget) {
@@ -4369,7 +4559,9 @@ export class RiftboundGameEngine {
         }
 
         if (spellName.includes('draw') || spellName.includes('cycle')) {
-          this.drawCards(caster, 1);
+          // Draw/cycle spell text is mandatory unless the card explicitly
+          // says "you may draw"; those cases should pass `required: false`.
+          this.drawCards(caster, 1, true);
         }
 
         if (spellName.includes('buff') || spellName.includes('boost')) {
@@ -4398,506 +4590,85 @@ export class RiftboundGameEngine {
     context: EffectOperationContext,
     startIndex = 0
   ): void {
-    const resolveBoardTargets = (): BoardCard[] => {
-      if (context.targets && context.targets.length > 0) {
-        return context.targets
-          .map((targetId) => this.findCardInstance(targetId))
-          .filter((card): card is BoardCard => Boolean(card));
-      }
-      return context.boardTarget ? [context.boardTarget] : [];
+    // Phase 7a: the dispatcher is the single source of truth for op
+    // resolution. All 55 catalog-observed op types have registered handlers
+    // via buildDefaultRegistry(); any op type reaching here without a
+    // handler soft-fails through the dispatcher's "unknown_op" warn path
+    // (spec section 12.1). The previous pass-through + legacy switch was
+    // removed in Phase 7a (see src/effects/dispatcher.ts for the new path).
+    const registry = this.opRegistry;
+    const statsRecorder = this.statsRecorder;
+    const effectsCtx: EffectsEngineCtx = {
+      engine: this.getEffectsAdapter(),
+      caster,
+      operationContext: context as unknown as EffectsOperationContext,
+      // Phase 4: propagate the opt-in observer through the dispatcher.
+      // Widened via `as` because the shared EffectsEngineCtx type in
+      // src/effects/types.ts is kept deliberately narrow; the dispatcher
+      // resolves statsRecorder via a ctx-shape cast of its own.
+      ...(statsRecorder ? { statsRecorder } : {})
+    } as EffectsEngineCtx;
+    runOpSequence(effectsCtx, operations, context.source, registry, startIndex);
+  }
+
+  /**
+   * Bridge the RiftboundGameEngine's private helpers to the narrow
+   * EngineAdapter surface consumed by effect handlers. Cached on first use
+   * so each executeEffectOperations call doesn't reallocate the closure
+   * set.
+   */
+  private _effectsAdapter: EngineAdapter | null = null;
+  private getEffectsAdapter(): EngineAdapter {
+    if (this._effectsAdapter) return this._effectsAdapter;
+    const self = this;
+    const triggerRegistry = this.triggerRegistry;
+    const adapter: EngineAdapter & { getTriggerRegistry: () => TriggerRegistry } = {
+      getTriggerRegistry: () => triggerRegistry,
+      getOtherPlayer: (p) => self.getOtherPlayer(p),
+      drawCards: (p, c, r) => self.drawCards(p, c, r),
+      recycleTopOfGraveyard: (p, count) => {
+        let moved = 0;
+        for (let i = 0; i < count; i++) {
+          const recovered = p.graveyard.shift();
+          if (!recovered) break;
+          p.deck.push(recovered);
+          moved++;
+        }
+        if (moved > 0) {
+          self.shuffle(p.deck);
+        }
+        return moved;
+      },
+      applyTemporaryEffect: (id, effect) => self.applyTemporaryEffect(id, effect as TemporaryEffect),
+      damageCreature: (target, amount, source) =>
+        self.damageCreature(target, amount, source ?? self.buildSpellReference()),
+      ensureDamageableTarget: (target, source) => self.ensureDamageableTarget(target, source),
+      findCardInstance: (id) => self.findCardInstance(id),
+      channelRunes: (p, amount, opts) => self.channelRunes(p, amount, opts),
+      exhaustRunes: (p, amount) => self.exhaustRunes(p, amount),
+      logRuneChange: (p, amount, opts) =>
+        self.logRuneChange(p, amount, opts as Parameters<typeof self.logRuneChange>[2]),
+      logRuleUsage: (card, reason) => {
+        if (card) self.logRuleUsage(card, reason);
+      },
+      applyBattlefieldControl: (p, bf, reason, options) =>
+        self.applyBattlefieldControl(p, bf, reason, options),
+      resolveBattlefieldTargetForControl: (p, target) =>
+        self.resolveBattlefieldTargetForControl(p, target),
+      getTokenSpec: (operation, source) => self.getTokenSpec(operation, source),
+      spawnTokenUnits: (p, tokenSpec, ctx) =>
+        self.spawnTokenUnits(p, tokenSpec as TokenSpec, ctx as EffectOperationContext),
+      getPlayerByCard: (id) => self.getPlayerByCard(id),
+      moveUnitToBattlefield: (owner, unit, bf) => self.moveUnitToBattlefield(owner, unit, bf),
+      moveUnitToBase: (owner, unit) => self.moveUnitToBase(owner, unit),
+      openPriorityWindow: (type, holder, event) => self.openPriorityWindow(type, holder, event),
+      getCurrentPhase: () => String(self.gameState.currentPhase),
+      setFocusPlayerId: (id) => { self.gameState.focusPlayerId = id; },
+      addDuelLogEntry: (entry) => { self.addDuelLogEntry(entry); },
+      resolvePlayerName: (id) => self.resolvePlayerName(id)
     };
-    for (let index = startIndex; index < operations.length; index++) {
-      const operation = operations[index];
-      switch (operation.type) {
-        case 'draw_cards': {
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
-          const count = Math.max(1, operation.magnitudeHint ?? 1);
-          this.drawCards(targetPlayer, count);
-          this.logCardDraw(targetPlayer, count, context);
-          break;
-        }
-        case 'mill_cards': {
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
-          const metadataCount =
-            typeof operation.metadata === 'object' && operation.metadata
-              ? Number((operation.metadata as { count?: number }).count)
-              : undefined;
-          const count = Math.max(1, metadataCount ?? operation.magnitudeHint ?? 1);
-          this.millCards(targetPlayer, count, context);
-          break;
-        }
-        case 'discard_cards': {
-          // Discard defaults to self (caster) - opponent discard requires explicit targetHint: 'enemy'
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
-          if (
-            context.battlefieldTarget &&
-            context.source &&
-            targetPlayer.hand.length > 0
-          ) {
-            if (
-              this.deferDiscardOperation(operation, operations, index, caster, targetPlayer, context)
-            ) {
-              return;
-            }
-          }
-          const discarded = targetPlayer.hand.shift();
-          if (discarded) {
-            targetPlayer.graveyard.push(discarded);
-            const playerName = this.resolvePlayerName(targetPlayer.playerId) ?? 'Player';
-            const suffix = this.describeEffectSuffix(context);
-            this.addDuelLogEntry({
-              playerId: targetPlayer.playerId,
-              message: `${playerName} discards ${discarded.name ?? 'a card'}${suffix}.`,
-              tone: 'warning'
-            });
-          }
-          break;
-        }
-        case 'modify_stats': {
-          const targetsToBuff = resolveBoardTargets();
-          if (targetsToBuff.length === 0) {
-            break;
-          }
-          const amount = operation.magnitudeHint ?? 2;
-          targetsToBuff.forEach((target) => {
-            const value = operation.targetHint === 'enemy' ? -Math.abs(amount) : Math.abs(amount);
-            this.applyTemporaryEffect(target.instanceId, {
-              id: `mod_${Date.now()}`,
-              affectedCards: [target.instanceId],
-              duration: 1,
-              effect: {
-                type: 'damage_boost',
-                value
-              }
-            });
-          });
-          break;
-        }
-        case 'deal_damage': {
-          const amount = operation.magnitudeHint ?? 2;
-          const targetsToDamage = resolveBoardTargets();
-          if (targetsToDamage.length === 0) {
-            const damageTarget = this.ensureDamageableTarget(context.boardTarget, context.source);
-            this.damageCreature(damageTarget, amount, context.source);
-            break;
-          }
-          targetsToDamage.forEach((target) => {
-            const damageTarget = this.ensureDamageableTarget(target, context.source);
-            this.damageCreature(damageTarget, amount, context.source);
-          });
-          break;
-        }
-        case 'heal': {
-          const targetsToHeal = resolveBoardTargets().filter(
-            (target) => target.type === CardType.CREATURE
-          );
-          if (targetsToHeal.length === 0) {
-            break;
-          }
-          const healAmount = Math.max(1, operation.magnitudeHint ?? 1);
-          targetsToHeal.forEach((target) => {
-            this.restoreCreature(target, healAmount);
-          });
-          break;
-        }
-        case 'remove_permanent': {
-          const removalTargets = resolveBoardTargets();
-          if (removalTargets.length === 0 && context.boardTarget) {
-            removalTargets.push(context.boardTarget);
-          }
-          removalTargets.forEach((target) => {
-            this.damageCreature(
-              target,
-              target.currentToughness,
-              context.source
-            );
-          });
-          break;
-        }
-        case 'summon_unit':
-        case 'create_token': {
-          const tokenSpec = this.getTokenSpec(operation, context.source);
-          if (!tokenSpec) {
-            this.logRuleUsage(context.source, `${operation.type}-manual`);
-            break;
-          }
-          if (tokenSpec.variableCount || tokenSpec.flexiblePlacement) {
-            this.logRuleUsage(context.source, `${operation.type}-manual`);
-            break;
-          }
-          this.spawnTokenUnits(caster, tokenSpec, context);
-          break;
-        }
-        case 'return_from_graveyard': {
-          const effectText = this.stripRichText(context.source?.text ?? '');
-          const optional = /\bup to\b/i.test(effectText) || /\bmay\b/i.test(effectText);
-          const requireUnit = this.requiresUnitForGraveyardReturn(context.source);
-          const maxTargets =
-            operation.magnitudeHint && operation.magnitudeHint > 0
-              ? operation.magnitudeHint
-              : this.detectReturnCountFromText(effectText) ?? 1;
-          const minTargets = optional ? 0 : 1;
-          const selections = context.targets ?? [];
-          if (selections.length === 0) {
-            if (
-              this.deferTargetSelectionForOperation(operations, index, caster, context, {
-                scope: 'graveyard',
-                min: minTargets,
-                max: maxTargets,
-                allowFriendly: true,
-                allowOpponent: false,
-                metadata: {
-                  handler: 'graveyard_return',
-                  requireUnit,
-                  maxTargets
-                }
-              })
-            ) {
-              return;
-            }
-            break;
-          }
-          const moved = this.tryReturnGraveyardCards(
-            context.source ?? this.buildSpellReference(),
-            caster,
-            selections,
-            requireUnit,
-            context
-          );
-          if (!moved) {
-            this.addDuelLogEntry({
-              playerId: caster.playerId,
-              message: `${context.source?.name ?? 'Spell'} failed to find the selected card in the graveyard.`,
-              tone: 'warning'
-            });
-          }
-          break;
-        }
-        case 'return_to_hand': {
-          if (!context.source) {
-            break;
-          }
-          const criteria = this.buildReturnCriteria(context.source, operation);
-          if (criteria.globalAll) {
-            const globalTargets = this.collectReturnTargets(caster, criteria);
-            if (globalTargets.length === 0) {
-              this.addDuelLogEntry({
-                playerId: caster.playerId,
-                message: `${context.source.name} finds no cards to return.`,
-                tone: 'info'
-              });
-              break;
-            }
-            globalTargets.forEach((target) => this.returnCardToOwnerHand(target, context));
-            break;
-          }
-          const resolvedTargets = resolveBoardTargets().filter((target) =>
-            this.matchesReturnCriteria(target, caster, criteria)
-          );
-          if (resolvedTargets.length === 0) {
-            if (
-              this.deferTargetSelectionForOperation(operations, index, caster, context, {
-                scope: 'unit',
-                min: criteria.minTargets,
-                max: criteria.maxTargets,
-                allowFriendly: !criteria.enemyOnly,
-                allowOpponent: !criteria.friendlyOnly
-              })
-            ) {
-              return;
-            }
-            break;
-          }
-          const limit =
-            criteria.maxTargets > 0 ? resolvedTargets.slice(0, criteria.maxTargets) : resolvedTargets;
-          limit.forEach((target) => this.returnCardToOwnerHand(target, context));
-          break;
-        }
-        case 'gain_resource': {
-          const recipient = this.resolveOperationPlayer(operation, caster, context);
-          const amount = operation.magnitudeHint ?? 1;
-          if (amount > 0) {
-            const normalized = Math.max(1, Math.round(amount));
-            this.channelRunes(recipient, normalized);
-            this.logRuneChange(recipient, normalized, {
-              direction: 'channel',
-              exhausted: false,
-              context
-            });
-          } else if (amount < 0) {
-            const normalized = Math.max(1, Math.round(Math.abs(amount)));
-            this.exhaustRunes(recipient, normalized);
-            this.logRuneChange(recipient, normalized, {
-              direction: 'exhaust',
-              context
-            });
-          }
-          break;
-        }
-        case 'shield': {
-          const target = context.boardTarget;
-          if (!target) {
-            break;
-          }
-          this.applyTemporaryEffect(target.instanceId, {
-            id: `shield_${Date.now()}`,
-            affectedCards: [target.instanceId],
-            duration: 1,
-            effect: {
-              type: 'prevent_damage',
-              value: operation.magnitudeHint ?? 1
-            }
-          });
-          break;
-        }
-        case 'channel_rune': {
-          const recipient = this.resolveOperationPlayer(operation, caster, context);
-          const amount = Math.max(1, operation.magnitudeHint ?? 1);
-          const enterTapped =
-            typeof operation.metadata === 'object' && operation.metadata
-              ? Boolean((operation.metadata as { enterTapped?: boolean }).enterTapped)
-              : false;
-          this.channelRunes(recipient, amount, { tapped: enterTapped });
-          this.logRuneChange(recipient, amount, {
-            direction: 'channel',
-            exhausted: enterTapped,
-            context
-          });
-          break;
-        }
-        case 'move_unit': {
-          const unitTargets = resolveBoardTargets();
-          const unitsToMove =
-            unitTargets.length > 0
-              ? unitTargets
-              : this.isBoardCard(context.source) && context.source.type === CardType.CREATURE
-                ? [(context.source as BoardCard)]
-                : [];
-          if (unitsToMove.length === 0) {
-            break;
-          }
-          const destination =
-            typeof operation.metadata === 'object' && operation.metadata
-              ? (operation.metadata as { destination?: 'base' | 'battlefield' }).destination
-              : undefined;
-          const prefersBattlefield =
-            destination === 'battlefield' ||
-            (destination === undefined &&
-              unitsToMove[0].location.zone === 'base' &&
-              operation.targetHint !== 'enemy');
-          unitsToMove.forEach((unit) => {
-            const owner = this.getPlayerByCard(unit.instanceId);
-            if (prefersBattlefield && context.battlefieldTarget) {
-              if (
-                unit.location.zone !== 'battlefield' ||
-                unit.location.battlefieldId !== context.battlefieldTarget.battlefieldId
-              ) {
-                this.moveUnitToBattlefield(owner, unit, context.battlefieldTarget);
-              }
-            } else if (unit.location.zone !== 'base') {
-              this.moveUnitToBase(owner, unit);
-            }
-          });
-          break;
-        }
-        case 'recycle_card': {
-          const iterations = Math.max(1, operation.magnitudeHint ?? 1);
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
-          for (let i = 0; i < iterations; i++) {
-            const recovered = targetPlayer.graveyard.shift();
-            if (!recovered) {
-              break;
-            }
-            targetPlayer.deck.push(recovered);
-            this.logRuleUsage(context.source, 'recycle-card');
-          }
-          this.shuffle(targetPlayer.deck);
-          break;
-        }
-        case 'search_deck': {
-          const viewer = operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
-          const peekCount = Math.max(1, operation.magnitudeHint ?? 1);
-          const preview = viewer.deck.slice(0, peekCount).map((card) => card.name);
-          const previewSnippet = preview.slice(0, 3).join(', ');
-          this.addDuelLogEntry({
-            playerId: viewer.playerId,
-            message: `${this.resolvePlayerName(viewer.playerId) ?? 'Player'} inspects their deck${
-              previewSnippet ? ` (${previewSnippet}${preview.length > 3 ? '…' : ''})` : ''
-            }.`,
-            tone: 'info'
-          });
-          this.logRuleUsage(context.source, 'search-deck');
-          break;
-        }
-        case 'manipulate_priority': {
-          const baseType =
-            this.gameState.currentPhase === GamePhase.COMBAT ? 'combat' : 'main';
-          const windowHolder =
-            operation.targetHint === 'enemy'
-              ? this.getOtherPlayer(caster).playerId
-              : caster.playerId;
-          this.gameState.focusPlayerId = windowHolder;
-          this.openPriorityWindow(baseType, windowHolder, `effect-${context.source.id}`);
-          break;
-        }
-        case 'interact_legend': {
-          const player =
-            operation.targetHint === 'enemy' ? this.getOtherPlayer(caster) : caster;
-          this.addDuelLogEntry({
-            playerId: player.playerId,
-            message: `${this.resolvePlayerName(player.playerId) ?? 'Player'}'s legend reacts to ${
-              context.source.name
-            }.`,
-            tone: 'info'
-          });
-          this.logRuleUsage(context.source, 'legend-interaction');
-          break;
-        }
-        case 'attach_gear': {
-          this.addDuelLogEntry({
-            playerId: caster.playerId,
-            message: `${this.resolvePlayerName(caster.playerId) ?? 'Player'} equips a gear via ${
-              context.source.name
-            }.`,
-            tone: 'info'
-          });
-          this.logRuleUsage(context.source, 'attach-gear');
-          break;
-        }
-        case 'transform': {
-          this.addDuelLogEntry({
-            playerId: caster.playerId,
-            message: `${context.source.name} transforms a target.`,
-            tone: 'info'
-          });
-          this.logRuleUsage(context.source, 'transform');
-          break;
-        }
-        case 'adjust_mulligan': {
-          caster.firstTurnRuneBoost += Math.max(0, operation.magnitudeHint ?? 0);
-          this.addDuelLogEntry({
-            playerId: caster.playerId,
-            message: `${this.resolvePlayerName(caster.playerId) ?? 'Player'} modifies their mulligan options.`,
-            tone: 'info'
-          });
-          break;
-        }
-        case 'control_battlefield': {
-          // Only apply battlefield control if there's an explicit battlefield target
-          // Spells like "Kill a unit at a battlefield" should NOT auto-grant control
-          // Only spells that explicitly say "gain control of" or "claim" a battlefield should
-          const battlefield = context.battlefieldTarget;
-          if (!battlefield) {
-            // Check if the spell text explicitly mentions controlling/claiming a battlefield
-            const effectText = (context.source?.text ?? '').toLowerCase();
-            const grantsControl = /\b(gain\s+control|claim|take\s+control|conquer)\b/.test(effectText) &&
-              /\bbattlefield\b/.test(effectText);
-            if (!grantsControl) {
-              // This operation targets a battlefield location, not control transfer
-              // Log but don't execute
-              this.logRuleUsage(context.source, 'control_battlefield-skipped-no-target');
-              break;
-            }
-            // Fallback to auto-resolve only for explicit control spells
-            const resolvedBattlefield = this.resolveBattlefieldTargetForControl(caster, undefined);
-            if (!resolvedBattlefield) {
-              break;
-            }
-            const points = Math.max(1, operation.magnitudeHint ?? 1);
-            this.applyBattlefieldControl(caster, resolvedBattlefield, 'objective', {
-              points,
-              sourceCardId: context.source.id
-            });
-            break;
-          }
-          const points = Math.max(1, operation.magnitudeHint ?? 1);
-          this.applyBattlefieldControl(caster, battlefield, 'objective', {
-            points,
-            sourceCardId: context.source.id
-          });
-          break;
-        }
-        case 'stun': {
-          // Stun/exhaust target units
-          const targetsToStun = resolveBoardTargets().filter(
-            (target) => target.type === CardType.CREATURE && !target.isTapped
-          );
-          if (targetsToStun.length === 0) {
-            break;
-          }
-          targetsToStun.forEach((target) => {
-            target.isTapped = true;
-            const suffix = this.describeEffectSuffix(context);
-            this.addDuelLogEntry({
-              playerId: caster.playerId,
-              message: `${target.name ?? 'A unit'} is stunned${suffix}.`,
-              tone: 'warning'
-            });
-          });
-          break;
-        }
-        case 'ready': {
-          // Ready/untap target units or runes
-          const targetsToReady = resolveBoardTargets().filter(
-            (target) => target.isTapped
-          );
-          if (targetsToReady.length > 0) {
-            targetsToReady.forEach((target) => {
-              target.isTapped = false;
-              const suffix = this.describeEffectSuffix(context);
-              this.addDuelLogEntry({
-                playerId: caster.playerId,
-                message: `${target.name ?? 'A unit'} is readied${suffix}.`,
-                tone: 'success'
-              });
-            });
-            break;
-          }
-          // Also handle readying runes
-          const runeCount = Math.max(1, operation.magnitudeHint ?? 1);
-          const targetPlayer = this.resolveOperationPlayer(operation, caster, context);
-          let readied = 0;
-          for (const rune of targetPlayer.channeledRunes) {
-            if (rune.isTapped && readied < runeCount) {
-              rune.isTapped = false;
-              readied++;
-            }
-          }
-          if (readied > 0) {
-            const suffix = this.describeEffectSuffix(context);
-            this.addDuelLogEntry({
-              playerId: targetPlayer.playerId,
-              message: `${readied} rune${readied === 1 ? '' : 's'} readied${suffix}.`,
-              tone: 'success'
-            });
-          }
-          break;
-        }
-        case 'generic': {
-          if (operation.targetHint === 'battlefield') {
-            const battlefield = this.resolveBattlefieldTargetForControl(
-              caster,
-              context.battlefieldTarget
-            );
-            if (!battlefield) {
-              break;
-            }
-            const points = Math.max(1, operation.magnitudeHint ?? 1);
-            this.applyBattlefieldControl(caster, battlefield, 'objective', {
-              points,
-              sourceCardId: context.source.id
-            });
-            break;
-          }
-          this.logRuleUsage(context.source, `unhandled-operation-${operation.type}`);
-          break;
-        }
-        default: {
-          this.logRuleUsage(context.source, `unhandled-operation-${operation.type}`);
-          break;
-        }
-      }
-    }
+    this._effectsAdapter = adapter;
+    return adapter;
   }
 
   private handleSpecialSpell(spell: Card, caster: PlayerState, targets?: string[]): boolean {
@@ -4937,7 +4708,8 @@ export class RiftboundGameEngine {
     const after = caster.channeledRunes.length;
     const actual = channeled || after - before;
     if (actual < channelAmount) {
-      this.drawCards(caster, drawAmount);
+      // "If you can't, draw N" is a REQUIRED fallback clause from card text.
+      this.drawCards(caster, drawAmount, true);
       this.addDuelLogEntry({
         playerId: caster.playerId,
         message: `${spell.name} channels ${actual} rune${actual === 1 ? '' : 's'} before drawing ${drawAmount}.`,
@@ -5449,18 +5221,6 @@ export class RiftboundGameEngine {
     });
   }
 
-  private restoreCreature(creature: BoardCard, amount: number): void {
-    if (creature.type !== CardType.CREATURE) {
-      return;
-    }
-    const baseToughness = creature.toughness ?? creature.currentToughness ?? 0;
-    if (baseToughness <= 0) {
-      return;
-    }
-    creature.currentToughness = Math.min(baseToughness, (creature.currentToughness ?? 0) + amount);
-    this.updateActivationState(creature, true, 'healed');
-  }
-
   private stripTriggerPrefix(text: string): string {
     return text.replace(/^(when|whenever|after|before|while|during)\b[^,]*,\s*/i, '').trim();
   }
@@ -5482,6 +5242,31 @@ export class RiftboundGameEngine {
     return true;
   }
 
+  /**
+   * Phase 3 ETL Fix 2 ported to the runtime boundary.
+   *
+   * `buildEffectProfile` (card-catalog.ts EFFECT_TAXONOMY `priority` class)
+   * re-derives a variantless `{ type: 'manipulate_priority' }` op whenever a
+   * card's printed text matches /REACTION|ACTION|showdown|priority/. The ETL
+   * migration stripped these from the JSON, but the enricher/normalizer
+   * re-emits them on load and `deriveCardAbilities` also re-emits them per
+   * rule clause. Those ops carry no `variant`, so the priority handler's
+   * `inferVariant` fallback rounds them to `action_tagged` and warns
+   * `PRIORITY_TAG_DISPATCHED_AS_OP` on every ability resolution.
+   *
+   * The op is a no-op at the handler; filtering it before dispatch is
+   * behavior-equivalent and silences the warn at its source. The warn in
+   * `effects/handlers/priority.ts` stays in place as defense-in-depth for
+   * any op still synthesized outside this boundary.
+   */
+  private stripTimingTagOps(operations: EffectOperation[]): EffectOperation[] {
+    return operations.filter(
+      (operation) =>
+        operation.type !== 'manipulate_priority' ||
+        typeof (operation as { variant?: string }).variant === 'string',
+    );
+  }
+
   private normalizeEffectOperations(
     text: string,
     operations?: EffectOperation[]
@@ -5489,10 +5274,11 @@ export class RiftboundGameEngine {
     if (!operations || operations.length === 0) {
       return operations;
     }
+    const stripped = this.stripTimingTagOps(operations);
     if (!this.shouldDefaultDiscardToSelf(text)) {
-      return operations;
+      return stripped;
     }
-    return operations.map((operation) => {
+    return stripped.map((operation) => {
       if (operation.type !== 'discard_cards' || operation.targetHint !== 'enemy') {
         return { ...operation };
       }
@@ -5510,7 +5296,7 @@ export class RiftboundGameEngine {
     const description = ability.description ?? '';
     const normalizedDescription = description.toLowerCase();
     const effectText = this.stripTriggerPrefix(normalizedDescription);
-    let operations = ability.operations.map((operation) => ({
+    let operations = this.stripTimingTagOps(ability.operations).map((operation) => ({
       ...operation,
       metadata: operation.metadata ? { ...operation.metadata } : undefined
     }));
@@ -5858,176 +5644,6 @@ export class RiftboundGameEngine {
     });
   }
 
-  private detectReturnCountFromText(text: string): number | null {
-    const match = text.match(/return\s+(?:up to\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|\d+)/i);
-    if (!match || !match[1]) {
-      return null;
-    }
-    const token = match[1].toLowerCase();
-    const wordMap: Record<string, number> = {
-      one: 1,
-      two: 2,
-      three: 3,
-      four: 4,
-      five: 5,
-      six: 6,
-      seven: 7,
-      eight: 8,
-      nine: 9,
-      ten: 10
-    };
-    if (wordMap[token]) {
-      return wordMap[token];
-    }
-    const numeric = Number(token);
-    return Number.isFinite(numeric) ? numeric : null;
-  }
-
-  private buildReturnCriteria(source: Card, operation: EffectOperation): ReturnCriteria {
-    const text = this.stripRichText(source.text ?? '');
-    const normalized = text.toLowerCase();
-    const includesGear = /\bgear\b/.test(normalized);
-    const includesUnit = /\bunit\b|\bcreature\b/.test(normalized);
-    const friendlyOnly = /\bfriendly\b|\byou control\b/.test(normalized);
-    const enemyOnly = /\benemy\b|\bopponent'?s\b/.test(normalized);
-    const battlefieldOnly =
-      /\bat\b\s*(?:a|the)?\s*battlefield\b/.test(normalized) ||
-      /\bon\b\s*(?:a|the)?\s*battlefield\b/.test(normalized);
-    const optional = /\bup to\b/i.test(normalized) || /\bmay\b/i.test(normalized);
-    const globalAll =
-      /\breturn\b[\s\S]+\ball\b/i.test(normalized) || /\breturn\b[\s\S]+\beach\b/i.test(normalized);
-    const magnitude =
-      operation.magnitudeHint && operation.magnitudeHint > 0
-        ? operation.magnitudeHint
-        : this.detectReturnCountFromText(normalized);
-    const maxTargets = globalAll ? 0 : Math.max(1, magnitude ?? 1);
-    let maxMight: number | null = null;
-    const mightMatch = normalized.match(
-      /(\d+)\s*(?:[:]?rb_might:?|might)\s*(?:or less|or fewer|and under|or lower)?/
-    );
-    if (mightMatch) {
-      maxMight = Number(mightMatch[1]);
-    }
-    return {
-      allowUnits: !includesGear || includesUnit,
-      allowGear: includesGear,
-      friendlyOnly,
-      enemyOnly,
-      battlefieldOnly,
-      maxMight,
-      optional,
-      globalAll,
-      minTargets: optional ? 0 : 1,
-      maxTargets
-    };
-  }
-
-  private matchesReturnCriteria(
-    card: BoardCard,
-    caster: PlayerState,
-    criteria: ReturnCriteria
-  ): boolean {
-    const owner = this.getPlayerByCard(card.instanceId);
-    const isFriendly = owner.playerId === caster.playerId;
-    if (criteria.friendlyOnly && !isFriendly) {
-      return false;
-    }
-    if (criteria.enemyOnly && isFriendly) {
-      return false;
-    }
-    if (criteria.battlefieldOnly && card.location.zone !== 'battlefield') {
-      return false;
-    }
-    const isGear = this.isGearCard(card);
-    if (!criteria.allowGear && isGear) {
-      return false;
-    }
-    if (!criteria.allowUnits && card.type === CardType.CREATURE) {
-      return false;
-    }
-    if (!isGear && card.type !== CardType.CREATURE) {
-      return false;
-    }
-    if (criteria.maxMight != null && card.type === CardType.CREATURE) {
-      const cardMight = card.power ?? card.currentToughness ?? 0;
-      if (cardMight > criteria.maxMight) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  private collectReturnTargets(caster: PlayerState, criteria: ReturnCriteria): BoardCard[] {
-    const matches: BoardCard[] = [];
-    for (const player of this.gameState.players) {
-      const pool = [
-        ...player.board.creatures,
-        ...player.board.artifacts,
-        ...player.board.enchantments
-      ];
-      pool.forEach((card) => {
-        if (this.matchesReturnCriteria(card, caster, criteria)) {
-          matches.push(card);
-        }
-      });
-    }
-    return matches;
-  }
-
-  private returnCardToOwnerHand(target: BoardCard, context: EffectOperationContext): void {
-    const owner = this.getPlayerByCard(target.instanceId);
-    this.removeCardFromBoard(owner, target);
-    if (target.location.zone === 'battlefield' && target.location.battlefieldId) {
-      this.removeContestant(target.location.battlefieldId, owner.playerId);
-    }
-    const tokenUnit = this.isTokenCard(target);
-    this.updateActivationState(target, false, 'return-hand');
-    const suffix = this.describeEffectSuffix(context);
-    if (tokenUnit) {
-      this.addDuelLogEntry({
-        playerId: owner.playerId,
-        message: `${target.name ?? 'Token'} dissipates instead of returning${suffix}.`,
-        tone: 'warning'
-      });
-      return;
-    }
-    target.isTapped = false;
-    target.summoned = true;
-    target.location = { zone: 'base' };
-    owner.hand.push(target);
-    const ownerName = this.resolvePlayerName(owner.playerId) ?? 'Player';
-    this.addDuelLogEntry({
-      playerId: owner.playerId,
-      message: `${ownerName} returns ${target.name ?? 'a card'} to their hand${suffix}.`,
-      tone: 'info'
-    });
-  }
-
-  private removeCardFromBoard(player: PlayerState, card: BoardCard): void {
-    const pools = [player.board.creatures, player.board.artifacts, player.board.enchantments];
-    for (const pool of pools) {
-      const index = pool.findIndex((entry) => entry.instanceId === card.instanceId);
-      if (index !== -1) {
-        pool.splice(index, 1);
-        break;
-      }
-    }
-  }
-
-  private isGearCard(card: Card | BoardCard): boolean {
-    return (card.tags ?? []).some(
-      (tag) => typeof tag === 'string' && tag.trim().toLowerCase() === 'gear'
-    );
-  }
-
-  private requiresUnitForGraveyardReturn(source?: Card): boolean {
-    if (!source) {
-      return true;
-    }
-    const text = this.stripRichText(source.text ?? '');
-    return /\bunit\b|\bcreature\b/i.test(text);
-  }
-
   private describeEffectAttribution(context: EffectOperationContext): string | null {
     const abilityLabel = (context.abilityName ?? '').trim();
     const sourceName = context.source?.name ?? null;
@@ -6067,45 +5683,6 @@ export class RiftboundGameEngine {
       message: `${playerName} ${verb} ${amount} ${runeLabel}${stateNote}${suffix}.`,
       tone: 'info'
     });
-  }
-
-  private logCardDraw(player: PlayerState, count: number, context: EffectOperationContext): void {
-    if (count <= 0) {
-      return;
-    }
-    const playerName = this.resolvePlayerName(player.playerId) ?? 'Player';
-    const suffix = this.describeEffectSuffix(context);
-    const cardLabel = count === 1 ? 'a card' : `${count} cards`;
-    this.addDuelLogEntry({
-      playerId: player.playerId,
-      message: `${playerName} draws ${cardLabel}${suffix}.`,
-      tone: 'info'
-    });
-  }
-
-  private resolveOperationPlayer(
-    operation: EffectOperation,
-    caster: PlayerState,
-    context: EffectOperationContext,
-    options?: { defaultToOpponent?: boolean }
-  ): PlayerState {
-    if (context.playerTarget) {
-      return context.playerTarget;
-    }
-    const hint = (operation.targetHint ?? '').toString().toLowerCase();
-    switch (hint) {
-      case 'enemy':
-      case 'opponent':
-        return this.getOtherPlayer(caster);
-      case 'self':
-      case 'ally':
-      case 'friendly':
-      case 'controller':
-      case 'owner':
-        return caster;
-      default:
-        return options?.defaultToOpponent ? this.getOtherPlayer(caster) : caster;
-    }
   }
 
   private stripRichText(text: string): string {
@@ -6505,78 +6082,6 @@ export class RiftboundGameEngine {
     }
   }
 
-  private deferDiscardOperation(
-    operation: EffectOperation,
-    operations: EffectOperation[],
-    index: number,
-    caster: PlayerState,
-    targetPlayer: PlayerState,
-    context: EffectOperationContext
-  ): boolean {
-    if (!context.battlefieldTarget || !context.source) {
-      return false;
-    }
-    const count = Math.max(1, operation.magnitudeHint ?? 1);
-    const prompt = this.enqueuePrompt('discard', targetPlayer.playerId, {
-      count,
-      sourceCardId: context.source.id ?? null,
-      sourceCardName: context.source.name ?? null,
-      battlefieldId: context.battlefieldTarget.battlefieldId,
-      battlefieldName: context.battlefieldTarget.name
-    });
-    const snapshot = this.snapshotEffectContext(context);
-    this.gameState.pendingEffects.push({
-      id: prompt.id,
-      type: 'discard',
-      casterId: caster.playerId,
-      targetPlayerId: targetPlayer.playerId,
-      operations: operations.map((op) => ({ ...op })),
-      nextIndex: index,
-      context: snapshot,
-      metadata: {
-        count
-      }
-    });
-    return true;
-  }
-
-  private deferTargetSelectionForOperation(
-    operations: EffectOperation[],
-    index: number,
-    caster: PlayerState,
-    context: EffectOperationContext,
-    options: {
-      scope: 'unit' | 'graveyard';
-      min: number;
-      max: number;
-      allowFriendly?: boolean;
-      allowOpponent?: boolean;
-      metadata?: Record<string, unknown>;
-    }
-  ): boolean {
-    const prompt = this.enqueuePrompt('target', caster.playerId, {
-      sourceCardId: context.source?.id ?? null,
-      sourceCardName: context.source?.name ?? null,
-      scope: options.scope,
-      min: options.min,
-      max: options.max,
-      allowFriendly: options.allowFriendly !== false,
-      allowOpponent: options.allowOpponent !== false
-    });
-    const snapshot = this.snapshotEffectContext(context);
-    this.gameState.pendingEffects.push({
-      id: prompt.id,
-      type: 'target',
-      casterId: caster.playerId,
-      targetPlayerId: caster.playerId,
-      operations: operations.map((op) => ({ ...op })),
-      nextIndex: index,
-      context: snapshot,
-      metadata: options.metadata
-    });
-    return true;
-  }
-
   private deferTargetPrompt(options: {
     caster: PlayerState;
     spell: Card;
@@ -6748,19 +6253,6 @@ export class RiftboundGameEngine {
     return player.board.creatures.filter((unit) => unit.type === CardType.CREATURE);
   }
 
-  private snapshotEffectContext(context: EffectOperationContext): EffectContextSnapshot {
-    return {
-      sourceCardId: context.source?.id ?? null,
-      sourceInstanceId:
-        context.source && 'instanceId' in context.source
-          ? ((context.source as BoardCard).instanceId ?? null)
-          : null,
-      boardTargetInstanceId: context.boardTarget?.instanceId ?? null,
-      battlefieldId: context.battlefieldTarget?.battlefieldId ?? null,
-      targetIds: context.targets ? [...context.targets] : null
-    };
-  }
-
   private restoreEffectContext(snapshot: EffectContextSnapshot): EffectOperationContext {
     const rebuilt: Partial<EffectOperationContext> = {};
     if (snapshot.battlefieldId) {
@@ -6826,7 +6318,9 @@ export class RiftboundGameEngine {
     const abilityName = ability.name.toLowerCase();
 
     if (abilityName.includes('draw')) {
-      this.drawCards(player, 1);
+      // Ability-text "draw" is a REQUIRED draw unless the card specifies
+      // optional phrasing; optional draws should pass `required: false`.
+      this.drawCards(player, 1, true);
     }
 
     if (abilityName.includes('damage')) {
@@ -6919,6 +6413,63 @@ export class RiftboundGameEngine {
   // ========================================================================
   // HELPERS
   // ========================================================================
+
+  /**
+   * Collect every domain printed on a card. Pulls from both the dedicated
+   * `domain` field and the catalog `colors` array so Champion Legends (which
+   * can be multi-domain) are handled correctly.
+   */
+  private collectCardDomains(card: Card | null | undefined): Set<Domain> {
+    const result = new Set<Domain>();
+    if (!card) {
+      return result;
+    }
+    if (card.domain) {
+      result.add(card.domain);
+    }
+    if (Array.isArray(card.colors)) {
+      for (const color of card.colors) {
+        const mapped = this.mapDomain(color);
+        if (mapped) {
+          result.add(mapped);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Rule 133 / 110: every card in a main deck must share at least one domain
+   * with the Champion Legend. Throws with code `ILLEGAL_DECK_DOMAIN` when the
+   * deck contains an off-domain card. Domainless cards (no `domain` and no
+   * mapped color) are treated as rainbow and always legal.
+   */
+  private enforceDomainIdentity(playerId: string, legend: Card, deck: Card[]): void {
+    const legendDomains = this.collectCardDomains(legend);
+    if (legendDomains.size === 0) {
+      return;
+    }
+    for (const card of deck) {
+      const cardDomains = this.collectCardDomains(card);
+      if (cardDomains.size === 0) {
+        continue;
+      }
+      let sharesDomain = false;
+      for (const domain of cardDomains) {
+        if (legendDomains.has(domain)) {
+          sharesDomain = true;
+          break;
+        }
+      }
+      if (!sharesDomain) {
+        const legendDomainList = Array.from(legendDomains).join(', ');
+        const cardDomainList = Array.from(cardDomains).join(', ');
+        throw new Error(
+          `ILLEGAL_DECK_DOMAIN: player ${playerId} deck entry '${card.name}' (${cardDomainList}) does not share a domain with Champion Legend '${legend.name}' (${legendDomainList})`
+        );
+      }
+    }
+  }
 
   private buildDeckFromConfig(entries: DeckCardEntry[]): Card[] {
     if (!entries) {
@@ -7368,9 +6919,10 @@ export class RiftboundGameEngine {
       case 'artifact':
       case 'equipment':
         return CardType.ARTIFACT;
-      case 'enchantment':
       case 'battlefield':
       case 'field':
+        return CardType.BATTLEFIELD;
+      case 'enchantment':
         return CardType.ENCHANTMENT;
       case 'rune':
         return CardType.RUNE;
@@ -7462,7 +7014,7 @@ export class RiftboundGameEngine {
   private openPriorityWindow(type: PriorityWindow['type'], holder: string, event?: string): void {
     const timestamp = Date.now();
     this.gameState.priorityWindow = {
-      id: `priority_${timestamp}_${Math.random()}`,
+      id: `priority_${timestamp}_${this.rng.next()}`,
       type,
       holder,
       openedAt: timestamp,
@@ -7954,9 +7506,40 @@ export class RiftboundGameEngine {
     return false;
   }
 
+  /**
+   * Public wrapper around the private text-based deployment-permission reader
+   * so external callers (self-play enumerator, bot policies, UI tooltips) can
+   * discover a card's deployment options without reflection.
+   *
+   * Internal callers should keep using `getCardBattlefieldDeploymentPermissions`.
+   */
+  public getCardDeploymentPermissions(card: Card): {
+    canPlayToOpenBattlefield: boolean;
+    canPlayToOccupiedEnemyBattlefield: boolean;
+    grantsOpenBattlefieldPlayToAllies: boolean;
+  } {
+    return this.getCardBattlefieldDeploymentPermissions(card);
+  }
+
+  /**
+   * Public wrapper: true if the given player controls any creature whose card
+   * text grants allies the ability to be played to open battlefields.
+   *
+   * Internal callers should keep using `hasAllyGrantingOpenBattlefieldDeploy`.
+   */
+  public playerHasAllyGrantingOpenBattlefieldDeploy(playerId: string): boolean {
+    let player: PlayerState;
+    try {
+      player = this.getPlayerById(playerId);
+    } catch {
+      return false;
+    }
+    return this.hasAllyGrantingOpenBattlefieldDeploy(player);
+  }
+
   private shuffle<T>(items: T[]): void {
     for (let i = items.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = this.rng.nextInt(0, i + 1);
       [items[i], items[j]] = [items[j], items[i]];
     }
   }
@@ -7972,10 +7555,40 @@ export class RiftboundGameEngine {
     };
   }
 
+  private readonly FALLBACK_RUNE_CARD_IDS: Record<Domain, string> = {
+    [Domain.BODY]: 'OGN-126',
+    [Domain.CALM]: 'OGN-042',
+    [Domain.CHAOS]: 'OGN-166',
+    [Domain.FURY]: 'OGN-007',
+    [Domain.MIND]: 'OGN-089',
+    [Domain.ORDER]: 'OGN-214'
+  };
+
   private generateFallbackRuneDeck(): RuneCard[] {
     const domains = Object.values(Domain);
+    const catalogRunesByDomain = new Map<Domain, RuneCard>();
+    for (const domain of domains) {
+      const cardId = this.FALLBACK_RUNE_CARD_IDS[domain];
+      if (!cardId) continue;
+      try {
+        const card = this.lookupCatalogCard(cardId);
+        catalogRunesByDomain.set(domain, this.toRuneCard(card));
+      } catch {
+        // Catalog unavailable (e.g. in some test setups) — fall through
+      }
+    }
+
     return Array.from({ length: this.RUNE_DECK_SIZE }).map((_, index) => {
       const domain = domains[index % domains.length];
+      const template = catalogRunesByDomain.get(domain);
+      if (template) {
+        return {
+          ...template,
+          id: `${template.id}_${index}`,
+          assets: template.assets ? { ...template.assets } : null,
+          cardSnapshot: template.cardSnapshot ? this.cloneCard(template.cardSnapshot) : undefined
+        };
+      }
       return {
         id: `fallback_rune_${index}`,
         name: `${domain} Rune`,
@@ -7986,36 +7599,21 @@ export class RiftboundGameEngine {
     });
   }
 
-  private generateFallbackBattlefields(playerId: string): Card[] {
-    return [
-      {
-        id: `fallback_battlefield_${playerId}`,
-        slug: `fallback_battlefield_${playerId}`,
-        name: 'Training Grounds',
-        type: CardType.ENCHANTMENT,
-        rarity: CardRarity.COMMON,
-        text: 'Auto-generated battlefield placeholder.',
-        flavorText: null,
-        setName: null,
-        colors: [],
-        tags: ['Battlefield'],
-        keywords: [],
-        manaCost: 0,
-        energyCost: 0,
-        powerCost: undefined,
-        domain: undefined,
-        power: 0,
-        toughness: 0,
-        abilities: [],
-        activationProfile: undefined,
-        rules: [],
-        assets: undefined,
-        metadata: {
-          generated: true
-        },
-        effectProfile: undefined
-      }
-    ];
+  private generateFallbackBattlefields(_playerId: string): Card[] {
+    const catalog = getCardCatalog();
+    const battlefieldRecords = catalog.filter(
+      (record) => (record.type ?? '').toLowerCase() === 'battlefield'
+    );
+    if (battlefieldRecords.length === 0) {
+      throw new Error(
+        'No Battlefield cards found in catalog. Ensure cards.enriched.json contains type:"Battlefield" entries.'
+      );
+    }
+
+    const count = Math.min(this.DEFAULT_BATTLEFIELD_COUNT, battlefieldRecords.length);
+    const pool = [...battlefieldRecords];
+    this.shuffle(pool);
+    return pool.slice(0, count).map((record) => this.cloneCard(this.convertRecordToCard(record)));
   }
 
   private createBattlefieldStateFromCard(card: Card, ownerId: string): BattlefieldState {
@@ -8027,6 +7625,7 @@ export class RiftboundGameEngine {
       ownerId,
       controller: undefined,
       contestedBy: [],
+      lastConqueredTurnByPlayer: {},
       lastCombatTurn: undefined,
       combatTurnByPlayer: {},
       effectState: {},
@@ -8044,6 +7643,7 @@ export class RiftboundGameEngine {
       controller: state.controller,
       contestedBy: [...state.contestedBy],
       lastConqueredTurn: state.lastConqueredTurn,
+      lastConqueredTurnByPlayer: { ...(state.lastConqueredTurnByPlayer ?? {}) },
       lastHoldTurn: state.lastHoldTurn,
       lastCombatTurn: state.lastCombatTurn,
       lastHoldScoreTurn: state.lastHoldScoreTurn,
@@ -8102,7 +7702,19 @@ export class RiftboundGameEngine {
       battlefield.lastHoldTurn = this.turnNumber;
       return;
     }
+
+    // Per-turn Conquer dedup (Rule 446.1): scoring is per player, not per
+    // battlefield. A player scores only if they have not already Scored this
+    // battlefield on the current turn. Opposing players each get their own
+    // Conquer point on their first conquer of the same battlefield this turn.
+    if (!battlefield.lastConqueredTurnByPlayer) {
+      battlefield.lastConqueredTurnByPlayer = {};
+    }
+    const alreadyConqueredByPlayerThisTurn =
+      battlefield.lastConqueredTurnByPlayer[player.playerId] === this.turnNumber;
+
     battlefield.lastConqueredTurn = this.turnNumber;
+    battlefield.lastConqueredTurnByPlayer[player.playerId] = this.turnNumber;
     battlefield.lastHoldTurn = undefined;
     const sourceCard = options?.sourceCardId ?? battlefield.card?.id ?? battlefield.battlefieldId;
     const amount = Math.max(1, options?.points ?? 1);
@@ -8118,7 +7730,15 @@ export class RiftboundGameEngine {
       message: `${playerName} ${verb} ${battlefield.name}.`,
       tone: 'success'
     });
-    this.awardVictoryPoints(player, amount, reason, sourceCard);
+    if (alreadyConqueredByPlayerThisTurn) {
+      this.addDuelLogEntry({
+        playerId: player.playerId,
+        message: `Duplicate conquer skipped: ${playerName} already scored ${battlefield.name} this turn.`,
+        tone: 'info'
+      });
+    } else {
+      this.awardVictoryPoints(player, amount, reason, sourceCard);
+    }
     this.triggerBattlefieldAbility(battlefield, 'control', player);
     this.triggerUnitsOnBattlefield(battlefield.battlefieldId, player.playerId, 'conquer');
     if (!previousController) {
@@ -8146,6 +7766,13 @@ export class RiftboundGameEngine {
       if (units.length === 0) {
         continue;
       }
+      // TODO(rules-verify): confirm whether the hold bonus truly requires
+      // EXCLUSIVE control (no opposing units present) or merely that the
+      // scoring player is the battlefield's controller regardless of any
+      // opposing units sharing the zone. Current engine enforces the
+      // stricter "exclusively controlled" reading; researcher is pulling
+      // the exact rule wording. If the rule is just "controller holds at
+      // turn start", drop the `exclusivelyControlled` guard below.
       const exclusivelyControlled = units.every((unit) => {
         const owner = this.getPlayerByCard(unit.instanceId);
         return owner.playerId === player.playerId;
@@ -8889,73 +8516,208 @@ export class RiftboundGameEngine {
     return attackers.includes(unit.instanceId) ? bonus : 0;
   }
 
+  /**
+   * Compute a unit's effective combat damage output: base power plus assault
+   * bonus plus any continuous stat modifiers (auras, tribal synergy, location
+   * effects, etc.). Non-finite or missing power falls back to 0.
+   */
+  private effectiveCombatPower(
+    unit: BoardCard,
+    options: { isAttacking: boolean; isDefending: boolean }
+  ): number {
+    let power = 0;
+    if (typeof unit.power === 'number' && Number.isFinite(unit.power)) {
+      power = unit.power;
+    } else if (typeof unit.currentToughness === 'number' && Number.isFinite(unit.currentToughness)) {
+      power = unit.currentToughness;
+    }
+    const assaultBonus = this.getAssaultBonus(unit);
+    if (assaultBonus > 0) {
+      power += assaultBonus;
+    }
+    const statModifiers = this.calculateStatModifiers(unit, options);
+    if (Number.isFinite(statModifiers)) {
+      power += statModifiers;
+    }
+    return Math.max(0, power);
+  }
+
+  /**
+   * Assign `incoming` points of damage across the given defending units,
+   * respecting Tank (must be assigned damage first; negates the first point)
+   * and Deflect (redirects the first instance of damage back to the attacker).
+   *
+   * Returns a map of instanceId -> damage dealt to that defender, plus the
+   * total damage redirected back to attackers by Deflect.
+   */
+  private assignCombatDamage(
+    incoming: number,
+    defenders: BoardCard[]
+  ): { perUnit: Map<string, number>; redirected: number } {
+    const perUnit = new Map<string, number>();
+    let redirected = 0;
+    if (incoming <= 0 || defenders.length === 0) {
+      return { perUnit, redirected };
+    }
+    // Tank units receive damage before non-Tank units (rule 815.1.b).
+    const tankUnits = defenders.filter((u) => this.cardHasMechanic(u, 'Tank'));
+    const nonTankUnits = defenders.filter((u) => !this.cardHasMechanic(u, 'Tank'));
+    const order: BoardCard[] = [...tankUnits, ...nonTankUnits];
+
+    let remaining = incoming;
+    for (const unit of order) {
+      if (remaining <= 0) break;
+      const hasTank = this.cardHasMechanic(unit, 'Tank');
+      const hasDeflect = this.cardHasMechanic(unit, 'Deflect');
+      const toughness = Math.max(0, unit.currentToughness ?? unit.toughness ?? 0);
+      // Deflect redirects the first instance of damage back to the attacker.
+      if (hasDeflect && remaining > 0) {
+        redirected += 1;
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+      // Tank negates the first point assigned to it.
+      let absorbed = 0;
+      if (hasTank && remaining > 0) {
+        absorbed = 1;
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+      const damageToUnit = Math.min(remaining, toughness);
+      if (damageToUnit > 0) {
+        perUnit.set(unit.instanceId, (perUnit.get(unit.instanceId) ?? 0) + damageToUnit);
+        remaining -= damageToUnit;
+      }
+      // Restore absorbed so test-visible "damage taken" reflects only net
+      // damage (Tank negation already consumed a point of the pool).
+      void absorbed;
+    }
+    return { perUnit, redirected };
+  }
+
+  /**
+   * Resolve a contested battlefield via per-unit combat damage assignment.
+   *
+   * Previous implementation summed might on each side and wiped every losing
+   * unit regardless of individual stats; that made Tank, Deflect, and excess
+   * power irrelevant, and caused lopsided games that ended via burnout. The
+   * new flow:
+   *   1. Each side computes a total damage pool (sum of each unit's
+   *      effectiveCombatPower).
+   *   2. Side A assigns its damage to side B's units (Tank-first), and vice
+   *      versa. Deflect on a defender redirects one point back to the other
+   *      side's attackers. Damage is applied simultaneously.
+   *   3. Units whose currentToughness drops to 0 are destroyed.
+   *   4. Controller is whichever side has surviving units. If both sides
+   *      survive, the battlefield remains contested (no controller). If both
+   *      sides wipe, the battlefield is left uncontrolled (stalemate).
+   */
   private resolveBattlefieldOutcome(battlefield: BattlefieldState): void {
     const context = this.gameState.combatContext;
     const attackInitiator = context?.initiatedBy ?? null;
     const defendersPresent = Boolean(context?.defendingUnitIds?.length);
     const didInitiateAttack = (playerId: string): boolean =>
       Boolean(defendersPresent && attackInitiator && attackInitiator === playerId);
+
+    const units = this.getUnitsOnBattlefield(battlefield.battlefieldId);
+    // Group by player so each "side" is resolved together.
     const presence = new Map<
       string,
-      { player: PlayerState; units: BoardCard[]; totalMight: number }
+      {
+        player: PlayerState;
+        units: BoardCard[];
+        damagePool: number;
+      }
     >();
-    const units = this.getUnitsOnBattlefield(battlefield.battlefieldId);
     units.forEach((unit) => {
       const owner = this.getPlayerByCard(unit.instanceId);
       const entry =
-        presence.get(owner.playerId) ?? { player: owner, units: [], totalMight: 0 };
+        presence.get(owner.playerId) ??
+        { player: owner, units: [], damagePool: 0 };
       entry.units.push(unit);
-      const might =
-        typeof unit.power === 'number'
-          ? unit.power
-          : typeof unit.currentToughness === 'number'
-            ? unit.currentToughness
-            : 0;
-      if (Number.isFinite(might)) {
-        entry.totalMight += might;
-      }
-      // Apply assault bonus for attackers
-      const assaultBonus = this.getAssaultBonus(unit);
-      if (assaultBonus > 0) {
-        entry.totalMight += assaultBonus;
-      }
-      // Apply continuous stat modifiers (auras, tribal synergy, location effects, etc.)
       const isAttacking = context?.attackingUnitIds?.includes(unit.instanceId) ?? false;
       const isDefending = context?.defendingUnitIds?.includes(unit.instanceId) ?? false;
-      const statModifiers = this.calculateStatModifiers(unit, { isAttacking, isDefending });
-      if (statModifiers !== 0) {
-        entry.totalMight += statModifiers;
-      }
+      entry.damagePool += this.effectiveCombatPower(unit, { isAttacking, isDefending });
       presence.set(owner.playerId, entry);
     });
+
     if (presence.size === 0) {
       battlefield.controller = undefined;
       battlefield.contestedBy = [];
       return;
     }
-    const groups = Array.from(presence.values()).sort((a, b) => b.totalMight - a.totalMight);
+
+    const groups = Array.from(presence.values());
+
+    // Uncontested: a single side holds the field.
     if (groups.length === 1) {
       const uncontested = groups[0];
       const playerName = this.resolvePlayerName(uncontested.player.playerId) ?? 'Player';
       const unitsLabel = this.describeUnitList(uncontested.units);
       this.addDuelLogEntry({
         playerId: uncontested.player.playerId,
-        message: `${playerName}'s ${unitsLabel} secure ${battlefield.name} uncontested (${uncontested.totalMight} might).`,
+        message: `${playerName}'s ${unitsLabel} secure ${battlefield.name} uncontested (${uncontested.damagePool} might).`,
         tone: 'info'
       });
       this.triggerUnits(uncontested.units, 'combat_win');
-      this.applyBattlefieldControl(groups[0].player, battlefield, 'combat', {
+      this.applyBattlefieldControl(uncontested.player, battlefield, 'combat', {
         sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
         initiatedAttack: didInitiateAttack(uncontested.player.playerId)
       });
       return;
     }
-    if (groups[0].totalMight === groups[1].totalMight) {
-      groups.forEach((group) =>
-        group.units.forEach((unit) => {
+
+    // Two-sided (ignore unusual 3+ player cases; only first two sides fight).
+    const sideA = groups[0];
+    const sideB = groups[1];
+
+    // Assign damage simultaneously (compute assignments first, then mutate).
+    const aToB = this.assignCombatDamage(sideA.damagePool, sideB.units);
+    const bToA = this.assignCombatDamage(sideB.damagePool, sideA.units);
+
+    // Deflect redirects damage back to the OTHER side's attackers. Distribute
+    // the redirected damage across that side's units (Tank-first too, since
+    // Tank applies regardless of source).
+    const redirectedToA = this.assignCombatDamage(aToB.redirected, sideA.units);
+    const redirectedToB = this.assignCombatDamage(bToA.redirected, sideB.units);
+
+    const applyDamage = (
+      side: { units: BoardCard[] },
+      maps: Array<Map<string, number>>
+    ) => {
+      for (const unit of side.units) {
+        let total = 0;
+        for (const m of maps) {
+          total += m.get(unit.instanceId) ?? 0;
+        }
+        if (total > 0) {
+          unit.currentToughness = (unit.currentToughness ?? unit.toughness ?? 0) - total;
+        }
+      }
+    };
+    applyDamage(sideA, [bToA.perUnit, redirectedToA.perUnit]);
+    applyDamage(sideB, [aToB.perUnit, redirectedToB.perUnit]);
+
+    // Destroy any unit whose toughness is now <= 0.
+    const destroyDead = (side: { units: BoardCard[] }): BoardCard[] => {
+      const survivors: BoardCard[] = [];
+      for (const unit of side.units) {
+        if ((unit.currentToughness ?? 0) <= 0) {
           this.destroyUnit(unit, 'combat');
-        })
-      );
+        } else {
+          survivors.push(unit);
+        }
+      }
+      return survivors;
+    };
+    const sideASurvivors = destroyDead(sideA);
+    const sideBSurvivors = destroyDead(sideB);
+
+    const sideAWins = sideASurvivors.length > 0 && sideBSurvivors.length === 0;
+    const sideBWins = sideBSurvivors.length > 0 && sideASurvivors.length === 0;
+    const mutualWipe = sideASurvivors.length === 0 && sideBSurvivors.length === 0;
+
+    if (mutualWipe) {
       battlefield.controller = undefined;
       battlefield.contestedBy = [];
       this.addDuelLogEntry({
@@ -8964,25 +8726,33 @@ export class RiftboundGameEngine {
       });
       return;
     }
-    const winner = groups[0];
-    const losers = groups.slice(1);
-    const opposingMight = losers.reduce((sum, group) => sum + group.totalMight, 0);
-    const winnerName = this.resolvePlayerName(winner.player.playerId) ?? 'Player';
-    const winnerUnits = this.describeUnitList(winner.units);
+
+    if (sideAWins || sideBWins) {
+      const winnerSide = sideAWins ? sideA : sideB;
+      const winnerSurvivors = sideAWins ? sideASurvivors : sideBSurvivors;
+      const loserSide = sideAWins ? sideB : sideA;
+      const winnerName =
+        this.resolvePlayerName(winnerSide.player.playerId) ?? 'Player';
+      const winnerUnits = this.describeUnitList(winnerSurvivors);
+      this.addDuelLogEntry({
+        playerId: winnerSide.player.playerId,
+        message: `${winnerName}'s ${winnerUnits} prevail at ${battlefield.name} (${winnerSide.damagePool} vs ${loserSide.damagePool} might).`,
+        tone: 'success'
+      });
+      this.triggerUnits(winnerSurvivors, 'combat_win');
+      this.applyBattlefieldControl(winnerSide.player, battlefield, 'combat', {
+        sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
+        initiatedAttack: didInitiateAttack(winnerSide.player.playerId)
+      });
+      return;
+    }
+
+    // Both sides have survivors: battlefield remains contested, no controller.
+    battlefield.controller = undefined;
+    battlefield.contestedBy = [sideA.player.playerId, sideB.player.playerId];
     this.addDuelLogEntry({
-      playerId: winner.player.playerId,
-      message: `${winnerName}'s ${winnerUnits} overpower the opposition ${winner.totalMight} to ${opposingMight} at ${battlefield.name}.`,
-      tone: 'success'
-    });
-    losers.forEach((group) =>
-      group.units.forEach((unit) => {
-        this.destroyUnit(unit, 'combat');
-      })
-    );
-    this.triggerUnits(winner.units, 'combat_win');
-    this.applyBattlefieldControl(winner.player, battlefield, 'combat', {
-      sourceCardId: battlefield.card?.id ?? battlefield.battlefieldId,
-      initiatedAttack: didInitiateAttack(winner.player.playerId)
+      message: `${battlefield.name} remains contested; both sides have surviving units.`,
+      tone: 'info'
     });
   }
 

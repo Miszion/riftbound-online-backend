@@ -10,8 +10,6 @@ import {
   RuneCard,
   PlayerDeckConfig,
   GameStatus,
-  GamePhase,
-  GameState
 } from '../game-engine';
 
 // ---------------------------------------------------------------------------
@@ -141,20 +139,36 @@ export function buildRuneDeck(): RuneCard[] {
   return Array.from({ length: 12 }, (_, i) => makeRuneCard(i));
 }
 
-/** Build a full PlayerDeckConfig with main deck, rune deck, and battlefields. */
+let battlefieldCounter = 0;
+
+/** Build a unique battlefield card. Each call produces a fresh id so two
+ *  separate invocations do not collide under Rule 103.4 (battlefields must
+ *  be distinct between players). */
+export function makeBattlefield(overrides: Partial<Card> = {}): Card {
+  battlefieldCounter++;
+  const id = `test-battlefield-${battlefieldCounter}`;
+  return makeCreature({
+    id,
+    slug: id,
+    name: `Test Battlefield ${battlefieldCounter}`,
+    type: CardType.ENCHANTMENT,
+    tags: ['Battlefield'],
+    text: 'A test battlefield.',
+    ...overrides
+  });
+}
+
+/** Build a full PlayerDeckConfig with main deck, rune deck, and battlefields.
+ *  Each call gets fresh, unique battlefield ids so the engine's Rule 103.4
+ *  conflict path (duplicate battlefield re-prompt) does not fire when the
+ *  helper is used symmetrically for two players. We also supply 2 options
+ *  so the engine actually issues a battlefield selection prompt rather than
+ *  auto-assigning the only choice. */
 export function buildDeckConfig(overrides: Partial<PlayerDeckConfig> = {}): PlayerDeckConfig {
   return {
     mainDeck: buildMainDeck(),
     runeDeck: buildRuneDeck(),
-    battlefields: [
-      makeCreature({
-        id: 'battlefield-1',
-        name: 'Test Battlefield Alpha',
-        type: CardType.ENCHANTMENT,
-        tags: ['Battlefield'],
-        text: 'A test battlefield.'
-      })
-    ],
+    battlefields: [makeBattlefield(), makeBattlefield()],
     championLegend: null,
     championLeader: null,
     ...overrides
@@ -195,24 +209,45 @@ export function advancePastCoinFlip(engine: RiftboundGameEngine, p1 = 'player-1'
   }
 }
 
-/** Advance past battlefield selection by having both players pick their first available. */
+/** Advance past battlefield selection by having both players pick their first
+ *  available option. Robust to:
+ *    - Players whose selection was auto-resolved by the engine (no prompt issued).
+ *    - The canonical prompt option shape: { cardId, slug, name, ... }
+ *    - Re-prompts caused by Rule 103.4 (duplicate battlefield) — falls back to
+ *      a non-conflicting option when the first one is taken by the other player. */
 export function advancePastBattlefieldSelection(engine: RiftboundGameEngine, p1 = 'player-1', p2 = 'player-2'): void {
   if (engine.status !== GameStatus.BATTLEFIELD_SELECTION) return;
-  const state = engine.getGameState();
-  const p1Prompts = state.prompts.filter(p => p.type === 'battlefield' && p.playerId === p1 && !p.resolved);
-  const p2Prompts = state.prompts.filter(p => p.type === 'battlefield' && p.playerId === p2 && !p.resolved);
 
-  if (p1Prompts.length > 0) {
-    const options = (p1Prompts[0].data as any).options;
-    if (options && options.length > 0) {
-      engine.selectBattlefield(p1, options[0].id || options[0].battlefieldId);
+  const pickFromPrompt = (playerId: string): boolean => {
+    const state = engine.getGameState();
+    const prompt = state.prompts.find(
+      (p) => p.type === 'battlefield' && p.playerId === playerId && !p.resolved
+    );
+    if (!prompt) return false;
+    const options = (prompt.data as any)?.options;
+    if (!Array.isArray(options) || options.length === 0) return false;
+    // Prompt options expose `cardId` (and `slug`). Engine.selectBattlefield
+    // accepts either the card id or slug. Try options in order so a re-prompt
+    // after a duplicate-battlefield collision can still resolve.
+    for (const opt of options) {
+      const ref = opt?.cardId ?? opt?.slug ?? opt?.id ?? opt?.battlefieldId;
+      if (!ref) continue;
+      try {
+        engine.selectBattlefield(playerId, ref);
+        return true;
+      } catch {
+        // Try the next option (e.g. picked something already taken).
+      }
     }
-  }
-  if (engine.status === GameStatus.BATTLEFIELD_SELECTION && p2Prompts.length > 0) {
-    const options = (p2Prompts[0].data as any).options;
-    if (options && options.length > 0) {
-      engine.selectBattlefield(p2, options[0].id || options[0].battlefieldId);
-    }
+    return false;
+  };
+
+  // Loop until both players have selected (engine leaves BATTLEFIELD_SELECTION)
+  // or no further progress can be made. Bounded to avoid pathological infinite
+  // loops if the helper is misused.
+  for (let i = 0; i < 8 && engine.status === GameStatus.BATTLEFIELD_SELECTION; i++) {
+    const progressed = pickFromPrompt(p1) || pickFromPrompt(p2);
+    if (!progressed) break;
   }
 }
 
@@ -242,4 +277,5 @@ export function createInProgressEngine(
 /** Reset the card counter between tests to keep IDs predictable. */
 export function resetCardCounter(): void {
   cardCounter = 0;
+  battlefieldCounter = 0;
 }

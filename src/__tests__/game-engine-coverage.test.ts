@@ -26,21 +26,19 @@ import {
   GamePhase,
   CardType,
   Domain,
-  CardRarity,
   Card,
   GameState
 } from '../game-engine';
 import {
   createInProgressEngine,
   buildDeckConfig,
-  buildMainDeck,
-  buildRuneDeck,
   makeCreature,
   makeSpell,
   makeArtifact,
   makeRuneCard,
   resetCardCounter
 } from './test-helpers';
+import { makeEffectProfile } from './helpers/effectProfile.js';
 
 beforeEach(() => {
   resetCardCounter();
@@ -363,7 +361,6 @@ describe('fromSerializedState - null field repair', () => {
 describe('proceedToNextPhase - from END phase', () => {
   it('should advance when starting in END phase', () => {
     const engine = createInProgressEngine();
-    const pId = currentPlayerId(engine);
     // Advance to MAIN_1 by calling beginTurn
     engine.beginTurn();
     // Force phase to END
@@ -400,7 +397,7 @@ describe('calculateCostModifiers', () => {
     const reducer = makeArtifact({
       id: 'cost-reducer-1',
       text: 'All cards cost 1 less.',
-      effectProfile: { classes: ['cost_reduction'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['cost_reduction'], operations: [] })
     });
     const reducerInstance = {
       ...reducer,
@@ -445,7 +442,7 @@ describe('calculateCostModifiers', () => {
     const increaser = makeArtifact({
       id: 'cost-increaser-1',
       text: 'Enemy spells cost 2 more.',
-      effectProfile: { classes: ['cost_increase'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['cost_increase'], operations: [] })
     });
     const increaserInstance = {
       ...increaser,
@@ -486,7 +483,7 @@ describe('calculateCostModifiers', () => {
     const tribalReducer = makeArtifact({
       id: 'tribal-reducer-1',
       text: "Your Dragons' spells cost 1 less.",
-      effectProfile: { classes: ['cost_reduction'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['cost_reduction'], operations: [] })
     });
     const tribalInstance = {
       ...tribalReducer,
@@ -532,7 +529,7 @@ describe('calculateCostModifiers', () => {
       id: 'deflect-unit-1',
       text: '[Deflect] — Spells that target me cost 1 more.',
       keywords: ['Deflect'],
-      effectProfile: { classes: ['keyword_deflect'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['keyword_deflect'], operations: [] })
     });
     const deflectInstance = {
       ...deflectUnit,
@@ -578,10 +575,10 @@ describe('Effect Operations - ready', () => {
     creature.isTapped = true;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'ready', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     // The operation needs a boardTarget - inject it into context via targets
     // Actually ready with no targets readies runes fallback
@@ -603,10 +600,10 @@ describe('Effect Operations - ready', () => {
     player.resources.energy = 3; // 2 tapped, 3 untapped
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'ready', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
     expect(() => {
       engine.playCard(pId, 0);
@@ -625,10 +622,10 @@ describe('Effect Operations - adjust_mulligan', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'adjust_mulligan', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
     const before = engine.getGameState().players.find((p) => p.playerId === pId)!.firstTurnRuneBoost;
     playSpellAndResolve(engine, pId, 0);
@@ -648,7 +645,7 @@ describe('Effect Operations - control_battlefield', () => {
     const bfId = firstBattlefieldId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'control_battlefield',
@@ -656,7 +653,7 @@ describe('Effect Operations - control_battlefield', () => {
           magnitudeHint: 1,
           targetHint: 'battlefield'
         }]
-      }
+      })
     });
     expect(() => {
       engine.playCard(pId, 0, [bfId]);
@@ -670,10 +667,10 @@ describe('Effect Operations - control_battlefield', () => {
 
     injectSpellToHand(engine, pId, {
       text: 'Kill a unit at a battlefield.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'control_battlefield', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => {
       engine.playCard(pId, 0);
@@ -687,10 +684,10 @@ describe('Effect Operations - control_battlefield', () => {
 
     injectSpellToHand(engine, pId, {
       text: 'Gain control of a battlefield.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'control_battlefield', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => {
       engine.playCard(pId, 0);
@@ -709,10 +706,10 @@ describe('Effect Operations - transform', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'transform', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -728,10 +725,10 @@ describe('Effect Operations - attach_gear', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'attach_gear', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -747,10 +744,10 @@ describe('Effect Operations - generic', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'generic', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -761,7 +758,7 @@ describe('Effect Operations - generic', () => {
     const bfId = firstBattlefieldId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'generic',
@@ -769,7 +766,7 @@ describe('Effect Operations - generic', () => {
           magnitudeHint: 1,
           targetHint: 'battlefield'
         }]
-      }
+      })
     });
     expect(() => {
       engine.playCard(pId, 0, [bfId]);
@@ -782,10 +779,10 @@ describe('Effect Operations - generic', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'completely_unknown_op' as any, automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -801,7 +798,7 @@ describe('Effect Operations - create_token variableCount', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'create_token',
@@ -818,7 +815,7 @@ describe('Effect Operations - create_token variableCount', () => {
             }
           }
         }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -872,7 +869,7 @@ describe('applyLegendEndOfTurnEffects - parseWordNumber', () => {
 
   wordCases.forEach(([text, word]) => {
     it(`should parse word "${word}" in legend text: "${text}"`, () => {
-      const { engine, pId } = setupEngineWithLegend(text);
+      const { engine } = setupEngineWithLegend(text);
       // Force END phase and call proceedToNextPhase to trigger end-of-turn
       (engine as any).gameState.currentPhase = GamePhase.END;
       // Manually call applyLegendEndOfTurnEffects by advancing end phase
@@ -889,7 +886,6 @@ describe('resolveTemporaryEffects', () => {
   it('should decrement and remove expired temporary effects', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
-    const oId = opponentPlayerId(engine);
     engine.beginTurn();
 
     // Give current player a creature and buff it
@@ -976,7 +972,7 @@ describe('normalizeEffectOperations', () => {
     // When no targetHint is set (defaults to self), discard from caster
     injectSpellToHand(engine, pId, {
       text: 'Discard a card.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'discard_cards',
@@ -984,7 +980,7 @@ describe('normalizeEffectOperations', () => {
           magnitudeHint: 1
           // no targetHint → defaults to caster
         }]
-      }
+      })
     });
     const oHandBefore = engine.getGameState().players.find((p) => p.playerId !== pId)!.hand.length;
     playSpellAndResolve(engine, pId, 0);
@@ -1001,7 +997,7 @@ describe('normalizeEffectOperations', () => {
 
     injectSpellToHand(engine, pId, {
       text: 'Opponent discards a card.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'discard_cards',
@@ -1009,7 +1005,7 @@ describe('normalizeEffectOperations', () => {
           magnitudeHint: 1,
           targetHint: 'enemy'
         }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
     const oHandAfter = engine.getGameState().players.find((p) => p.playerId === oId)!.hand.length;
@@ -1024,7 +1020,7 @@ describe('normalizeEffectOperations', () => {
 
     injectSpellToHand(engine, pId, {
       text: 'Each player discards a card.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'discard_cards',
@@ -1032,7 +1028,7 @@ describe('normalizeEffectOperations', () => {
           magnitudeHint: 1,
           targetHint: 'enemy'
         }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
     const oHandAfter = engine.getGameState().players.find((p) => p.playerId === oId)!.hand.length;
@@ -1221,7 +1217,7 @@ describe('calculateStatModifiers', () => {
     const auraSource = makeCreature({
       id: 'aura-source',
       text: 'Other friendly units have +1 Might.',
-      effectProfile: { classes: ['aura_buff'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['aura_buff'], operations: [] })
     });
     const auraInstance = {
       ...auraSource,
@@ -1271,7 +1267,7 @@ describe('calculateStatModifiers', () => {
     const debuffSource = makeCreature({
       id: 'debuff-source',
       text: 'Enemy units have -1 Might.',
-      effectProfile: { classes: ['debuff'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['debuff'], operations: [] })
     });
     const debuffInstance = {
       ...debuffSource,
@@ -1318,7 +1314,7 @@ describe('calculateStatModifiers', () => {
     const scalingUnit = makeCreature({
       id: 'scaling-unit',
       text: 'My Might is increased by your points.',
-      effectProfile: { classes: ['stat_scaling'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['stat_scaling'], operations: [] })
     });
     const scalingInstance = {
       ...scalingUnit,
@@ -1350,7 +1346,7 @@ describe('calculateStatModifiers', () => {
     const runeScaleUnit = makeCreature({
       id: 'rune-scale-unit',
       text: 'While you have 8+ runes, +2 Might.',
-      effectProfile: { classes: ['stat_scaling'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['stat_scaling'], operations: [] })
     });
     const runeScaleInstance = {
       ...runeScaleUnit,
@@ -1536,7 +1532,6 @@ describe('supplementOperationsFromText', () => {
     player.hand.unshift(card);
     player.resources.energy = 10;
 
-    const deckBefore = player.deck.length;
     expect(() => engine.playCard(pId, 0)).not.toThrow();
   });
 });
@@ -1626,7 +1621,7 @@ describe('Coin flip - tie detection and restart', () => {
 });
 
 function createInitializedEngineForCoinFlip(): RiftboundGameEngine {
-  const { RiftboundGameEngine: Eng } = require('../game-engine');
+  const { RiftboundGameEngine: _Eng } = require('../game-engine');
   const engine = new RiftboundGameEngine('coin-flip-test', ['player-1', 'player-2']);
   engine.initializeGame({
     'player-1': buildDeckConfig(),
@@ -1656,14 +1651,13 @@ describe('Combat - full engagement flow', () => {
   it('should trigger combat and resolve when attacker is unblocked', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
-    const oId = opponentPlayerId(engine);
     const bfId = firstBattlefieldId(engine);
     controlBattlefield(engine, pId, bfId);
     engine.beginTurn();
     (engine as any).gameState.currentPhase = GamePhase.MAIN_1;
 
     // Place attacker at battlefield
-    const attackerId = injectCreatureToBattlefield(engine, pId, bfId, { power: 3, toughness: 3 });
+    injectCreatureToBattlefield(engine, pId, bfId, { power: 3, toughness: 3 });
 
     // Move unit - attacker is already on battlefield, commence battle
     expect(() => engine.commenceBattle(pId, bfId)).not.toThrow();
@@ -1746,7 +1740,7 @@ describe('passPriority - with combat context', () => {
     engine.beginTurn();
     (engine as any).gameState.currentPhase = GamePhase.MAIN_1;
 
-    const attackerId = injectCreatureToBattlefield(engine, pId, bfId);
+    injectCreatureToBattlefield(engine, pId, bfId);
 
     // Set up a priority window manually
     (engine as any).gameState.priorityWindow = {
@@ -1800,7 +1794,7 @@ describe('Battle resolution score reasons', () => {
     const bf = state.battlefields.find((b) => b.battlefieldId === bfId)!;
     bf.lastHoldScoreTurn = 0; // force hold to trigger
 
-    const unitId = injectCreatureToBattlefield(engine, pId, bfId);
+    injectCreatureToBattlefield(engine, pId, bfId);
 
     engine.beginTurn(); // triggers checkBattlefieldHoldBonuses
     const log = engine.getGameState().duelLog;
@@ -1819,10 +1813,10 @@ describe('stageAbilityForReaction - extended', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const instanceId = injectCreatureToBase(engine, pId);
-    const creature = engine.getGameState().players.find((p) => p.playerId === pId)!.board.creatures
-      .find((c) => c.instanceId === instanceId)!;
+    const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
+    const creature = player.board.creatures.find((c) => c.instanceId === instanceId)!;
 
-    engine.stageAbilityForReaction(pId, creature as any, 'Test Ability', []);
+    engine.stageAbilityForReaction(creature as any, 'Test Ability', player, []);
     expect(engine.hasActiveChain()).toBe(true);
   });
 
@@ -1830,10 +1824,10 @@ describe('stageAbilityForReaction - extended', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const instanceId = injectCreatureToBase(engine, pId);
-    const creature = engine.getGameState().players.find((p) => p.playerId === pId)!.board.creatures
-      .find((c) => c.instanceId === instanceId)!;
+    const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
+    const creature = player.board.creatures.find((c) => c.instanceId === instanceId)!;
 
-    engine.stageTriggeredAbilityForReaction(pId, creature as any, 'Triggered Ability', [], 'attack');
+    engine.stageTriggeredAbilityForReaction(creature as any, 'Triggered Ability', player, []);
     expect(engine.hasActiveChain()).toBe(true);
   });
 });
@@ -1867,18 +1861,17 @@ describe('Effect Operations - chained multi-op coverage', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const playerBefore = engine.getGameState().players.find((p) => p.playerId === pId)!;
-    const handBefore = playerBefore.hand.length;
     const graveBefore = playerBefore.graveyard.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [
           { type: 'draw_cards', automated: true, magnitudeHint: 1 },
           { type: 'adjust_mulligan', automated: true, magnitudeHint: 1 },
           { type: 'mill_cards', automated: true, magnitudeHint: 1 }
         ]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -1896,10 +1889,10 @@ describe('Effect Operations - chained multi-op coverage', () => {
     engine.getGameState().players.find((p) => p.playerId === pId)!.graveyard = [];
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'return_from_graveyard', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     // With empty graveyard and no targets, should defer target selection or fizzle gracefully
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
@@ -1918,7 +1911,7 @@ describe('Scoring system', () => {
     const vpBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.victoryPoints;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'scoring',
@@ -1927,7 +1920,7 @@ describe('Scoring system', () => {
           targetHint: 'ally',
           metadata: { reason: 'objective', battlefieldId: bfId }
         }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
     const vpAfter = engine.getGameState().players.find((p) => p.playerId === pId)!.victoryPoints;
@@ -1956,12 +1949,9 @@ describe('describeScoreReason - all score reason types', () => {
     it(`should handle score reason: "${reason}"`, () => {
       const engine = createInProgressEngine();
       const pId = currentPlayerId(engine);
-      const bfId = firstBattlefieldId(engine);
-      const attackerId = injectCreatureToBattlefield(engine, pId, bfId);
 
       // Award points via different reason - exercise describeScoreReason indirectly
       const state = engine.getGameState();
-      const player = state.players.find((p) => p.playerId === pId)!;
       // Add a score entry with each reason
       state.scoreLog.push({
         playerId: pId,
@@ -1979,28 +1969,44 @@ describe('describeScoreReason - all score reason types', () => {
 // burnOut path (empty deck detection)
 // ============================================================================
 
-describe('burnOut - opponent wins when player deck is exhausted', () => {
-  it('should end game when player draws from empty deck', () => {
+describe('burnOut - state, not auto-loss (Rule 418)', () => {
+  it('marks player as burnedOut and awards opponent a VP when drawing from empty deck', () => {
+    // Per Rule 418 (and the burn-out-as-state fix), burning out is a STATE,
+    // not a loss condition. Drawing from an empty deck should:
+    //   1) flag the drawing player as burnedOut,
+    //   2) recycle trash into deck,
+    //   3) award the opponent 1 VP.
+    // The game only ends when that opponent reaches VICTORY_SCORE.
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
+    const oppId = opponentPlayerId(engine);
     engine.beginTurn();
     (engine as any).gameState.currentPhase = GamePhase.MAIN_1;
 
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
     player.deck = [];
 
-    // Inject a draw-2 spell to trigger burnOut
+    const opponentVpBefore = engine
+      .getGameState()
+      .players.find((p) => p.playerId === oppId)!.victoryPoints;
+
+    // Inject a draw-5 spell; resolving on an empty deck triggers burn out.
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 5 }]
-      }
+      })
     });
     engine.playCard(pId, 0);
     engine.respondToChainReaction(opponentPlayerId(engine), true);
 
-    const status = engine.getGameState().status;
-    expect(status).toBe(GameStatus.WINNER_DETERMINED);
+    const state = engine.getGameState();
+    const playerAfter = state.players.find((p) => p.playerId === pId)!;
+    const opponentAfter = state.players.find((p) => p.playerId === oppId)!;
+
+    expect(playerAfter.burnedOut).toBe(true);
+    expect(opponentAfter.victoryPoints).toBeGreaterThan(opponentVpBefore);
+    expect(state.status).toBe(GameStatus.IN_PROGRESS);
   });
 });
 
@@ -2016,14 +2022,12 @@ describe('Effect Operations - recycle_card from graveyard', () => {
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
     const graveCard = makeCreature({ id: 'graved-1' });
     player.graveyard.push(graveCard);
-    const deckBefore = player.deck.length;
-    const graveBefore = player.graveyard.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'recycle_card', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -2049,14 +2053,14 @@ describe('Effect Operations - move_unit with destination', () => {
     const instanceId = injectCreatureToBattlefield(engine, pId, bfId);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{
           type: 'move_unit',
           automated: true,
           metadata: { destination: 'base' }
         }]
-      }
+      })
     });
     // Play with the unit as target
     expect(() => {
@@ -2109,7 +2113,7 @@ describe('checkLegionBonus', () => {
 
     // First play a card to satisfy "another card played this turn"
     injectSpellToHand(engine, pId, {
-      effectProfile: { classes: [], operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 0 }] }
+      effectProfile: makeEffectProfile({ classes: [], operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 0 }] })
     });
     engine.playCard(pId, 0);
     engine.respondToChainReaction(opponentPlayerId(engine), true);
@@ -2117,10 +2121,10 @@ describe('checkLegionBonus', () => {
     // Now put a Legion unit on the battlefield
     const legionUnit = makeCreature({
       keywords: ['Legion'],
-      text: '[Legion] — +2 if another card was played this turn.',
-      effectProfile: { classes: ['keyword_legion'], operations: [] }
+      text: '[Legion] - +2 if another card was played this turn.',
+      effectProfile: makeEffectProfile({ classes: ['keyword_legion'], operations: [] })
     });
-    const instanceId = injectCreatureToBattlefield(engine, pId, bfId, legionUnit);
+    injectCreatureToBattlefield(engine, pId, bfId, legionUnit);
 
     expect(() => engine.commenceBattle(pId, bfId)).not.toThrow();
   });
