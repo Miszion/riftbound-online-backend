@@ -508,6 +508,85 @@ const buildPlayerViewSnapshot = (
   };
 };
 
+/**
+ * Build a spectator-safe player view for a caller that is NOT a participant
+ * of the match. Used by GET /matches/:matchId/player/:playerId as a fallback
+ * when `buildPlayerViewSnapshot` can't find the requested playerId among the
+ * match's participants — lets outside viewers (e.g. users watching a
+ * bot-vs-bot match via /spectate/<matchId>) read state without throwing.
+ *
+ * The envelope shape matches the normal `PlayerView` returned by
+ * `buildPlayerViewSnapshot` so downstream code (GraphQL resolvers, clients)
+ * doesn't have to branch. The two behavioural differences:
+ *   - `currentPlayer` is populated from the first participant (players[0]) with
+ *     spectator visibility — full hand revealed. Bots have no hidden info, and
+ *     this is only reached for a non-participant caller, so nothing is leaked
+ *     that a subscription consumer couldn't already see via
+ *     `serializeGameState`. A later task can tighten perspective rules for
+ *     human-vs-human spectators (see bot-v-bot-flow-spec §9 open question 1).
+ *   - `gameState.canAct` is forced to `false` — a non-participant can never act.
+ */
+const buildSpectatorViewSnapshot = (
+  _engine: RiftboundGameEngine,
+  snapshot: GameState,
+  requestedPlayerId: string
+) => {
+  const participants = snapshot.players ?? [];
+  const primary = participants[0] ?? null;
+  const opponent = participants[1] ?? null;
+
+  const currentPlayer = primary
+    ? serializePlayerState(primary, 'spectator')
+    : null;
+
+  const opponentView = primary
+    ? buildOpponentView(snapshot, primary.playerId)
+    : opponent
+      ? buildOpponentView(snapshot, opponent.playerId)
+      : {
+          playerId: null,
+          victoryPoints: 0,
+          victoryScore: snapshot.victoryScore,
+          handSize: 0,
+          runeDeckSize: 0,
+          board: { creatures: [], artifacts: [], enchantments: [] }
+        };
+
+  logger.info('[PLAYER-VIEW] Non-participant requester, returning spectator envelope', {
+    matchId: snapshot.matchId,
+    requestedPlayerId,
+    spectatorPerspective: primary?.playerId ?? null
+  });
+
+  return {
+    matchId: snapshot.matchId,
+    currentPlayer,
+    opponent: opponentView,
+    gameState: {
+      matchId: snapshot.matchId,
+      currentPhase: snapshot.currentPhase,
+      turnNumber: snapshot.turnNumber,
+      currentPlayerIndex: snapshot.currentPlayerIndex,
+      canAct: false,
+      turnSequenceStep: snapshot.turnSequenceStep ?? null,
+      focusPlayerId: snapshot.focusPlayerId ?? null,
+      combatContext: summarizeCombatContext(snapshot)
+    }
+  };
+};
+
+// Two upstream shapes both mean "the requested playerId is not a participant
+// of this match": the explicit throw in buildPlayerViewSnapshot above
+// (`Player <id> not found in match <matchId>`) and the underlying engine
+// helper RiftboundGameEngine.getPlayerById (`Player <id> not found`, see
+// src/game-engine.ts). On the real engine the latter fires first — the
+// engine throws before buildPlayerViewSnapshot's own null-check runs — so we
+// must match both. Deliberately narrow: the regex anchors on "Player " and
+// requires the "not found" phrase, so unrelated errors still bubble up.
+const NON_PARTICIPANT_ERROR_PATTERN = /^Player .* not found( in match )?/;
+const isNonParticipantError = (error: unknown): boolean =>
+  error instanceof Error && NON_PARTICIPANT_ERROR_PATTERN.test(error.message);
+
 interface RequestContextMeta {
   requestId?: string;
   operation?: string;
@@ -789,7 +868,19 @@ matchRouter.get('/matches/:matchId/player/:playerId', async (req: Request, res: 
     const { matchId, playerId } = req.params;
     const { engine, snapshot } = await loadEngineState(matchId, context);
 
-    const playerView = buildPlayerViewSnapshot(engine, snapshot, playerId);
+    let playerView;
+    try {
+      playerView = buildPlayerViewSnapshot(engine, snapshot, playerId);
+    } catch (error) {
+      // BE-4: if the caller is not a participant of this match, return a
+      // spectator-safe envelope instead of a 500. Keeps /spectate/<matchId>
+      // and other non-participant surfaces viable without throwing on every
+      // playerMatch query. Any other error still escapes and becomes 500.
+      if (!isNonParticipantError(error)) {
+        throw error;
+      }
+      playerView = buildSpectatorViewSnapshot(engine, snapshot, playerId);
+    }
 
     res.json(playerView);
   } catch (error) {
@@ -804,7 +895,13 @@ matchRouter.get('/matches/:matchId/player/:playerId', async (req: Request, res: 
     }
     const { matchId, playerId } = req.params;
     const err = error as Error;
-    logger.error('[playerView] fetch failed', { matchId, playerId, error: err.message, stack: err.stack });
+    logger.error('[playerView] fetch failed', {
+      matchId,
+      playerId,
+      requestId: context.requestId ?? null,
+      error: err.message,
+      stack: err.stack
+    });
     const stage = process.env.ENVIRONMENT || process.env.STAGE || 'dev';
     const body: Record<string, unknown> = { error: 'Failed to fetch player view' };
     if (stage !== 'prod') body.message = err.message;
