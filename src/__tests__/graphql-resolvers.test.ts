@@ -471,13 +471,89 @@ describe('queryResolvers.matchReplay', () => {
     expect(result).toBeNull();
   });
 
-  it('returns replay record when found', async () => {
+  it('returns replay record when found, including frames field (BE-1)', async () => {
     db._queryPromise.mockResolvedValue({
-      Items: [{ MatchId: 'r1', Players: ['u1', 'u2'], Winner: 'u1', Moves: [], CreatedAt: Date.now() }]
+      Items: [{
+        MatchId: 'r1',
+        Players: ['u1', 'u2'],
+        Winner: 'u1',
+        Moves: [],
+        Frames: [{ matchId: 'r1', turnNumber: 1 }, { matchId: 'r1', turnNumber: 2 }],
+        CreatedAt: Date.now()
+      }]
     });
     const result = await queryResolvers.matchReplay(null, { matchId: 'r1' });
     expect(result!.matchId).toBe('r1');
     expect(result!.createdAt).toBeInstanceOf(Date);
+    expect(result!.frames).toHaveLength(2);
+    expect(result!.frames[0].turnNumber).toBe(1);
+  });
+
+  it('defaults frames to [] when the persisted record predates BE-1', async () => {
+    db._queryPromise.mockResolvedValue({
+      Items: [{ MatchId: 'r2', Players: ['u1', 'u2'], Winner: 'u1', Moves: [], CreatedAt: Date.now() }]
+    });
+    const result = await queryResolvers.matchReplay(null, { matchId: 'r2' });
+    expect(result!.frames).toEqual([]);
+  });
+});
+
+describe('queryResolvers.matchFrames (BE-2)', () => {
+  // The resolver reads the live in-memory bot-match REGISTRY first and falls back
+  // to MATCH_TABLE.Frames. These tests cover the DDB fallback path; the
+  // registry-hit path is covered by src/__tests__/bot-match.test.ts which
+  // exercises the real engine.
+  it('returns [] when no live registry entry and no persisted record', async () => {
+    db._queryPromise.mockResolvedValue({ Items: [] });
+    const result = await queryResolvers.matchFrames(null, { matchId: 'gone' });
+    expect(result).toEqual([]);
+  });
+
+  it('returns persisted frames when the registry has been pruned', async () => {
+    db._queryPromise.mockResolvedValue({
+      Items: [{
+        MatchId: 'persisted-1',
+        Frames: [
+          { matchId: 'persisted-1', turnNumber: 1 },
+          { matchId: 'persisted-1', turnNumber: 2 },
+          { matchId: 'persisted-1', turnNumber: 3 }
+        ]
+      }]
+    });
+    const result = await queryResolvers.matchFrames(null, { matchId: 'persisted-1' });
+    expect(result).toHaveLength(3);
+  });
+
+  it('honors offset and limit on persisted frames', async () => {
+    db._queryPromise.mockResolvedValue({
+      Items: [{
+        MatchId: 'persisted-2',
+        Frames: [
+          { idx: 0 }, { idx: 1 }, { idx: 2 }, { idx: 3 }, { idx: 4 }
+        ]
+      }]
+    });
+    const result = await queryResolvers.matchFrames(null, {
+      matchId: 'persisted-2',
+      offset: 1,
+      limit: 2
+    });
+    expect(result).toEqual([{ idx: 1 }, { idx: 2 }]);
+  });
+
+  it('clamps negative offset to 0 and ignores zero/negative limit', async () => {
+    db._queryPromise.mockResolvedValue({
+      Items: [{
+        MatchId: 'persisted-3',
+        Frames: [{ idx: 0 }, { idx: 1 }]
+      }]
+    });
+    const result = await queryResolvers.matchFrames(null, {
+      matchId: 'persisted-3',
+      offset: -5,
+      limit: 0
+    });
+    expect(result).toHaveLength(2);
   });
 });
 

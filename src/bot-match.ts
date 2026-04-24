@@ -15,7 +15,8 @@ import { serializeGameState } from './game-state-serializer';
 import {
   persistEngineSnapshot,
   matchSnapshotExists,
-  persistMatchFinalState
+  persistMatchFinalState,
+  appendMatchFrames
 } from './match-routes';
 import {
   publishGameStateChange,
@@ -347,6 +348,10 @@ const MAX_INTERVAL_MS = 5_000;
 const MAX_TURNS = 80;
 const MAX_TOTAL_ACTIONS = 4_000;
 const MAX_NO_PROGRESS_ROUNDS = 12;
+// Bound the per-match in-memory frame buffer. A typical bot match is ~100 frames;
+// the cap keeps a runaway loop from exhausting RAM. matchFrames callers can pass
+// offset/limit to page through.
+const MAX_FRAMES_PER_MATCH = 1_000;
 
 export interface BotMatchSummary {
   matchId: string;
@@ -362,6 +367,16 @@ export interface BotMatchSummary {
 
 interface InternalRecord extends BotMatchSummary {
   cancelled: boolean;
+  // Per-frame serialized snapshots. The first entry is the post-init state
+  // (bot-match.ts:startBotMatch); each subsequent entry is the state after a
+  // dispatched bot move (publishSpectatorState in driveMatch). Consumed by the
+  // matchFrames GraphQL query so the replay/spectate UI can render directly off
+  // engine output instead of a hand-rolled client-side reducer.
+  frames: any[];
+  // Set once finalize() has streamed the buffered frames to durable storage.
+  // Subsequent calls to listMatchFrames will still serve from the in-memory
+  // buffer until the registry entry is pruned (FINISHED_TTL_MS).
+  framesPersisted: boolean;
 }
 
 const REGISTRY = new Map<string, InternalRecord>();
@@ -427,13 +442,17 @@ const publishSpectatorState = (matchId: string, engine: RiftboundGameEngine) => 
   const snapshot = engine.getGameState();
   const serialized = serializeGameState(snapshot);
   publishGameStateChange(matchId, serialized);
-  // Also persist the exact same frame into the in-process replay store so a
-  // later startReplaySession() can re-drive the live spectate pipeline with
-  // the same snapshots. See src/replay-frame-store.ts for limits.
   try {
     recordFrame(matchId, serialized);
   } catch (error) {
     logger.warn('[BOT-MATCH] replay frame record failed', { matchId, error });
+  }
+  const record = REGISTRY.get(matchId);
+  if (record) {
+    if (record.frames.length >= MAX_FRAMES_PER_MATCH) {
+      record.frames.splice(1, 1);
+    }
+    record.frames.push(serialized);
   }
 };
 
@@ -632,6 +651,17 @@ const finalize = (
       });
     });
   }
+  // Stream frames to durable storage. We fire-and-forget here because the driver
+  // loop has already returned by the time finalize runs and there is no caller
+  // awaiting completion. Failures are logged but never crash the driver.
+  if (record.frames.length > 0 && !record.framesPersisted) {
+    const framesSnapshot = record.frames.slice();
+    record.framesPersisted = true;
+    appendMatchFrames(matchId, framesSnapshot).catch((error: unknown) => {
+      record.framesPersisted = false;
+      logger.warn('[BOT-MATCH] frame persistence failed', { matchId, error });
+    });
+  }
   trimRegistry();
 };
 
@@ -791,6 +821,7 @@ export interface StartBotMatchResult {
   players: [string, string];
   strategies: [StrategyName, StrategyName];
   spectatorPath: string;
+  availableStrategies: StrategyName[];
 }
 
 export const startBotMatch = async (
@@ -825,7 +856,6 @@ export const startBotMatch = async (
   engine.initializeGame({ [players[0]]: deckA, [players[1]]: deckB });
 
   await persistEngineSnapshot(matchId, engine);
-  publishSpectatorState(matchId, engine);
 
   const record: InternalRecord = {
     matchId,
@@ -837,10 +867,16 @@ export const startBotMatch = async (
     endedAt: null,
     winner: null,
     reason: null,
-    cancelled: false
+    cancelled: false,
+    frames: [],
+    framesPersisted: false
   };
   REGISTRY.set(matchId, record);
   trimRegistry();
+
+  // Initial post-init frame must be captured AFTER the record is in REGISTRY so
+  // publishSpectatorState's frame-buffer push has somewhere to land.
+  publishSpectatorState(matchId, engine);
 
   driveMatch(matchId, engine, players, strategies, intervalMs).catch((error) => {
     logger.error('[BOT-MATCH] driver crashed at top level', { matchId, error });
@@ -851,14 +887,43 @@ export const startBotMatch = async (
     matchId,
     players,
     strategies,
-    spectatorPath: `/spectate/${encodeURIComponent(matchId)}`
+    spectatorPath: `/spectate/${encodeURIComponent(matchId)}`,
+    availableStrategies: [...VALID_STRATEGIES]
   };
+};
+
+export const getAvailableStrategies = (): StrategyName[] => [...VALID_STRATEGIES];
+
+// Returns the in-memory frame buffer for a match. Returns null when the match
+// is not currently registered (server restart, pruned, or finished and evicted
+// after FINISHED_TTL_MS). Callers (matchFrames resolver) fall through to the
+// durable MATCH_TABLE.Frames field in that case.
+export const listMatchFrames = (
+  matchId: string,
+  offset = 0,
+  limit?: number
+): any[] | null => {
+  const record = REGISTRY.get(matchId);
+  if (!record) return null;
+  const start = Math.max(0, Math.floor(offset));
+  const end =
+    typeof limit === 'number' && limit >= 0
+      ? start + Math.floor(limit)
+      : record.frames.length;
+  return record.frames.slice(start, end);
 };
 
 export const listActiveBotMatches = (): BotMatchSummary[] => {
   pruneFinished();
   return Array.from(REGISTRY.values())
-    .map(({ cancelled: _cancelled, ...summary }) => summary)
+    .map(
+      ({
+        cancelled: _cancelled,
+        frames: _frames,
+        framesPersisted: _framesPersisted,
+        ...summary
+      }) => summary
+    )
     .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
 };
 

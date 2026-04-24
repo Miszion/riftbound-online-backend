@@ -279,6 +279,7 @@ export const typeDefs = `#graphql
     turns: Int
     moves: [JSON!]
     finalState: JSON
+    frames: [JSON!]
     createdAt: DateTime
   }
 
@@ -614,6 +615,7 @@ export const typeDefs = `#graphql
 
     # Spectator / Replay
     matchReplay(matchId: ID!): MatchReplay
+    matchFrames(matchId: ID!, offset: Int, limit: Int): [JSON!]!
     recentMatches(limit: Int): [RecentMatchSummary!]!
 
     # Live replay session status (poll-friendly)
@@ -658,6 +660,7 @@ export const typeDefs = `#graphql
     players: [String!]!
     strategies: [String!]!
     spectatorPath: String!
+    availableStrategies: [String!]!
   }
 
   input CardCatalogFilter {

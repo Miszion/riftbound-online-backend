@@ -2314,3 +2314,47 @@ export const matchSnapshotExists = async (matchId: string): Promise<boolean> => 
   const snapshot = await loadGameStateSnapshot(matchId);
   return snapshot !== null;
 };
+
+export const appendMatchFrames = async (
+  matchId: string,
+  frames: any[]
+): Promise<void> => {
+  if (!frames || frames.length === 0) return;
+  if (LOCAL_BYPASS) {
+    return;
+  }
+  try {
+    const matchRecord = await dynamodb
+      .query({
+        TableName: MATCH_TABLE,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        ProjectionExpression: 'MatchId, #ts',
+        ExpressionAttributeNames: { '#ts': 'Timestamp' },
+        Limit: 1
+      })
+      .promise();
+    const item = matchRecord.Items?.[0];
+    if (!item) {
+      logger.debug('[MATCH-FRAMES] no parent record yet, skipping append', {
+        matchId
+      });
+      return;
+    }
+    await dynamodb
+      .update({
+        TableName: MATCH_TABLE,
+        Key: { MatchId: item.MatchId, Timestamp: item.Timestamp },
+        UpdateExpression: 'SET Frames = :frames',
+        ExpressionAttributeValues: { ':frames': frames }
+      })
+      .promise();
+  } catch (error) {
+    logger.error('[MATCH-FRAMES] failed to persist frames', {
+      matchId,
+      frameCount: frames.length,
+      error
+    });
+    throw error;
+  }
+};
