@@ -20,12 +20,10 @@
  */
 import {
   RiftboundGameEngine,
-  GameStatus,
   CardType,
   Card
 } from '../game-engine';
 import {
-  buildDeckConfig,
   buildMainDeck,
   buildRuneDeck,
   makeCreature,
@@ -86,16 +84,6 @@ function createEngineWithBattlefieldPools(
   return engine;
 }
 
-function battlefieldPromptFor(
-  engine: RiftboundGameEngine,
-  playerId: string
-) {
-  return engine
-    .getGameState()
-    .prompts.find(
-      (p) => p.type === 'battlefield' && p.playerId === playerId && !p.resolved
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Both players pick the same battlefield

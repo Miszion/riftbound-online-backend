@@ -9,12 +9,46 @@ import {
   findCardByName,
   findCardBySlug,
   analyzeSpellTargeting,
-  buildActivation,
   buildActivationStateIndex,
   buildEffectProfile,
   parseAssaultBonus,
   parseTokenSpecs
 } from '../card-catalog';
+import type { EnrichedCardRecord } from '../card-catalog';
+import { makeEffectProfile } from './helpers/effectProfile.js';
+
+function spellFromText(effect: string): EnrichedCardRecord {
+  return {
+    id: 'test-card',
+    slug: 'test-card',
+    name: 'Test Card',
+    type: 'Spell',
+    rarity: null,
+    setName: null,
+    colors: [],
+    cost: { energy: null, powerSymbols: [], raw: null },
+    might: null,
+    tags: [],
+    effect,
+    flavor: null,
+    keywords: [],
+    effectProfile: makeEffectProfile(),
+    activation: {
+      timing: 'action',
+      triggers: [],
+      actions: [],
+      requiresTarget: false,
+      reactionWindows: [],
+      stateful: false
+    },
+    rules: [],
+    assets: { remote: null, localPath: '' },
+    pricing: { price: null, foilPrice: null, currency: 'USD' },
+    references: { marketUrl: null, source: 'test' },
+    timingTags: [],
+    isRuneResource: false
+  };
+}
 
 // ===========================================================================
 // Card Lookup
@@ -94,13 +128,13 @@ describe('Card Catalog - Activation State Index', () => {
 // ===========================================================================
 describe('Card Catalog - Spell Targeting', () => {
   it('analyzeSpellTargeting should return null for non-spell text', () => {
-    const result = analyzeSpellTargeting('');
+    const result = analyzeSpellTargeting(spellFromText(''));
     // Empty string should still return a profile or null
     expect(result === null || typeof result === 'object').toBe(true);
   });
 
   it('analyzeSpellTargeting should identify single target damage spells', () => {
-    const result = analyzeSpellTargeting('Deal 3 damage to target enemy unit.');
+    const result = analyzeSpellTargeting(spellFromText('Deal 3 damage to target enemy unit.'));
     if (!result) return;
     expect(result.allowEnemy).toBe(true);
     // requiresSelection may be false if the analyzer infers global targeting
@@ -108,7 +142,7 @@ describe('Card Catalog - Spell Targeting', () => {
   });
 
   it('analyzeSpellTargeting should identify ally buff spells', () => {
-    const result = analyzeSpellTargeting('Give target ally unit +2/+2.');
+    const result = analyzeSpellTargeting(spellFromText('Give target ally unit +2/+2.'));
     if (!result) return;
     expect(result.allowFriendly).toBe(true);
   });

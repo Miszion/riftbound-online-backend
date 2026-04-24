@@ -11,16 +11,13 @@ import {
   GamePhase,
   CardType,
   Domain,
-  CardRarity,
   Card,
-  RuneCard
 } from '../game-engine';
 import {
   createInitializedEngine,
   createInProgressEngine,
   advancePastCoinFlip,
   advancePastBattlefieldSelection,
-  advancePastMulligan,
   buildDeckConfig,
   buildMainDeck,
   buildRuneDeck,
@@ -110,8 +107,6 @@ describe('Phase Management - proceedToNextPhase', () => {
   it('should increment turn number when switching players', () => {
     const engine = createInProgressEngine();
     if (engine.status !== GameStatus.IN_PROGRESS) return;
-    const turnBefore = engine.turnNumber;
-    const pId = currentPlayerId(engine);
     // Pass through all phases for one full turn cycle
     engine.proceedToNextPhase(); // MAIN_1 -> COMBAT
     engine.proceedToNextPhase(); // COMBAT -> MAIN_2
@@ -1393,7 +1388,6 @@ describe('Burn Out - empty deck detection', () => {
     const engine = createInProgressEngine();
     if (engine.status !== GameStatus.IN_PROGRESS) return;
     const pId = currentPlayerId(engine);
-    const oId = opponentPlayerId(engine);
     // Empty out pId's deck by direct state manipulation
     const state = engine.getGameState();
     const player = state.players.find((p) => p.playerId === pId)!;

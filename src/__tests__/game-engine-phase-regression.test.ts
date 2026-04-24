@@ -21,19 +21,15 @@ import {
   RiftboundGameEngine,
   GameStatus,
   GamePhase,
-  CardType,
   Domain,
-  CardRarity,
   Card,
   CombatContext,
   PriorityWindow
 } from '../game-engine';
 import {
   createInProgressEngine,
-  buildDeckConfig,
   makeCreature,
   makeSpell,
-  makeArtifact,
   makeRuneCard,
   resetCardCounter
 } from './test-helpers';
@@ -569,7 +565,6 @@ describe('ensureCombatTiming', () => {
   it('should throw when non-action/reaction spell played during action combat stage', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
-    const state = engine.getGameState();
     const bfId = firstBattlefieldId(engine);
 
     givePlayerRunes(engine, pId, 5);
@@ -591,7 +586,6 @@ describe('ensureCombatTiming', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const oId = opponentPlayerId(engine);
-    const state = engine.getGameState();
     const bfId = firstBattlefieldId(engine);
 
     givePlayerRunes(engine, pId, 5);
@@ -618,7 +612,6 @@ describe('ensureCombatTiming', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const oId = opponentPlayerId(engine);
-    const state = engine.getGameState();
     const bfId = firstBattlefieldId(engine);
 
     givePlayerRunes(engine, pId, 5);

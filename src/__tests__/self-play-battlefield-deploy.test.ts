@@ -20,17 +20,10 @@
  */
 import {
   RiftboundGameEngine,
-  GameStatus,
-  GamePhase,
-  CardType,
-  Domain,
   Card
 } from '../game-engine';
 import {
   createInProgressEngine,
-  buildDeckConfig,
-  buildMainDeck,
-  buildRuneDeck,
   makeCreature,
   resetCardCounter
 } from './test-helpers';
@@ -38,9 +31,6 @@ import {
   enumerateLegalActions,
   heuristicBot,
   playOneGame,
-  pickPlayableCards,
-  pickBattlefieldRecords,
-  forkRng,
   makeRng,
   HarnessConfig
 } from '../self-play';

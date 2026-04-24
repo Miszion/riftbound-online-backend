@@ -22,10 +22,7 @@
  * TODO(backend eng): fill in assertions once scoring hooks are reachable from
  * public API or test helpers are extended.
  */
-import {
-  RiftboundGameEngine,
-  GameStatus
-} from '../game-engine';
+import { GameStatus } from '../game-engine';
 import {
   createInProgressEngine,
   resetCardCounter
@@ -39,13 +36,7 @@ beforeEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getPlayer(engine: RiftboundGameEngine, playerId: string) {
-  return engine.getGameState().players.find((p) => p.playerId === playerId)!;
-}
 
-function firstBattlefieldId(engine: RiftboundGameEngine): string {
-  return engine.getGameState().battlefields[0]?.battlefieldId ?? '';
-}
 
 /**
  * Force the given player to control the given battlefield at the start of
@@ -55,18 +46,6 @@ function firstBattlefieldId(engine: RiftboundGameEngine): string {
  * controller (e.g. directly mutating battlefield.controller in test state,
  * or simulating an unblocked attack that conquers it).
  */
-function giveBattlefieldControl(
-  engine: RiftboundGameEngine,
-  playerId: string,
-  battlefieldId: string
-): void {
-  const bf = engine
-    .getGameState()
-    .battlefields.find((b) => b.battlefieldId === battlefieldId);
-  if (bf) {
-    (bf as any).controller = playerId;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Conquest awards 1 VP
@@ -76,9 +55,6 @@ describe('Battlefield Scoring - conquest', () => {
     const engine = createInProgressEngine();
     if (engine.status !== GameStatus.IN_PROGRESS) return;
 
-    const playerId = engine.getCurrentPlayerState().playerId;
-    const vpBefore = getPlayer(engine, playerId).victoryPoints;
-    const bfId = firstBattlefieldId(engine);
 
     // Action: move a unit onto an empty battlefield so combat resolves as unblocked.
     // TODO(backend eng): inject a creature into player's base + runes to play it,
@@ -110,8 +86,6 @@ describe('Battlefield Scoring - hold bonus at turn start', () => {
     const engine = createInProgressEngine();
     if (engine.status !== GameStatus.IN_PROGRESS) return;
 
-    const playerId = engine.getCurrentPlayerState().playerId;
-    const bfId = firstBattlefieldId(engine);
 
     // Setup: controller already holds bfId with at least one of their units on it.
     // TODO(backend eng):
@@ -168,7 +142,6 @@ describe('Battlefield Scoring - victory at >= 8 VP', () => {
     const engine = createInProgressEngine();
     if (engine.status !== GameStatus.IN_PROGRESS) return;
 
-    const playerId = engine.getCurrentPlayerState().playerId;
     // Setup: prime the player at 7 VP and arrange one more conquer.
     // TODO(backend eng): mutate getPlayer(engine, playerId).victoryPoints = 7,
     //   then conquer a battlefield.

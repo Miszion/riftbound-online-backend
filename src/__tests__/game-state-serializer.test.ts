@@ -8,13 +8,11 @@ import {
   serializeGameState,
   serializePlayerState,
   buildOpponentView,
-  PlayerVisibility
 } from '../game-state-serializer';
 import {
   GameState,
   PlayerState,
   BoardCard,
-  Card,
   RuneCard,
   BattlefieldState,
   HiddenCard,
@@ -30,8 +28,6 @@ import {
   ReactionChain,
   ChainItem,
   GameStateSnapshot,
-  DuelLogEntry,
-  ChatMessage,
   CombatContext
 } from '../game-engine';
 import {
@@ -616,14 +612,14 @@ describe('serializePlayerState', () => {
           canActivate: true,
           hasManualActivation: true,
           reason: null,
-          cost: { energy: 2, runes: {}, requiresExhaust: false },
+          cost: { energy: 2, runes: {}, requiresExhaust: false, rawText: '' },
           costSummary: '2 energy'
         },
         championLeaderStatus: {
           canActivate: false,
           hasManualActivation: true,
           reason: 'insufficient energy',
-          cost: { energy: 4, runes: { fury: 1 }, requiresExhaust: true },
+          cost: { energy: 4, runes: { fury: 1 }, requiresExhaust: true, rawText: '' },
           costSummary: '4 energy + 1 fury'
         }
       });
@@ -676,7 +672,7 @@ describe('serializePlayerState', () => {
           canActivate: true,
           hasManualActivation: true,
           reason: null,
-          cost: { energy: 1, runes: {}, requiresExhaust: false },
+          cost: { energy: 1, runes: {}, requiresExhaust: false, rawText: '' },
           costSummary: '1 energy'
         }
       });
@@ -717,7 +713,7 @@ describe('serializePlayerState', () => {
           canActivate: true,
           hasManualActivation: true,
           reason: null,
-          cost: { energy: 1, runes: {}, requiresExhaust: false },
+          cost: { energy: 1, runes: {}, requiresExhaust: false, rawText: '' },
           costSummary: '1'
         }
       });

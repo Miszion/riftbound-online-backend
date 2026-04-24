@@ -10,8 +10,6 @@ import {
   RuneCard,
   PlayerDeckConfig,
   GameStatus,
-  GamePhase,
-  GameState
 } from '../game-engine';
 
 // ---------------------------------------------------------------------------

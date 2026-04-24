@@ -101,7 +101,7 @@ jest.mock('../game-engine', () => {
     getMatchResult:           jest.fn().mockReturnValue(null),
   };
 
-  const MockEngine = jest.fn().mockImplementation(() => engineInstance);
+  const MockEngine: any = jest.fn().mockImplementation(() => engineInstance);
   MockEngine.fromSerializedState = jest.fn().mockReturnValue(engineInstance);
   MockEngine._instance = engineInstance;  // accessible via (RiftboundGameEngine as any)._instance
 
@@ -310,7 +310,7 @@ beforeEach(() => {
     reason: 'concede', duration: 0, turns: 1, moves: []
   });
   // Re-wire constructor (resetAllMocks clears the factory's mockImplementation)
-  (RiftboundGameEngine as jest.Mock).mockReturnValue(eng);
+  (RiftboundGameEngine as unknown as jest.Mock).mockReturnValue(eng);
   (RiftboundGameEngine as any).fromSerializedState.mockReturnValue(eng);
 
   // Serializer defaults
@@ -399,7 +399,7 @@ describe('POST /matches/init', () => {
     const res = await request(app).post('/matches/init').send(bodyWithProfiles);
 
     expect(res.status).toBe(201);
-    const MockEngine = RiftboundGameEngine as jest.Mock;
+    const MockEngine = RiftboundGameEngine as unknown as jest.Mock;
     const constructorArgs = MockEngine.mock.calls[0];
     expect(constructorArgs[1]).toEqual([
       { playerId: 'player-1', name: 'Alice' },

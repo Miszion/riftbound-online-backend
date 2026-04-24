@@ -18,7 +18,6 @@ import {
   GamePhase,
   CardType,
   Domain,
-  CardRarity,
   Card
 } from '../game-engine';
 import {
@@ -32,6 +31,7 @@ import {
   makeRuneCard,
   resetCardCounter
 } from './test-helpers';
+import { makeEffectProfile } from './helpers/effectProfile.js';
 
 beforeEach(() => {
   resetCardCounter();
@@ -146,10 +146,10 @@ describe('Effect Operations - draw_cards', () => {
     const handBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.hand.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw'],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -164,10 +164,10 @@ describe('Effect Operations - draw_cards', () => {
     const handBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.hand.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw'],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -182,10 +182,10 @@ describe('Effect Operations - draw_cards', () => {
     const handBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.hand.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw'],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 0 }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -201,10 +201,10 @@ describe('Effect Operations - draw_cards', () => {
     const oHandBefore = engine.getGameState().players.find((p) => p.playerId === oId)!.hand.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw'],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1, targetHint: 'enemy' }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -224,10 +224,10 @@ describe('Effect Operations - mill_cards', () => {
     const graveBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.graveyard.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'mill_cards', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -242,10 +242,10 @@ describe('Effect Operations - mill_cards', () => {
     const graveBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.graveyard.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'mill_cards', automated: true, magnitudeHint: 2, metadata: { count: 2 } }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -261,10 +261,10 @@ describe('Effect Operations - mill_cards', () => {
     const oGraveBefore = engine.getGameState().players.find((p) => p.playerId === oId)!.graveyard.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'mill_cards', automated: true, magnitudeHint: 2, targetHint: 'enemy' }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -288,10 +288,10 @@ describe('Effect Operations - discard_cards', () => {
     const graveBefore = player.graveyard.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_discard'],
         operations: [{ type: 'discard_cards', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     // Give enough hand so discard works (hand[0] is the spell we injected at front)
     // after playing, hand has original cards + spell removed. Discard shifts from new hand
@@ -312,10 +312,10 @@ describe('Effect Operations - discard_cards', () => {
     // Drain hand completely then add only the spell
     player.hand = [];
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_discard'],
         operations: [{ type: 'discard_cards', automated: true }]
-      }
+      })
     });
 
     // Play the spell - discard op with empty hand after play should not throw
@@ -337,10 +337,10 @@ describe('Effect Operations - deal_damage', () => {
     const instanceId = injectCreatureToBase(engine, oId, { toughness: 5 });
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['damage'],
         operations: [{ type: 'deal_damage', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
 
     // Play spell targeting the opponent's creature
@@ -367,10 +367,10 @@ describe('Effect Operations - deal_damage', () => {
     const instanceId = injectCreatureToBase(engine, oId, { toughness: 2 });
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['damage'],
         operations: [{ type: 'deal_damage', automated: true, magnitudeHint: 5 }]
-      }
+      })
     });
 
     playSpellAndResolve(engine, pId, 0, [instanceId]);
@@ -393,10 +393,10 @@ describe('Effect Operations - deal_damage', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['damage'],
         operations: [{ type: 'deal_damage', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
 
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
@@ -421,10 +421,10 @@ describe('Effect Operations - heal', () => {
     creature.currentToughness = 2;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['heal'],
         operations: [{ type: 'heal', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
 
     playSpellAndResolve(engine, pId, 0, [instanceId]);
@@ -441,10 +441,10 @@ describe('Effect Operations - heal', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['heal'],
         operations: [{ type: 'heal', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
 
     // No targets → heal silently does nothing (empty resolveBoardTargets)
@@ -462,16 +462,15 @@ describe('Effect Operations - gain_resource', () => {
     const pId = currentPlayerId(engine);
     const state = engine.getGameState();
     const player = state.players.find((p) => p.playerId === pId)!;
-    const runesBefore = player.channeledRunes.length;
 
     // Give extra rune deck cards so channeling works
     player.runeDeck.push(...Array.from({ length: 5 }, (_, i) => makeRuneCard(i + 200, Domain.FURY)));
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['resource_gain'],
         operations: [{ type: 'gain_resource', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -482,10 +481,10 @@ describe('Effect Operations - gain_resource', () => {
     givePlayerRunes(engine, pId, 3);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['resource_gain'],
         operations: [{ type: 'gain_resource', automated: true, magnitudeHint: -1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -504,10 +503,10 @@ describe('Effect Operations - channel_rune', () => {
     player.runeDeck.push(...Array.from({ length: 5 }, (_, i) => makeRuneCard(i + 300, Domain.MIND)));
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['rune'],
         operations: [{ type: 'channel_rune', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -520,7 +519,7 @@ describe('Effect Operations - channel_rune', () => {
     player.runeDeck.push(...Array.from({ length: 3 }, (_, i) => makeRuneCard(i + 400, Domain.BODY)));
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['rune'],
         operations: [{
           type: 'channel_rune',
@@ -528,7 +527,7 @@ describe('Effect Operations - channel_rune', () => {
           magnitudeHint: 1,
           metadata: { enterTapped: true }
         }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -550,10 +549,10 @@ describe('Effect Operations - recycle_card', () => {
     const deckBefore = player.deck.length;
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['recycle'],
         operations: [{ type: 'recycle_card', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     playSpellAndResolve(engine, pId, 0);
 
@@ -569,10 +568,10 @@ describe('Effect Operations - recycle_card', () => {
     player.graveyard = [];
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['recycle'],
         operations: [{ type: 'recycle_card', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -588,10 +587,10 @@ describe('Effect Operations - search_deck', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['search'],
         operations: [{ type: 'search_deck', automated: true, magnitudeHint: 3 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -601,10 +600,10 @@ describe('Effect Operations - search_deck', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['search'],
         operations: [{ type: 'search_deck', automated: true, magnitudeHint: 2, targetHint: 'enemy' }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -621,10 +620,10 @@ describe('Effect Operations - modify_stats', () => {
     const instanceId = injectCreatureToBase(engine, pId, { toughness: 3 });
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['buff'],
         operations: [{ type: 'modify_stats', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0, [instanceId])).not.toThrow();
   });
@@ -636,10 +635,10 @@ describe('Effect Operations - modify_stats', () => {
     const instanceId = injectCreatureToBase(engine, oId, { toughness: 5 });
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['debuff'],
         operations: [{ type: 'modify_stats', automated: true, magnitudeHint: 2, targetHint: 'enemy' }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0, [instanceId])).not.toThrow();
   });
@@ -657,10 +656,10 @@ describe('Effect Operations - remove_permanent', () => {
     const instanceId = injectCreatureToBase(engine, oId, { toughness: 1 });
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['removal'],
         operations: [{ type: 'remove_permanent', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0, [instanceId])).not.toThrow();
 
@@ -679,14 +678,13 @@ describe('Effect Operations - return_to_hand', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
     const instanceId = injectCreatureToBase(engine, pId, { toughness: 3 });
-    const handBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.hand.length;
 
     injectSpellToHand(engine, pId, {
       text: 'Return a unit to your hand.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['hand_return'],
         operations: [{ type: 'return_to_hand', automated: true, targetHint: 'self' }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0, [instanceId])).not.toThrow();
   });
@@ -697,10 +695,10 @@ describe('Effect Operations - return_to_hand', () => {
 
     injectSpellToHand(engine, pId, {
       text: 'Return a unit to your hand.',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['hand_return'],
         operations: [{ type: 'return_to_hand', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -716,10 +714,10 @@ describe('Effect Operations - scoring', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'scoring', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -737,10 +735,10 @@ describe('Effect Operations - manipulate_priority', () => {
     injectSpellToHand(engine, pId, {
       id: 'priority-spell',
       name: 'Priority Spell',
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['priority'],
         operations: [{ type: 'manipulate_priority', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -756,10 +754,10 @@ describe('Effect Operations - create_token without tokenSpec', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['summon', 'token'],
         operations: [{ type: 'create_token', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -769,10 +767,10 @@ describe('Effect Operations - create_token without tokenSpec', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['summon'],
         operations: [{ type: 'summon_unit', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -791,13 +789,13 @@ describe('Effect Operations - multiple operations', () => {
     player.runeDeck.push(...Array.from({ length: 3 }, (_, i) => makeRuneCard(i + 500, Domain.FURY)));
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw', 'resource_gain'],
         operations: [
           { type: 'draw_cards', automated: true, magnitudeHint: 1 },
           { type: 'gain_resource', automated: true, magnitudeHint: 1 }
         ]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -811,13 +809,13 @@ describe('Effect Operations - multiple operations', () => {
     expect(player.deck.length).toBeGreaterThan(0);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [
           { type: 'mill_cards', automated: true, magnitudeHint: 1 },
           { type: 'recycle_card', automated: true, magnitudeHint: 1 }
         ]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -1082,10 +1080,10 @@ describe('activateChampionAbility - with operations', () => {
       type: CardType.CREATURE,
       text: '',
       isTapped: false,
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw'],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1 }]
-      }
+      })
     };
 
     // Give player enough runes to activate (needs no cost since text is empty → no power cost required)
@@ -1110,10 +1108,10 @@ describe('activateChampionAbility - with operations', () => {
       type: CardType.CREATURE,
       text: '',
       isTapped: false,
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['resource_gain'],
         operations: [{ type: 'gain_resource', automated: true, magnitudeHint: 1 }]
-      }
+      })
     };
     givePlayerRunes(engine, pId, 1);
 
@@ -1269,10 +1267,8 @@ describe('beginTurn mechanics', () => {
     const pId = currentPlayerId(engine);
     const state = engine.getGameState();
     const player = state.players.find((p) => p.playerId === pId)!;
-    const handBefore = player.hand.length;
 
     // beginTurn is called automatically, but calling again should work in BEGIN phase
-    const gameState = engine.getGameState();
     (engine as any).gameState.currentPhase = 'begin';
 
     // Channel rune cards are needed
@@ -1403,10 +1399,10 @@ describe('Card Zone Integrity - additional paths', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['card_draw'],
         operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
 
     const graveBefore = engine.getGameState().players.find((p) => p.playerId === pId)!.graveyard.length;
@@ -1429,10 +1425,10 @@ describe('Effect Operations - stun', () => {
     const instanceId = injectCreatureToBase(engine, oId);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'stun', automated: true }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0, [instanceId])).not.toThrow();
   });
@@ -1449,10 +1445,10 @@ describe('Effect Operations - shield', () => {
     const instanceId = injectCreatureToBase(engine, pId, { toughness: 5 });
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['shielding'],
         operations: [{ type: 'shield', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0, [instanceId])).not.toThrow();
   });
@@ -1462,10 +1458,10 @@ describe('Effect Operations - shield', () => {
     const pId = currentPlayerId(engine);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['shielding'],
         operations: [{ type: 'shield', automated: true, magnitudeHint: 2 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });
@@ -1482,10 +1478,10 @@ describe('Effect Operations - ready', () => {
     givePlayerRunes(engine, pId, 3);
 
     injectSpellToHand(engine, pId, {
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: [],
         operations: [{ type: 'ready', automated: true, magnitudeHint: 1 }]
-      }
+      })
     });
     expect(() => playSpellAndResolve(engine, pId, 0)).not.toThrow();
   });

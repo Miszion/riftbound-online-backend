@@ -15,11 +15,9 @@
  */
 import {
   RiftboundGameEngine,
-  GameStatus,
   GamePhase,
   CardType,
   Domain,
-  CardRarity,
   Card
 } from '../game-engine';
 import {
@@ -31,6 +29,7 @@ import {
   makeRuneCard,
   resetCardCounter
 } from './test-helpers';
+import { makeEffectProfile } from './helpers/effectProfile.js';
 
 beforeEach(() => {
   resetCardCounter();
@@ -256,7 +255,6 @@ describe('completeCombatEngagement via handleCombatPriorityPass', () => {
   it('should start combat on a second distinct battlefield after first combat completes', () => {
     const engine = createInProgressEngine();
     const pId = currentPlayerId(engine);
-    const oId = opponentPlayerId(engine);
     engine.beginTurn();
     (engine as any).gameState.currentPhase = GamePhase.MAIN_1;
 
@@ -329,7 +327,6 @@ describe('triggerAbilities - with actual abilities', () => {
     givePlayerRunes(engine, pId, 10);
 
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
-    const handBefore = player.hand.length;
 
     // Play a creature with death ability (draw 1 on death)
     const deathCard = makeCreature({
@@ -347,14 +344,13 @@ describe('triggerAbilities - with actual abilities', () => {
     const deployed = board.creatures.find((c) => c.id === deathCard.id);
     if (deployed) {
       // Damage it to death by injecting a spell
-      const bfId = firstBattlefieldId(engine);
       givePlayerRunes(engine, pId, 10);
       const spellKill = makeSpell({
         energyCost: 0,
-        effectProfile: {
+        effectProfile: makeEffectProfile({
           classes: [],
           operations: [{ type: 'deal_damage', automated: true, magnitudeHint: 10 }]
-        }
+        })
       });
       const playerState = engine.getGameState().players.find((p) => p.playerId === pId)!;
       playerState.hand.unshift(spellKill);
@@ -862,10 +858,10 @@ describe('deferSpellTargetSelection via catalog spells', () => {
     // Inject a spell that has effectProfile with return_from_graveyard - will try to defer
     const spell = makeSpell({
       energyCost: 0,
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['graveyard_return'],
         operations: [{ type: 'return_from_graveyard', automated: false, magnitudeHint: 1 }]
-      }
+      })
     });
 
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
@@ -875,7 +871,6 @@ describe('deferSpellTargetSelection via catalog spells', () => {
     player.resources.energy = 10;
 
     // Play with no targets - should defer (create pending target effect)
-    const pendingBefore = engine.getGameState().pendingEffects.length;
     engine.playCard(pId, 0);
     engine.respondToChainReaction(opponentPlayerId(engine), true);
     // After resolving: either a target prompt was created OR it was directly resolved
@@ -890,10 +885,10 @@ describe('deferSpellTargetSelection via catalog spells', () => {
 
     const spell = makeSpell({
       energyCost: 0,
-      effectProfile: {
+      effectProfile: makeEffectProfile({
         classes: ['graveyard_return'],
         operations: [{ type: 'return_from_graveyard', automated: false, magnitudeHint: 1 }]
-      }
+      })
     });
 
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
@@ -956,7 +951,7 @@ describe('each_player_sacrifice - full flow with opponent units', () => {
 
     // Both players have units
     const pUnitId = injectCreatureToBase(engine, pId);
-    const oUnitId = injectCreatureToBase(engine, oId);
+    injectCreatureToBase(engine, oId);
 
     const promptId = 'sacrifice-two-prompt';
     engine.getGameState().prompts.push({
@@ -1140,7 +1135,7 @@ describe('gatherCopiedAbilities and calculateTriggerMultiplier', () => {
     const amplifier = makeArtifact({
       id: 'amplifier-1',
       text: 'Triggered abilities trigger an additional time.',
-      effectProfile: { classes: ['effect_amplifier'], operations: [] }
+      effectProfile: makeEffectProfile({ classes: ['effect_amplifier'], operations: [] })
     });
     const amplifierInstance = {
       ...amplifier,
@@ -1393,7 +1388,7 @@ describe('activateChampionAbility - legend with no operations throws', () => {
       id: 'legend-no-ops',
       name: 'Empty Legend',
       text: '',
-      effectProfile: { classes: [], operations: [] }
+      effectProfile: makeEffectProfile({ classes: [], operations: [] })
     });
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
     player.championLegend = { ...legendCard, isTapped: false } as any;
@@ -1412,7 +1407,7 @@ describe('activateChampionAbility - legend with no operations throws', () => {
       id: 'legend-exhausted',
       name: 'Exhausted Legend',
       text: ':rb_exhaust:: Draw 1.',
-      effectProfile: { classes: [], operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1 }] }
+      effectProfile: makeEffectProfile({ classes: [], operations: [{ type: 'draw_cards', automated: true, magnitudeHint: 1 }] })
     });
     const player = engine.getGameState().players.find((p) => p.playerId === pId)!;
     player.championLegend = { ...legendCard, isTapped: true } as any;
@@ -1460,6 +1455,9 @@ describe('moveUnit - battlefield to battlefield (Ganking)', () => {
     const unit = engine.getGameState().players
       .find((p) => p.playerId === pId)!
       .board.creatures.find((c) => c.instanceId === instanceId)!;
-    expect(unit.location.battlefieldId).toBe(bf2Id);
+    expect(unit.location.zone).toBe('battlefield');
+    if (unit.location.zone === 'battlefield') {
+      expect(unit.location.battlefieldId).toBe(bf2Id);
+    }
   });
 });

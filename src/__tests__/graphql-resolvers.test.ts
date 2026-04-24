@@ -229,7 +229,7 @@ describe('toIsoString (via mapDecklistItem / decklists query)', () => {
       Items: [{ UserId: 'u1', DeckId: 'd1', Name: 'My Deck', Tags: [], Cards: [], CreatedAt: ts, UpdatedAt: ts }]
     });
     const result = await queryResolvers.decklists(null, { userId: 'user-1' }, authedCtx('user-1'));
-    expect(result[0].createdAt).toBe(new Date(ts).toISOString());
+    expect(result![0]!.createdAt).toBe(new Date(ts).toISOString());
   });
 
   it('returns null when CreatedAt is missing', async () => {
@@ -237,7 +237,7 @@ describe('toIsoString (via mapDecklistItem / decklists query)', () => {
       Items: [{ UserId: 'u1', DeckId: 'd1', Name: 'No Dates', Tags: [], Cards: [] }]
     });
     const result = await queryResolvers.decklists(null, { userId: 'user-1' }, authedCtx('user-1'));
-    expect(result[0].createdAt).toBeNull();
+    expect(result![0]!.createdAt).toBeNull();
   });
 });
 
@@ -401,8 +401,8 @@ describe('queryResolvers.decklists', () => {
     });
     const result = await queryResolvers.decklists(null, { userId: 'user-1' }, authedCtx('user-1'));
     expect(result).toHaveLength(1);
-    expect(result[0].deckId).toBe('d1');
-    expect(result[0].name).toBe('Deck A');
+    expect(result![0]!.deckId).toBe('d1');
+    expect(result![0]!.name).toBe('Deck A');
   });
 });
 
@@ -657,7 +657,7 @@ describe('queryResolvers.cardImageManifest', () => {
     (getImageManifest as jest.Mock).mockReturnValue([{ slug: 'fire-imp', url: '/img/fire-imp.png' }]);
     const result = queryResolvers.cardImageManifest();
     expect(result).toHaveLength(1);
-    expect(result[0].slug).toBe('fire-imp');
+    expect((result[0] as any).slug).toBe('fire-imp');
   });
 });
 
@@ -668,7 +668,7 @@ describe('queryResolvers.cardActivationStates', () => {
     });
     const result = queryResolvers.cardActivationStates();
     expect(result).toHaveLength(1);
-    expect(result[0].slug).toBe('fire-imp');
+    expect((result[0] as any).slug).toBe('fire-imp');
   });
 
   it('returns empty array when no activation states', () => {
@@ -1365,7 +1365,7 @@ describe('mutationResolvers.leaveMatchmakingQueue', () => {
 
 describe('subscriptionResolvers', () => {
   it('gameStateChanged.subscribe returns asyncIterator for match', () => {
-    const iter = subscriptionResolvers.gameStateChanged.subscribe(null, { matchId: 'm1' });
+    subscriptionResolvers.gameStateChanged.subscribe(null, { matchId: 'm1' });
     expect(pubSub.asyncIterator).toHaveBeenCalledWith(['GAME_STATE_CHANGED:m1']);
   });
 

@@ -7,20 +7,15 @@
 import {
   RiftboundGameEngine,
   GameStatus,
-  GamePhase,
-  CardType,
-  Domain
 } from '../game-engine';
 import {
   createInitializedEngine,
   createInProgressEngine,
   advancePastCoinFlip,
   advancePastBattlefieldSelection,
-  advancePastMulligan,
   buildDeckConfig,
   buildMainDeck,
   buildRuneDeck,
-  makeCreature,
   resetCardCounter
 } from './test-helpers';
 
@@ -157,8 +152,6 @@ describe('RiftboundGameEngine - Mulligan', () => {
     advancePastBattlefieldSelection(engine);
     if (engine.status !== GameStatus.MULLIGAN) return;
 
-    const stateBefore = engine.getGameState();
-    const p1HandBefore = [...stateBefore.players[0].hand];
 
     engine.submitMulligan('player-1', []);
     engine.submitMulligan('player-2', []);
@@ -172,8 +165,6 @@ describe('RiftboundGameEngine - Mulligan', () => {
     advancePastBattlefieldSelection(engine);
     if (engine.status !== GameStatus.MULLIGAN) return;
 
-    const stateBefore = engine.getGameState();
-    const p1HandBefore = stateBefore.players[0].hand.map(c => c.id);
 
     // Replace first card
     engine.submitMulligan('player-1', [0]);

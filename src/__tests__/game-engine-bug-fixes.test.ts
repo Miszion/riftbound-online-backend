@@ -11,10 +11,8 @@ import {
   CardType,
   Domain,
   Card,
-  BattlefieldState,
   BoardCard,
   CombatContext,
-  PriorityWindow,
   PlayerDeckConfig
 } from '../game-engine';
 import {
@@ -27,8 +25,6 @@ import {
   makeBattlefield,
   resetCardCounter,
   advancePastCoinFlip,
-  advancePastBattlefieldSelection,
-  advancePastMulligan
 } from './test-helpers';
 
 beforeEach(() => {

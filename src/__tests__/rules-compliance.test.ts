@@ -16,13 +16,11 @@ import {
   RiftboundGameEngine,
   GameStatus,
   CardType,
-  Card
 } from '../game-engine';
 import {
   createInProgressEngine,
   resetCardCounter,
   makeCreature,
-  buildDeckConfig,
   buildMainDeck,
   buildRuneDeck
 } from './test-helpers';

@@ -26,7 +26,6 @@
 import {
   RiftboundGameEngine,
   GameStatus,
-  Card
 } from '../game-engine';
 import {
   createInProgressEngine,
@@ -51,9 +50,6 @@ function emptyCurrentPlayerDeck(engine: RiftboundGameEngine): void {
   current.deck.length = 0;
 }
 
-function getPlayer(engine: RiftboundGameEngine, playerId: string) {
-  return engine.getGameState().players.find((p) => p.playerId === playerId)!;
-}
 
 // ---------------------------------------------------------------------------
 // Required draw on empty deck -> loss
@@ -136,7 +132,6 @@ describe('Burn Out - burnedOut flag exposed on PlayerState', () => {
     const engine = createInProgressEngine();
     if (engine.status !== GameStatus.IN_PROGRESS) return;
 
-    const state = engine.getGameState();
     // TODO(backend eng):
     //   expect(state.players[0].burnedOut).toBe(false);
     //   expect(state.players[1].burnedOut).toBe(false);
