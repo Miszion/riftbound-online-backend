@@ -24,6 +24,11 @@ import {
 } from './graphql/pubsub';
 import { recordFrame } from './replay-frame-store';
 import {
+  persistFrame as persistReplayFrame,
+  readFrames as readPersistedReplayFrames,
+  readFrameCount as readPersistedReplayFrameCount
+} from './replay/replay-frame-store';
+import {
   dispatchAction,
   enumerateLegalActions,
   getBot,
@@ -446,6 +451,15 @@ const publishSpectatorState = (matchId: string, engine: RiftboundGameEngine) => 
     recordFrame(matchId, serialized);
   } catch (error) {
     logger.warn('[BOT-MATCH] replay frame record failed', { matchId, error });
+  }
+  // Durable write to the per-match JSONL store so /replays/:id and
+  // matchFrames survive a server restart. The in-memory REGISTRY.frames
+  // buffer below is kept as a hot path; on cache miss, listMatchFrames
+  // reads through to the persistent store.
+  try {
+    persistReplayFrame(matchId, serialized);
+  } catch (error) {
+    logger.warn('[BOT-MATCH] replay frame persist failed', { matchId, error });
   }
   const record = REGISTRY.get(matchId);
   if (record) {
@@ -894,17 +908,23 @@ export const startBotMatch = async (
 
 export const getAvailableStrategies = (): StrategyName[] => [...VALID_STRATEGIES];
 
-// Returns the in-memory frame buffer for a match. Returns null when the match
-// is not currently registered (server restart, pruned, or finished and evicted
-// after FINISHED_TTL_MS). Callers (matchFrames resolver) fall through to the
-// durable MATCH_TABLE.Frames field in that case.
+// Returns frames for a match. Read order is:
+//   1. in-memory REGISTRY buffer (hot path for an active or recently-finished match)
+//   2. persistent JSONL store (survives process restart and FINISHED_TTL_MS eviction)
+// Returns null only when neither source has any frames for the matchId, which
+// lets the matchFrames resolver fall through to the DynamoDB MATCH_TABLE.Frames
+// field as a final legacy fallback.
 export const listMatchFrames = (
   matchId: string,
   offset = 0,
   limit?: number
 ): any[] | null => {
   const record = REGISTRY.get(matchId);
-  if (!record) return null;
+  if (!record) {
+    if (readPersistedReplayFrameCount(matchId) === 0) return null;
+    const persisted = readPersistedReplayFrames(matchId, offset, limit);
+    return persisted;
+  }
   const start = Math.max(0, Math.floor(offset));
   const end =
     typeof limit === 'number' && limit >= 0

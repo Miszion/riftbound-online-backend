@@ -16,6 +16,7 @@ import { startMatchmakingQueueWorker } from './matchmaking-queue-worker';
 import { decodeJwtPayload, requireAuthenticatedUser } from './auth-utils';
 import { registerMatchRoutes } from './match-routes';
 import { TABLE_NAMES } from './config/tableNames';
+import { bootstrap as bootstrapReplayFrameStore } from './replay/replay-frame-store';
 
 const awsRegion = process.env.AWS_REGION || 'us-east-1';
 const environment = process.env.ENVIRONMENT || 'dev';
@@ -712,6 +713,15 @@ export async function createServer(port: number | string = PORT): Promise<Create
   serverBootstrapped = true;
 
   await startApolloServer();
+  // Ensure the persistent replay-frame store directory exists before the
+  // first bot-vs-bot match starts writing frames. Safe to call repeatedly.
+  try {
+    bootstrapReplayFrameStore();
+  } catch (error) {
+    logger.error('[BOOT] replay frame store bootstrap failed', {
+      error: (error as Error).message
+    });
+  }
   registerMatchRoutes(app);
 
   // 404 handler (registered after GraphQL middleware to avoid intercepting it)

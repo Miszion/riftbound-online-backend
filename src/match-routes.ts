@@ -16,6 +16,11 @@ import {
 } from './game-engine';
 import { serializeGameState, serializePlayerState, buildOpponentView } from './game-state-serializer';
 import { TABLE_NAMES } from './config/tableNames';
+import {
+  readFrames as readPersistedReplayFrames,
+  readFrameCount as readPersistedReplayFrameCount,
+  listPersistedMatches as listPersistedReplayMatches
+} from './replay/replay-frame-store';
 
 // ============================================================================
 // CONFIGURATION
@@ -2208,6 +2213,93 @@ matchRouter.post('/matches/:matchId/concede', async (req: Request, res: Response
  * Get match history (moves only - for replay)
  * GET /matches/:matchId/history
  */
+/**
+ * Replay deep link. Returns ordered per-move frames from the persistent
+ * replay-frame store so a user who opens /replays/<matchId> after a server
+ * restart still sees the same battlefield state progression they would have
+ * seen live. Falls through to the legacy MATCH_TABLE.Frames list for matches
+ * that predate the persistent store.
+ *
+ * Shape matches the matchFrames GraphQL query plus the matchId echo and
+ * frameCount so thin clients can read it without a second request.
+ */
+matchRouter.get('/replays/:matchId', async (req: Request, res: Response): Promise<void> => {
+  const context = buildRequestContext(req);
+  const { matchId } = req.params;
+  if (!matchId) {
+    res.status(400).json({ error: 'matchId is required' });
+    return;
+  }
+  const rawOffset = Number(req.query.offset ?? 0);
+  const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+  const limit =
+    typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.floor(rawLimit), 1000)
+      : undefined;
+
+  try {
+    const persistedCount = readPersistedReplayFrameCount(matchId);
+    if (persistedCount > 0) {
+      const frames = readPersistedReplayFrames(matchId, offset, limit);
+      res.json({
+        matchId,
+        source: 'persistent',
+        frameCount: persistedCount,
+        offset,
+        limit: limit ?? null,
+        frames
+      });
+      return;
+    }
+    if (LOCAL_BYPASS) {
+      res.status(404).json({ matchId, error: 'Replay not found' });
+      return;
+    }
+    const record = await dynamodb
+      .query({
+        TableName: MATCH_TABLE,
+        KeyConditionExpression: 'MatchId = :matchId',
+        ExpressionAttributeValues: { ':matchId': matchId },
+        Limit: 1
+      })
+      .promise();
+    const item = record.Items?.[0];
+    const legacy: any[] = Array.isArray(item?.Frames) ? (item!.Frames as any[]) : [];
+    if (legacy.length === 0) {
+      res.status(404).json({ matchId, error: 'Replay not found' });
+      return;
+    }
+    const end = limit !== undefined ? offset + limit : legacy.length;
+    res.json({
+      matchId,
+      source: 'dynamodb',
+      frameCount: legacy.length,
+      offset,
+      limit: limit ?? null,
+      frames: legacy.slice(offset, end)
+    });
+  } catch (error) {
+    logger.error('[REPLAYS] Failed to load replay', {
+      error,
+      matchId,
+      requestId: context.requestId ?? null
+    });
+    res.status(500).json({ error: 'Failed to fetch replay' });
+  }
+});
+
+/**
+ * List matchIds that have persisted frames available on disk. Primarily for
+ * debugging and for UIs that want to surface recent replays without a full
+ * DynamoDB scan. Not paged - the persistent store caps itself at practical
+ * sizes via the bot-match TTL pruning path.
+ */
+matchRouter.get('/replays', (_req: Request, res: Response): void => {
+  const matches = listPersistedReplayMatches();
+  res.json({ count: matches.length, matches });
+});
+
 matchRouter.get('/matches/:matchId/history', async (req: Request, res: Response): Promise<void> => {
   const context = buildRequestContext(req);
   const operation = context.operation ?? getOperationLabel(req);

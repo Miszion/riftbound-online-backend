@@ -32,6 +32,10 @@ import {
 } from '../bot-match';
 import { getFrames as getRecordedFrames } from '../replay-frame-store';
 import {
+  readFrames as readPersistedReplayFrames,
+  readFrameCount as readPersistedReplayFrameCount
+} from '../replay/replay-frame-store';
+import {
   startReplaySession,
   controlReplaySession,
   getReplaySession,
@@ -1772,6 +1776,12 @@ export const queryResolvers = {
       const live = listMatchFrames(matchId, safeOffset, safeLimit);
       if (live && live.length > 0) {
         return live;
+      }
+      // Persistent JSONL store. Covers the restart-survives case for both
+      // in-progress matches (finalize() never ran) and finished matches
+      // whose REGISTRY entry was pruned after FINISHED_TTL_MS.
+      if (readPersistedReplayFrameCount(matchId) > 0) {
+        return readPersistedReplayFrames(matchId, safeOffset, safeLimit);
       }
       const record = await getMatchReplayRecord(matchId);
       const persisted = Array.isArray(record?.Frames) ? (record!.Frames as any[]) : [];
