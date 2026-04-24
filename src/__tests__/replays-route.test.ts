@@ -69,16 +69,19 @@ import {
   __setReplayFrameStoreDirForTests,
   __wipeReplayFrameStoreForTests
 } from '../replay/replay-frame-store';
+import { GamePhase } from '../game-engine';
+import { makeMatchState, makePlayerState } from './helpers/matchState';
 
-const makeFrame = (matchId: string, i: number) => ({
-  matchId,
-  turnNumber: i,
-  currentPhase: 'main_1',
-  players: [
-    { id: `${matchId}:A`, score: i },
-    { id: `${matchId}:B`, score: 0 }
-  ]
-});
+const makeFrame = (matchId: string, i: number) =>
+  makeMatchState({
+    matchId,
+    turnNumber: i,
+    currentPhase: GamePhase.MAIN_1,
+    players: [
+      makePlayerState({ playerId: `${matchId}:A`, victoryPoints: i }),
+      makePlayerState({ playerId: `${matchId}:B`, victoryPoints: 0 })
+    ]
+  });
 
 // registerMatchRoutes guards against duplicate registration with a module
 // singleton flag, so we build the app exactly once and reset the store dir
