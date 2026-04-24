@@ -11,6 +11,9 @@ RUN npm ci
 # Copy application code
 COPY . .
 
+# Generate card catalog (data/cards.enriched.json)
+RUN npm run generate:cards
+
 # Build TypeScript
 RUN npm run build
 

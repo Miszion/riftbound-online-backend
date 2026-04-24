@@ -29,6 +29,9 @@ jobs:
       - name: TypeScript compile check
         run: npx tsc --noEmit -p tsconfig.ci.json
 
+      - name: Generate card catalog
+        run: npm run generate:cards
+
       - name: Run tests
         run: npm test -- --coverage --ci --forceExit
 
@@ -56,6 +59,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Generate card catalog
+        run: npm run generate:cards
 
       - name: Build
         run: npm run build
