@@ -25,6 +25,7 @@ import { TABLE_NAMES } from '../config/tableNames';
 import {
   startBotMatch,
   listActiveBotMatches,
+  listMatchFrames,
   cancelBotMatch,
   cancelAllBotMatches,
   getActiveBotMatch
@@ -1243,6 +1244,10 @@ const mapMatchReplayItem = (
     turns: item.Turns ?? null,
     moves: item.Moves || [],
     finalState: item.FinalState || null,
+    // BE-1: per-move serialized snapshots, written by bot-match.ts:finalize via
+    // appendMatchFrames. Allows the replay UI to consume engine frames directly
+    // instead of reverse-applying the move list with a hand-rolled reducer.
+    frames: Array.isArray(item.Frames) ? item.Frames : [],
     createdAt: item.CreatedAt ? new Date(item.CreatedAt) : null
   };
 };
@@ -1748,6 +1753,37 @@ export const queryResolvers = {
 
   replaySession(_parent: any, { sessionId }: { sessionId: string }) {
     return getReplaySession(sessionId);
+  },
+
+  async matchFrames(
+    _parent: any,
+    {
+      matchId,
+      offset,
+      limit
+    }: { matchId: string; offset?: number | null; limit?: number | null }
+  ) {
+    const safeOffset = Math.max(0, Math.floor(offset ?? 0));
+    const safeLimit =
+      typeof limit === 'number' && limit > 0
+        ? Math.min(Math.floor(limit), 1000)
+        : undefined;
+    try {
+      const live = listMatchFrames(matchId, safeOffset, safeLimit);
+      if (live && live.length > 0) {
+        return live;
+      }
+      const record = await getMatchReplayRecord(matchId);
+      const persisted = Array.isArray(record?.Frames) ? (record!.Frames as any[]) : [];
+      const window = persisted.slice(
+        safeOffset,
+        safeLimit !== undefined ? safeOffset + safeLimit : persisted.length
+      );
+      return window;
+    } catch (error) {
+      logger.error('Error fetching match frames:', error);
+      throw error;
+    }
   },
 
   async recentMatches(_parent: any, { limit = 10 }: { limit?: number }) {
