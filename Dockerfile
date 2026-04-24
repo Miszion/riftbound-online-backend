@@ -22,4 +22,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "const port = process.env.PORT || 3000; require('http').get('http://localhost:' + port + '/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
 
 # Single service entrypoint
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/src/server.js"]
