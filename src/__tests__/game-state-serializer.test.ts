@@ -597,6 +597,34 @@ describe('serializePlayerState', () => {
       expect(result.handSize).toBe(2);
     });
 
+    // Regression: the catalog-ownership refactor moved deckbuilder browsing to
+    // REST `/api/cards`, so match/replay/spectate payloads must continue to
+    // inline name/type/rarity/effect/keywords/cost on every card snapshot. If
+    // this drops out, frontends that no longer cache the full catalog will
+    // render blank cards.
+    it('inlines name/type/rarity/effect/keywords/cost on hand snapshots for self', () => {
+      const player = makePlayerState('p1', {
+        hand: [
+          makeCreature({
+            id: 'h1',
+            name: 'Inlined Sentinel',
+            rarity: 'rare' as any,
+            text: 'When played: deal 1 damage.',
+            keywords: ['Action'],
+            energyCost: 3,
+          }),
+        ],
+      });
+      const result = serializePlayerState(player, 'self');
+      const snap: any = result.hand[0];
+      expect(snap.name).toBe('Inlined Sentinel');
+      expect(snap.type).toBeDefined();
+      expect(snap.rarity).toBe('rare');
+      expect(snap.effect).toBe('When played: deal 1 damage.');
+      expect(snap.keywords).toEqual(['Action']);
+      expect(snap.cost).toBe(3);
+    });
+
     it('includes runeDeck for self', () => {
       const player = makePlayerState('p1', {
         runeDeck: [makeRuneCard(0), makeRuneCard(1)]

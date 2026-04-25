@@ -15,6 +15,7 @@ import { queryResolvers, mutationResolvers, subscriptionResolvers } from './grap
 import { startMatchmakingQueueWorker } from './matchmaking-queue-worker';
 import { decodeJwtPayload, requireAuthenticatedUser } from './auth-utils';
 import { registerMatchRoutes } from './match-routes';
+import { cardCatalogRouter } from './card-catalog-routes';
 import { TABLE_NAMES } from './config/tableNames';
 import { bootstrap as bootstrapReplayFrameStore } from './replay/replay-frame-store';
 
@@ -723,6 +724,7 @@ export async function createServer(port: number | string = PORT): Promise<Create
     });
   }
   registerMatchRoutes(app);
+  app.use('/api/cards', cardCatalogRouter);
 
   // 404 handler (registered after GraphQL middleware to avoid intercepting it)
   app.use((_req: Request, res: Response): void => {

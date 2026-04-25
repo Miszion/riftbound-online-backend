@@ -599,8 +599,7 @@ export const typeDefs = `#graphql
     matchHistory(userId: ID!, limit: Int): [MatchHistory!]!
     matchResult(matchId: ID!): MatchResult
 
-    # Card catalog queries
-    cardCatalog(filter: CardCatalogFilter): [CatalogCard!]!
+    # Card catalog queries (full-catalog browsing lives at REST /api/cards)
     cardById(id: ID!): CatalogCard
     cardBySlug(slug: String!): CatalogCard
     cardImageManifest: [CardImageEntry!]!
@@ -661,14 +660,6 @@ export const typeDefs = `#graphql
     strategies: [String!]!
     spectatorPath: String!
     availableStrategies: [String!]!
-  }
-
-  input CardCatalogFilter {
-    search: String
-    type: String
-    domain: String
-    rarity: String
-    limit: Int
   }
 
   input DeckCardInput {
