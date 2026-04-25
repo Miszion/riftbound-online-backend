@@ -120,7 +120,7 @@ import {
 import type { ResolverContext } from '../graphql/resolvers';
 import AWS from 'aws-sdk';
 import { pubSub, publishGameStateChange, publishCardPlayed, publishAttackDeclared, publishPhaseChange, publishMatchCompletion } from '../graphql/pubsub';
-import { getCardCatalog, findCardById, findCardBySlug, getImageManifest, buildActivationStateIndex } from '../card-catalog';
+import { findCardById, findCardBySlug, getImageManifest, buildActivationStateIndex } from '../card-catalog';
 import { GraphQLError } from 'graphql';
 
 // ---------------------------------------------------------------------------
@@ -640,67 +640,6 @@ describe('queryResolvers.recentMatches', () => {
     expect(callArgs.ProjectionExpression).toContain('#status');
     expect(callArgs.ExpressionAttributeNames['#reason']).toBe('Reason');
     expect(callArgs.ExpressionAttributeNames['#status']).toBe('Status');
-  });
-});
-
-describe('queryResolvers.cardCatalog', () => {
-  beforeEach(() => {
-    (getCardCatalog as jest.Mock).mockReturnValue([
-      { name: 'Fire Imp', type: 'creature', rarity: 'common', colors: ['fury'], tags: [], keywords: [], effect: 'deals 1 damage' },
-      { name: 'Frost Bolt', type: 'spell', rarity: 'rare', colors: ['mind'], tags: [], keywords: ['instant'], effect: 'freezes target' },
-      { name: 'Rock Wall', type: 'creature', rarity: 'common', colors: ['order'], tags: [], keywords: [], effect: 'gains shield' },
-    ]);
-  });
-
-  it('returns all cards when no filter', () => {
-    const result = queryResolvers.cardCatalog(null, {});
-    expect(result).toHaveLength(3);
-  });
-
-  it('filters by search term in name', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { search: 'fire' } });
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Fire Imp');
-  });
-
-  it('filters by search term in effect', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { search: 'freezes' } });
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Frost Bolt');
-  });
-
-  it('filters by search term in keywords', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { search: 'instant' } });
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Frost Bolt');
-  });
-
-  it('filters by type', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { type: 'spell' } });
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Frost Bolt');
-  });
-
-  it('filters by domain/color', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { domain: 'fury' } });
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Fire Imp');
-  });
-
-  it('filters by rarity', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { rarity: 'rare' } });
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Frost Bolt');
-  });
-
-  it('applies limit', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { limit: 1 } });
-    expect(result).toHaveLength(1);
-  });
-
-  it('ignores limit of 0', () => {
-    const result = queryResolvers.cardCatalog(null, { filter: { limit: 0 } });
-    expect(result).toHaveLength(3);
   });
 });
 

@@ -15,6 +15,7 @@ import { queryResolvers, mutationResolvers, subscriptionResolvers } from './grap
 import { startMatchmakingQueueWorker } from './matchmaking-queue-worker';
 import { decodeJwtPayload, requireAuthenticatedUser } from './auth-utils';
 import { registerMatchRoutes } from './match-routes';
+import { cardCatalogRouter } from './card-catalog-routes';
 import { TABLE_NAMES } from './config/tableNames';
 import { bootstrap as bootstrapReplayFrameStore } from './replay/replay-frame-store';
 
@@ -38,6 +39,21 @@ const app: Express = express();
 const normalizedStage = environment.replace(/^\//, '').replace(/\/$/, '');
 const stagePrefix = normalizedStage ? `/${normalizedStage}` : '';
 const PUBLIC_ROUTES = new Set(['/health', '/healthz', '/auth/sign-in', '/auth/sign-up', '/auth/refresh']);
+
+/**
+ * Returns true when the request path should bypass authentication.
+ * Includes the static PUBLIC_ROUTES set and the public catalog endpoint
+ * `/api/cards` (plus any sub-paths) which the unauthenticated frontend hits.
+ */
+export const isPublicRoute = (path: string): boolean => {
+  if (PUBLIC_ROUTES.has(path)) {
+    return true;
+  }
+  if (path === '/api/cards' || path.startsWith('/api/cards/')) {
+    return true;
+  }
+  return false;
+};
 
 const disableCors = process.env.DISABLE_CORS === 'true';
 
@@ -235,7 +251,7 @@ if (stagePrefix) {
 }
 
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (PUBLIC_ROUTES.has(req.path)) {
+  if (isPublicRoute(req.path)) {
     return next();
   }
   if (process.env.ALLOW_LOCAL_BYPASS === 'true') {
@@ -723,6 +739,7 @@ export async function createServer(port: number | string = PORT): Promise<Create
     });
   }
   registerMatchRoutes(app);
+  app.use('/api/cards', cardCatalogRouter);
 
   // 404 handler (registered after GraphQL middleware to avoid intercepting it)
   app.use((_req: Request, res: Response): void => {

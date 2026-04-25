@@ -14,13 +14,11 @@ import {
   publishPhaseChange,
 } from './pubsub';
 import {
-  getCardCatalog,
   findCardById as findCatalogCardById,
   findCardBySlug as findCatalogCardBySlug,
   getImageManifest,
   buildActivationStateIndex
 } from '../card-catalog';
-import type { EnrichedCardRecord } from '../card-catalog';
 import { TABLE_NAMES } from '../config/tableNames';
 import {
   startBotMatch,
@@ -290,14 +288,6 @@ interface PublishedCard {
   power?: number;
   toughness?: number;
   type: string;
-}
-
-interface CardCatalogFilterInput {
-  search?: string;
-  type?: string;
-  domain?: string;
-  rarity?: string;
-  limit?: number;
 }
 
 interface CardAssetInfoInput {
@@ -1802,50 +1792,6 @@ export const queryResolvers = {
       return await fetchRecentMatches(sanitizedLimit);
     } catch (error) {
       logger.error('Error fetching recent matches:', error);
-      throw error;
-    }
-  },
-
-  cardCatalog(_parent: any, { filter }: { filter?: CardCatalogFilterInput }) {
-    try {
-      const catalog = getCardCatalog();
-      let filtered: EnrichedCardRecord[] = catalog;
-
-      if (filter?.search) {
-        const term = filter.search.toLowerCase();
-        filtered = filtered.filter(
-          (card) =>
-            card.name.toLowerCase().includes(term) ||
-            card.effect.toLowerCase().includes(term) ||
-            card.tags.some((tag) => tag.toLowerCase().includes(term)) ||
-            card.keywords.some((keyword) => keyword.toLowerCase().includes(term))
-        );
-      }
-
-      if (filter?.type) {
-        const normalizedType = filter.type.toLowerCase();
-        filtered = filtered.filter((card) => card.type?.toLowerCase() === normalizedType);
-      }
-
-      if (filter?.domain) {
-        const normalizedDomain = filter.domain.toLowerCase();
-        filtered = filtered.filter((card) =>
-          card.colors.some((color) => color.toLowerCase() === normalizedDomain)
-        );
-      }
-
-      if (filter?.rarity) {
-        const normalizedRarity = filter.rarity.toLowerCase();
-        filtered = filtered.filter((card) => card.rarity?.toLowerCase() === normalizedRarity);
-      }
-
-      if (filter?.limit && filter.limit > 0) {
-        filtered = filtered.slice(0, filter.limit);
-      }
-
-      return filtered;
-    } catch (error) {
-      logger.error('Error fetching card catalog:', error);
       throw error;
     }
   },
