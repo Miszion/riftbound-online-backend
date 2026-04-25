@@ -46,6 +46,9 @@ const encodeCursor = (offset: number): string =>
   Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64');
 
 const decodeCursor = (raw: string): CursorPayload => {
+  if (Buffer.byteLength(raw) > 1024) {
+    throw new HttpError(400, 'Invalid cursor');
+  }
   let decoded: string;
   try {
     decoded = Buffer.from(raw, 'base64').toString('utf8');

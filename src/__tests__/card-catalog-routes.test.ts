@@ -267,6 +267,13 @@ describe('GET /api/cards', () => {
     expect(res.body.error).toMatch(/cursor/i);
   });
 
+  it('returns 400 when cursor exceeds 1024 byte cap', async () => {
+    const oversized = 'A'.repeat(1025);
+    const res = await request(app).get('/api/cards').query({ cursor: oversized });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cursor/i);
+  });
+
   it('returns 400 when limit exceeds 200', async () => {
     const res = await request(app).get('/api/cards').query({ limit: 999 });
     expect(res.status).toBe(400);
