@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
+    "install-hooks": "sh scripts/install-hooks.sh",
+    "postinstall": "sh scripts/install-hooks.sh",
     "dev": "nodemon --exec ts-node src/server.ts",
     "watch": "tsc --watch",
     "test": "jest",
